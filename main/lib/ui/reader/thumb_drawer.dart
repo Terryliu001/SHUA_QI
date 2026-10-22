@@ -67,12 +67,13 @@ class ThumbDrawer extends StatelessWidget {
                     },
                     child: DecoratedBox(
                       decoration: BoxDecoration(
-                        border: Border.all(
-                          color: active
-                              ? theme.colorScheme.primary
-                              : Colors.transparent,
-                          width: 2,
-                        ),
+                        // 未选中不描边（border: null），而不是画一根透明边
+                        border: active
+                            ? Border.all(
+                                color: theme.colorScheme.primary,
+                                width: 2,
+                              )
+                            : null,
                         borderRadius: BorderRadius.circular(ShqRadius.sm),
                       ),
                       child: Padding(

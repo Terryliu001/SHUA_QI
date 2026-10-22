@@ -1,15 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/reader/night_tint.dart';
 import 'package:shuaqi/domain/reader/paper_tint.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 纸感效果：只作用在**背景层**上，绝不碰前景（笔迹层是它的兄弟节点，不是子节点）。
 ///
-/// 三种视觉态（§6.9.3）：
+/// 三种视觉态（§6.9.3 + T1.6 暗色升级）：
 /// - `original` / 浅色：零处理，直接透传（可信基线）；
 /// - 其它样式 / 浅色：`ColorFilter.matrix` 做**乘法**染纸（白→纸色、黑→黑，文字不灰），
 ///   再叠一层 ≤3% 的噪点纹理；
-/// - 深色：强制 original，叠一层暗色遮罩（[ShqPaper.darkScrimAlpha]）压住刺眼白。
+/// - 深色：纸感让位给**夜读 duotone**（[NightTint]）——白纸→暖黑纸、黑字→暖白墨。
+///
+/// 为什么深色从"0.18 黑罩"升级为 duotone：黑罩只是把纸调暗，黑字留在暗纸上，
+/// 对比度从 21:1 掉到 ~5:1；duotone 翻转亮度轴，对比度回到 ~13:1，
+/// 且暖黑纸 / 暖白墨正是浅色模式"纸感暖色 / 墨色"的镜像。彩色内容退化为
+/// 双色暖调（像旧照片）——夜读可接受，见项目日志 017。
 ///
 /// 为什么不做成"每次重新渲染位图"：屏显是 GPU 贴图，滤镜与噪点都是 GPU 合成的
 /// 一次 pass，没有 CPU 逐像素计算，也没有 PNG 编码（T0.4 实测 PNG 编码占 120ms）。
@@ -30,10 +36,16 @@ class PaperEffect extends StatelessWidget {
   Widget build(BuildContext context) {
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
 
-    // 深色模式：纸感让位给暗色遮罩（§6.9.3，与 ReaderPrefs.forSurfaceBrightness 同规则）
-    final PaperStyle effective = isDark ? PaperStyle.original : style;
-    final PaperTint tint = PaperTint.forStyle(effective, intensity);
+    if (isDark) {
+      // 夜读：不论存的什么纸感偏好，一律 duotone（偏好仍在，切回浅色即恢复）。
+      return ColorFiltered(
+        colorFilter: ColorFilter.matrix(NightTint.matrix),
+        child: child,
+      );
+    }
 
+    // 浅色：乘法染纸（纸感），original 零处理
+    final PaperTint tint = PaperTint.forStyle(style, intensity);
     Widget result = child;
     if (!tint.isIdentity) {
       result = ColorFiltered(
@@ -46,7 +58,7 @@ class PaperEffect extends StatelessWidget {
         child: result,
       );
     }
-    if (!isDark && effective != PaperStyle.original) {
+    if (style != PaperStyle.original) {
       result = Stack(
         children: <Widget>[
           result,
@@ -62,20 +74,6 @@ class PaperEffect extends StatelessWidget {
                     ),
                   ),
                 ),
-              ),
-            ),
-          ),
-        ],
-      );
-    }
-    if (isDark) {
-      result = Stack(
-        children: <Widget>[
-          result,
-          Positioned.fill(
-            child: IgnorePointer(
-              child: ColoredBox(
-                color: Colors.black.withValues(alpha: ShqPaper.darkScrimAlpha),
               ),
             ),
           ),

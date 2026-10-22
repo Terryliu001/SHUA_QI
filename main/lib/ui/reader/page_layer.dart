@@ -105,6 +105,7 @@ class _PageLayerState extends State<PageLayer> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final bool isDark = theme.brightness == Brightness.dark;
     final double height = widget.width * widget.page.height / widget.page.width;
     final ui.Image? image = _image;
 
@@ -115,11 +116,14 @@ class _PageLayerState extends State<PageLayer> {
         width: widget.width,
         height: height,
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: ShqPaper.base,
+          // 暗色下页面与背景只差亮度，一圈极淡亮边让"纸"从近黑背景里显形；
+          // 投影同时换得更淡更暖（暗底里重投影显脏）。
+          border: isDark ? Border.all(color: ShqNight.pageEdge) : null,
           boxShadow: <BoxShadow>[
             BoxShadow(
-              color: Colors.black.withValues(alpha: 0.18),
-              blurRadius: 6,
+              color: isDark ? ShqNight.pageShadow : ShqPaper.lightPageShadow,
+              blurRadius: isDark ? 10 : 6,
               offset: const Offset(0, 2),
             ),
           ],

@@ -78,6 +78,9 @@ abstract final class ShqPalette {
 /// 颜色值唯一来源在 `domain/reader/paper_tint.dart` 的 [PaperRgb]，这里只包成 Color，
 /// 避免同一色值两处各写一遍而漂移。
 abstract final class ShqPaper {
+  /// 页底。PDF 页本身是白纸；纸感滤镜只染它，导出永远绕开（REQ-15）。
+  static const Color base = Color(0xFFFFFFFF);
+
   static const Color warm = Color(PaperRgb.warm);
   static const Color ivory = Color(PaperRgb.ivory);
   static const Color gray = Color(PaperRgb.gray);
@@ -87,12 +90,63 @@ abstract final class ShqPaper {
   /// 默认强度 55 的真值在 `domain/reader/reader_prefs.dart`，不在这里重复定义。
   static const double maxAlpha = 0.35;
 
-  /// 深色模式下的暗色遮罩不透明度（§6.9.3：深色强制 original + 暗色遮罩）。
-  /// 0.18 在"压住刺眼白"与"保住文字对比度"之间取平衡，夜读不晃眼、字仍清晰。
-  static const double darkScrimAlpha = 0.18;
+  /// 浅色模式下页面的投影（0.18 黑）。纸是"浮"在阅读区上的，轻投影就够。
+  static const Color lightPageShadow = Color(0x2E000000);
 
   /// 噪点纹理的不透明度上限（§6.9.3：≤3%）。只做"纸感"的细腻颗粒，不抢内容。
   static const double noiseOpacity = 0.03;
+}
+
+/// 夜读（暗色模式）专用色（T1.6 升级：暗色遮罩 → duotone 夜读）。
+///
+/// 与 [ShqDark]（app 骨架的冷灰）刻意分开：**页面是暖的，界面是冷的**。
+/// 暖黑纸 + 暖白墨延续浅色模式"纸感暖色 / 墨色"的基因，冷灰骨架让纸浮出来；
+/// 两头都低饱和，长时间看不累。
+abstract final class ShqNight {
+  /// 夜读纸色：duotone 暗端，白纸 → 它（`NightRgb.paper` 的 Color 形态）。
+  static const Color paper = Color(0xFF191612);
+
+  /// 夜读墨色：duotone 亮端，黑字 → 它（`NightRgb.ink` 的 Color 形态）。
+  static const Color ink = Color(0xFFE9E3D5);
+
+  /// 页面发丝边：暗色下页面与背景只差亮度，一圈极淡亮边让"纸"显形。
+  static const Color pageEdge = Color(0x0FFFFFFF);
+
+  /// 页面投影：暗背景里投影要更淡更暖，否则显脏。
+  static const Color pageShadow = Color(0x59000000);
+}
+
+/// 暗色表面阶梯（app 骨架：书架 / AppBar / 抽屉 / 浮层）。
+///
+/// 手调而非 seed 派生：seed 蓝派生的暗色偏紫灰，与"冷灰骨架 + 暖纸"不搭。
+/// 层次只靠亮度差（Material 3 的 elevation 用表面色表达的理念），
+/// 全部低饱和；描边用发丝线（[outlineVariant]）而不是阴影（iOS 的优雅简练）。
+abstract final class ShqDark {
+  static const Color surface = Color(0xFF0E1317);
+  static const Color surfaceContainerLowest = Color(0xFF080C0F);
+  static const Color surfaceContainerLow = Color(0xFF141B21);
+  static const Color surfaceContainer = Color(0xFF19232A);
+  static const Color surfaceContainerHigh = Color(0xFF222E36);
+  static const Color surfaceContainerHighest = Color(0xFF2B3941);
+
+  static const Color onSurface = Color(0xFFE3E9EE);
+  static const Color onSurfaceVariant = Color(0xFFA6B3BD);
+
+  /// 发丝线：暗底下要比浅色更亮才看得见，但仍保持"线"而不是"条"。
+  static const Color outline = Color(0xFF5D6B76);
+  static const Color outlineVariant = Color(0xFF35424B);
+
+  /// 主色提亮（暗色下的可点元素要够亮），配深蓝 on 色。
+  static const Color primary = Color(0xFF8CB8F4);
+  static const Color onPrimary = Color(0xFF0A2A52);
+  static const Color primaryContainer = Color(0xFF204470);
+  static const Color onPrimaryContainer = Color(0xFFD4E3FB);
+
+  /// 错误色按暗色对比度重调（M3 暗色错误是淡红，不是正红）。
+  static const Color error = Color(0xFFF2B8B5);
+  static const Color onError = Color(0xFF601410);
+  static const Color errorContainer = Color(0xFF8C1D18);
+  static const Color onErrorContainer = Color(0xFFF9DEDC);
 }
 
 /// 版心。平板竖屏阅读区最大宽度，超过就留白居中，避免长行难读。

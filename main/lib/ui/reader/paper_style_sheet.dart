@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
-
 /// 显示设置底部浮层（T1.6）：纸感 + 强度。
 ///
 /// 设计取向（设计哲学：谷歌的灵动 + iOS 的优雅简练）：
@@ -88,24 +87,24 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
                   color: scheme.surfaceContainerLow,
                   borderRadius: BorderRadius.circular(ShqRadius.md),
                 ),
-                child: Row(
-                  children: <Widget>[
-                    Icon(
-                      Icons.dark_mode_outlined,
-                      size: 18,
-                      color: scheme.onSurfaceVariant,
-                    ),
-                    const SizedBox(width: ShqSpace.sm),
-                    Expanded(
-                      child: Text(
-                        '深色模式下已停用纸感，避免纸色与暗底叠成脏色',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    Icons.dark_mode_outlined,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: ShqSpace.sm),
+                  Expanded(
+                    child: Text(
+                      '深色模式下纸感让位给夜读配色：暖黑纸 + 暖白墨，长时间读更省眼',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
               ),
             ],
           ],
@@ -188,7 +187,7 @@ class _Swatch extends StatelessWidget {
   final VoidCallback onTap;
 
   Color get _fill => switch (style) {
-    PaperStyle.original => Colors.white,
+    PaperStyle.original => ShqPaper.base,
     PaperStyle.warm => ShqPaper.warm,
     PaperStyle.ivory => ShqPaper.ivory,
     PaperStyle.gray => ShqPaper.gray,
@@ -229,7 +228,7 @@ class _Swatch extends StatelessWidget {
                       size: 20,
                       color: style == PaperStyle.original
                           ? scheme.primary
-                          : Colors.black54,
+                          : ShqPalette.ink,
                     )
                   : null,
             ),
