@@ -134,6 +134,28 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
   }
 
+  /// 落笔没被纸接住（落在纸外）时给一句提示。
+  ///
+  /// 为什么必须有：放大后页面比屏幕大，用户很容易写到"纸外"，
+  /// 此时按笔完全没反应——没有提示就只能靠猜（"是不是坏了"）。
+  void _showPenMissed() {
+    final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(
+      context,
+    );
+    if (messenger == null) {
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('这一笔没落在纸上，换个位置写'),
+          duration: Duration(milliseconds: 1400),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
@@ -305,6 +327,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         intensity: _intensity,
                         sessionId: sessionId,
                         inkStyle: brush,
+                        // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
+                        onPenMissed: _showPenMissed,
                         // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
                         onZoomChanged: (double value) => setState(() {
                           _scrollZoom = value;

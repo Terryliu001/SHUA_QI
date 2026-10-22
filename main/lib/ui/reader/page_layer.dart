@@ -33,6 +33,7 @@ class PageLayer extends StatefulWidget {
     this.sessionId,
     this.inkEnabled = false,
     this.inkStyle = InkStrokeStyle.pen,
+    this.onPenDown,
   });
 
   final PageImageCache cache;
@@ -64,6 +65,9 @@ class PageLayer extends StatefulWidget {
 
   /// 当前笔刷。只影响之后画的笔。
   final InkStrokeStyle inkStyle;
+
+  /// 笔落屏时通知外层（滚动模式用来停惯性滚动）。见 [InkLayer.onPenDown]。
+  final VoidCallback? onPenDown;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -201,6 +205,7 @@ class _PageLayerState extends State<PageLayer> {
               pageWidthPt: widget.page.width,
               width: widget.width,
               style: widget.inkStyle,
+              onPenDown: widget.onPenDown,
             ),
           ),
         ],

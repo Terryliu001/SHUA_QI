@@ -57,6 +57,7 @@ class ScrollReaderView extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkStyle = InkStrokeStyle.pen,
+    this.onPenMissed,
   });
 
   final List<WbPage> pages;
@@ -72,6 +73,12 @@ class ScrollReaderView extends StatefulWidget {
 
   /// 当前笔刷（工具栏选中项）。
   final InkStrokeStyle inkStyle;
+
+  /// 这一笔没落在纸上（落在纸外 / 纸还没就绪）时回调一次。
+  ///
+  /// 存在的意义：用户"按下去没反应"是最难排查的体验。与其让人猜，
+  /// 不如明确告诉他这一笔没被纸接住。
+  final VoidCallback? onPenMissed;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -320,34 +327,67 @@ class ScrollReaderViewState extends State<ScrollReaderView>
 
   // ── 手势 ─────────────────────────────────────────────────────────
 
+  /// 停掉一切"自动运动"：惯性甩动 + 清晰度升级定时器。
+  /// 落笔时调用（笔一碰屏，纸就该停）。
+  void _stopMotion() {
+    _ticker.stop();
+    _velocity = Offset.zero;
+  }
+
+  /// 纸面接住了这一笔：停运动 + 计数（与 [_observePointer] 的视口计数配对）。
+  void _onPenDownOnPaper() {
+    _inkPenDowns++;
+    _stopMotion();
+  }
+
   // ── 笔优先（规格 T2.1：stylus 出现后 800ms 内忽略单指 touch）────────
   //
   // 为什么必须有：写字时手掌/手指搭在屏上是常态，touch 事件会照常进
   // 缩放手势——表现是"一落笔页面就跟着跑"。100% 时横向被夹紧看不出来，
   // 放大后横向有余量，现象最明显（用户报的"放大后无法书写"）。
   // 实现：用时间戳门槛，**不 setState、不重建**——被挡住的手势直接在
-  // 回调里 return，页面不动，墨迹层照常写。双指（pointerCount ≥ 2）
-  // 不受影响：捏合缩放是手指的合法操作（§6.9.1）。
+  // 回调里 return，页面不动，墨迹层照常写。
+  //
+  // **双指捏合永远放行**（规格 T2.1「双指缩放除外」）。注意：判断"是不是
+  // 双指"只能在 `_onScaleUpdate` 里做——`ScaleStartDetails.pointerCount` 恒为 1
+  //（第一根手指落下那一刻还没有第二根），在 start 阶段用它判断会把
+  // "刚碰过笔之后的双指捏合"整个冻住（用户反馈"放大后行为异常"的来源之一）。
   static const int _penGraceMs = 800;
   int _lastPenSeenMs = -1000000;
-  bool _gestureBlocked = false;
+
+  /// 落笔计数：视口看见的笔落屏次数 vs 纸面（InkLayer）真正接住的次数。
+  ///
+  /// 两者不等 = 有一笔落在纸外（或纸还没就绪）——用户按下去"没反应"，
+  /// 与其让人猜，不如给一句"这一笔没落在纸上"。
+  int _viewportPenDowns = 0;
+  int _inkPenDowns = 0;
+
+  /// 本次手势是否被"笔优先"冻过。冻过就不能甩动——手指在动、页面没动，
+  /// 这时按手指速度甩出去会让页面突然窜一段。
+  bool _gestureFrozen = false;
 
   void _observePointer(PointerEvent event) {
     if (event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus) {
       _lastPenSeenMs = DateTime.now().millisecondsSinceEpoch;
+      if (event is PointerDownEvent) {
+        _viewportPenDowns++;
+        if (_viewportPenDowns > _inkPenDowns) {
+          // 这一笔没被任何一页接住。派发顺序是"深的先"（InkLayer 在观察哨
+          // 里面），所以纸面接住时计数已经加过了——这里不等就是落在纸外。
+          _viewportPenDowns = _inkPenDowns;
+          widget.onPenMissed?.call();
+        }
+      }
     }
   }
 
-  bool _penRecentlyActive(int pointerCount) =>
-      pointerCount < 2 &&
+  bool _penRecentlyActive() =>
       DateTime.now().millisecondsSinceEpoch - _lastPenSeenMs < _penGraceMs;
 
   void _onScaleStart(ScaleStartDetails details) {
-    _gestureBlocked = _penRecentlyActive(details.pointerCount);
-    if (_gestureBlocked) {
-      return;
-    }
+    // 这里**不**因笔而阻塞（见上面关于 pointerCount 的说明）。
+    _gestureFrozen = false;
     _ticker.stop();
     _velocity = Offset.zero;
     _qualityTimer?.cancel();
@@ -357,8 +397,9 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // 手势中途笔落下来（手掌先搭住、后动笔）：立刻冻结本次手势。
-    if (_gestureBlocked || _penRecentlyActive(details.pointerCount)) {
+    // 单指手势 + 笔刚动过 → 冻结（手掌搭屏不拖页面）；双指捏合放行。
+    if (details.pointerCount < 2 && _penRecentlyActive()) {
+      _gestureFrozen = true;
       return;
     }
     final double scale = (_startScale * details.scale).clamp(
@@ -375,10 +416,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
-    final bool blocked = _gestureBlocked;
-    _gestureBlocked = false;
-    if (blocked) {
-      // 被笔优先挡掉的手势：不甩动、不清晰度升级也不触发（没有位移发生）。
+    final bool frozen = _gestureFrozen;
+    _gestureFrozen = false;
+    if (frozen) {
+      // 被笔优先冻掉的手势：不甩动（手指在动而页面没动，甩出去会突然窜一段）。
       return;
     }
     widget.onZoomChanged?.call(_scale);
@@ -602,6 +643,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 sessionId: widget.sessionId,
                 inkEnabled: widget.sessionId != null,
                 inkStyle: widget.inkStyle,
+                // 落笔即停：笔一碰屏，惯性滚动立刻停（否则字画在"还在飘的纸"上）。
+                onPenDown: _onPenDownOnPaper,
               ),
             ),
           );

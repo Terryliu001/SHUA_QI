@@ -45,6 +45,7 @@ class InkLayer extends ConsumerStatefulWidget {
     required this.width,
     this.style = InkStrokeStyle.pen,
     this.enabled = true,
+    this.onPenDown,
   });
 
   /// (sessionId, pageIndex) —— 笔迹的定位。
@@ -59,6 +60,13 @@ class InkLayer extends ConsumerStatefulWidget {
 
   /// false 时这一页不接受落笔（分页模式放大中用 touch 平移，不写字）。
   final bool enabled;
+
+  /// 笔落屏时回调一次（**不 await、不 setState**，只用来停惯性滚动）。
+  ///
+  /// 为什么需要：滚动模式松手后页面还在惯性飘动，此时落笔，字会画在
+  /// "还在移动的纸"上——落笔那一刻算出的坐标与落笔后看到的纸已经错开，
+  /// 主观就是"放大后写不上"。笔一碰屏就该停：这是纸面 App 的通用手感。
+  final VoidCallback? onPenDown;
 
   @override
   ConsumerState<InkLayer> createState() => _InkLayerState();
@@ -78,6 +86,17 @@ class _InkLayerState extends ConsumerState<InkLayer> {
 
   /// 当前这笔的 pointer id；-1 表示没在写。
   int _activePointer = -1;
+
+  /// 当前这笔最近一次收到事件的时刻（毫秒）。
+  int _lastActiveEventMs = 0;
+
+  /// 僵死判定阈值：超过这么久没等到 UP / 移动，就认为上一笔的 UP 丢了。
+  ///
+  /// 为什么必须有这条保护：`_activePointer` 被占着时，后续所有笔都会被
+  /// 当成"第二根手指"（手掌）拒掉——**一次丢失的 UP 事件就会让这一页
+  /// 永久写不了**，而且没有任何现象提示。真机上偶发丢 UP 是可能的
+  /// （系统手势抢占、驱动层抖动），所以必须自愈。
+  static const int _stalePointerMs = 1200;
 
   double get _scale =>
       widget.pageWidthPt > 0 ? widget.width / widget.pageWidthPt : 1;
@@ -129,11 +148,23 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    if (!widget.enabled || _activePointer >= 0 || !_accepts(event.kind)) {
+    if (!widget.enabled || !_accepts(event.kind)) {
       return;
     }
+    if (_activePointer >= 0) {
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastActiveEventMs < _stalePointerMs) {
+        // 真的第二根手指（手掌搭屏）：不打断当前这一笔。
+        return;
+      }
+      // 上一笔僵死（UP 事件丢了）→ 复位并接管新笔，否则这一页再也写不了。
+      _activePointer = -1;
+    }
     _activePointer = event.pointer;
+    _lastActiveEventMs = DateTime.now().millisecondsSinceEpoch;
     _compressor = InkCompressor();
+    // 落笔即停：惯性滚动/甩动必须立刻停，否则字画在"还在飘的纸"上。
+    widget.onPenDown?.call();
     // 落笔：压力基线重置为中性，避免上一笔的重压"传染"到这一笔的起笔。
     _lastPressure = InkWidth.neutralPressure;
     final InkRibbon ribbon = _ribbonFor(widget.style, inkColorOf(context))..clear();
@@ -154,6 +185,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     if (_activePointer != event.pointer || !_accepts(event.kind)) {
       return;
     }
+    _lastActiveEventMs = DateTime.now().millisecondsSinceEpoch;
     final InkCompressor? compressor = _compressor;
     if (compressor == null) {
       return;
