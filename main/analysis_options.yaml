@@ -29,8 +29,6 @@ analyzer:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
     - "**/*.mocks.dart"
-    # 阶段 0 的一次性验证代码，跑完即删，不参与静态检查
-    - spikes/**
 
 linter:
   rules:
