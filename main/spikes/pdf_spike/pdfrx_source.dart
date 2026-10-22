@@ -112,6 +112,27 @@ class PdfrxSource implements PdfSource {
     return runs;
   }
 
+  /// 只渲染页面上的一块（pt 坐标），按指定「每 pt 多少像素」出图。
+  ///
+  /// 为什么要这个：400% 缩放的真实像素需求 = 4 × devicePixelRatio（本机 2.5）= 10 px/pt。
+  /// 整页按 10 px/pt 渲染就是 5950×8420 ≈ 5000 万像素（≈200MB 位图），不可能。
+  /// 所以产品化的高倍缩放**必须分块渲染**，这里用来量"一块"的成本。
+  Future<PdfImage?> renderCrop(
+    int index, {
+    required ui.Rect cropPt,
+    required double pxPerPt,
+  }) {
+    final PdfPage page = _doc.pages[index];
+    return page.render(
+      x: (cropPt.left * pxPerPt).round(),
+      y: (cropPt.top * pxPerPt).round(),
+      width: (cropPt.width * pxPerPt).round(),
+      height: (cropPt.height * pxPerPt).round(),
+      fullWidth: page.width * pxPerPt,
+      fullHeight: page.height * pxPerPt,
+    );
+  }
+
   /// 原始文本（不做行分段），用于对比"结构化文本是否真的解析出了阅读顺序"。
   Future<String> rawText(int index) async {
     final PdfPageRawText? raw = await _doc.pages[index].loadText();

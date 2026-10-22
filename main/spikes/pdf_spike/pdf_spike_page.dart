@@ -22,40 +22,72 @@ class PdfSpikePage extends StatefulWidget {
 }
 
 class _PdfSpikePageState extends State<PdfSpikePage> {
-  static const String _dir =
-      '/storage/emulated/0/Android/data/com.shuaqi.shuaqi/files';
-
   final List<String> _log = <String>[];
   List<File> _files = <File>[];
   String? _selected;
   bool _busy = false;
 
+  /// 候选目录，按优先级从"最像产品"到"最临时"排列。
+  ///
+  /// 为什么不止一个：
+  /// - **应用内部 files/** 是产品 Vault 的真实位置（T1.3 就落这里），但它只能由应用自己写，
+  ///   外部文件靠 `adb shell run-as ... base64 -d > files/x.pdf` 推进来。
+  /// - `/sdcard/Android/data/<pkg>/files` 用 adb push 最方便，**但目录若是 shell 创建的，
+  ///   应用读它会被 scoped storage 拒绝**（实测 `PathAccessException ... errno = 13`）。
+  /// - `code_cache`（= `Directory.systemTemp`）是最后兜底。
+  ///
+  /// 产品代码里不允许出现这种"猜目录"的写法：T1.3 会由 path_provider 给出确定路径。
+  List<String> get _candidateDirs {
+    final String internalRoot = Directory.systemTemp.parent.path;
+    return <String>[
+      '$internalRoot/files',
+      '/storage/emulated/0/Android/data/com.shuaqi.shuaqi/files',
+      Directory.systemTemp.path,
+    ];
+  }
+
+  String _dir = '';
+
   @override
   void initState() {
     super.initState();
-    unawaited(_scan());
+    // 放到首帧之后：_scan 里会 setState 写日志，直接在 initState 里跑会撞 build 期断言。
+    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
+      unawaited(_scan());
+    });
   }
 
   double get _dpr => ui.PlatformDispatcher.instance.views.first.devicePixelRatio;
 
   Future<void> _scan() async {
-    final Directory dir = Directory(_dir);
     List<File> found = <File>[];
-    try {
-      found = dir
-          .listSync()
-          .whereType<File>()
-          .where((File file) => file.path.toLowerCase().endsWith('.pdf'))
-          .toList()
-        ..sort((File a, File b) => a.path.compareTo(b.path));
-    } on FileSystemException catch (error) {
-      _add('扫描失败：$error');
+    String usedDir = '';
+    final List<String> failures = <String>[];
+    for (final String candidate in _candidateDirs) {
+      try {
+        final List<File> pdfs = Directory(candidate)
+            .listSync()
+            .whereType<File>()
+            .where((File file) => file.path.toLowerCase().endsWith('.pdf'))
+            .toList()
+          ..sort((File a, File b) => a.path.compareTo(b.path));
+        usedDir = candidate;
+        found = pdfs;
+        break;
+      } on FileSystemException catch (error) {
+        failures.add('$candidate → ${error.osError?.message ?? error.message}');
+      }
     }
     setState(() {
+      _dir = usedDir;
       _files = found;
       _selected = found.isEmpty ? null : found.first.path;
     });
-    _add('目录 $_dir 下有 ${found.length} 个 PDF');
+    _log.clear();
+    for (final String failure in failures) {
+      _add('跳过（不可读）：$failure');
+    }
+    _add('使用目录 $_dir，找到 ${found.length} 个 PDF');
     for (final File file in found) {
       _add(
         '  · ${file.uri.pathSegments.last}  '
@@ -164,6 +196,42 @@ class _PdfSpikePageState extends State<PdfSpikePage> {
         '→ ${big?.width}×${big?.height} px',
       );
       big?.dispose();
+
+      // ⑤b 真实 400%：400% × dpr 才是"屏幕上看 400% 时需要的像素密度"
+      const double zoom = 4;
+      final double pxPerPt = zoom * _dpr;
+      watch
+        ..reset()
+        ..start();
+      final PdfImage? crop = await source.renderCrop(
+        0,
+        cropPt: const ui.Rect.fromLTWH(30, 30, 200, 120),
+        pxPerPt: pxPerPt,
+      );
+      watch.stop();
+      _add(
+        '⑤b 真实 400%（${pxPerPt.toStringAsFixed(1)} px/pt）'
+        '一块 200×120pt: ${watch.elapsedMilliseconds} ms '
+        '→ ${crop?.width}×${crop?.height} px',
+      );
+      if (crop != null) {
+        final Uint8List cropPng = await PdfrxSource.encodePng(crop);
+        final File out = File(
+          '${Directory.systemTemp.parent.path}/files/crop400.png',
+        );
+        await out.writeAsBytes(cropPng);
+        _add(
+          '   已存裁图 ${(cropPng.length / 1024).toStringAsFixed(0)} KB → ${out.path}',
+        );
+        crop.dispose();
+      }
+      final double fullW = size0.width * pxPerPt;
+      final double fullH = size0.height * pxPerPt;
+      _add(
+        '   若整页按同样倍率渲染: ${fullW.round()}×${fullH.round()} px '
+        '≈ ${(fullW * fullH * 4 / 1048576).toStringAsFixed(0)} MB 位图 '
+        '→ **必须分块渲染**',
+      );
 
       // ⑥ 文本层
       watch
