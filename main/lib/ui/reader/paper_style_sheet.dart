@@ -48,7 +48,9 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
       child: Container(
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHigh,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(ShqRadius.xl),
+          ),
         ),
         padding: const EdgeInsets.fromLTRB(
           ShqSpace.xl,
