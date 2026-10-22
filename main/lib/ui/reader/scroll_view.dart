@@ -2,30 +2,34 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-// ScrollCacheExtent 定义在 rendering 里，material 没有 re-export
-import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
-/// 连续滚动模式：竖向连排、页间距 8dp、按"与视口重叠面积最大"取主可见页。
+/// 连续滚动模式：**可缩放画布**（不是 ScrollView）。
 ///
-/// ## 双指缩放：三个关键设计（都来自实测踩坑）
+/// ## 为什么要推倒重来
 ///
-/// **① 不参与手势竞技场。** `InteractiveViewer` 内部的 `ScaleGestureRecognizer` 会把
-/// 单指拖动也算进缩放分支，赢下竞技场后吃掉 `Scrollable` 的纵向拖动；关掉它的 pan
-/// 也没用（识别器仍占位）。所以这里用最底层的 [Listener] 自己数指针：
-/// 单指完全不干预，滚动与原生一致；两指才开始算缩放。
+/// 前两版都在"ListView 里塞缩放"，无论用 `InteractiveViewer` 还是自己数指针，
+/// 本质都是"改布局宽 → 重排 → 校正滚动偏移"。这条路有三个人为的天花板：
+/// 1. 每帧重排 + `jumpTo` 校正 → 视觉比手指慢半拍（用户反馈的"不跟手"）；
+/// 2. 缩放不能围绕双指焦点（布局是自上而下重算的，没有"焦点"概念）；
+/// 3. 位图宽度随布局变 → 缓存被反复冲刷。
 ///
-/// **② 布局尺寸与位图分辨率解耦。** 这是上一版"渲染有严重问题"的根因：
-/// 缩放时布局宽每帧都在变，若位图宽度跟着变，每一帧都会向缓存请求一张全新尺寸的图
-/// （一次捏合 60 帧 ≈ 60 张 12–50MB 位图），缓存被反复冲刷 → 闪烁 + 卡顿 + 内存暴涨。
-/// 现在缩放期间**冻结** `_qualityZoom`（决定位图宽度），停手 250ms 后才升级一次；
-/// 期间靠 GPU 拉伸已有位图，视觉稳定。
+/// 成熟 PDF 阅读器的做法是**把滚动画布化**：
+/// - 内容按 `baseWidth` 排一次版，位置固定不动；
+/// - 屏幕位置 = 内容坐标 × `scale` + `offset`（一个 2D 仿射变换，纯 GPU）；
+/// - 单指拖动改 `offset`，双指改 `scale` 并用同一个公式锁住焦点；
+/// - 只渲染与视口相交的页（懒加载靠"可见区间计算"，不靠 Sliver）。
 ///
-/// **③ 锚点补偿。** 缩放改变页高会让滚动偏移失效。记录"双指焦点所在的页与页内比例"，
-/// 重排后把滚动位置修正到让那个点仍在原屏幕位置——所以不跳。
+/// 因为不再有 `Scrollable`，手势竞技场里没有别的竞争者，
+/// 可以直接用 `GestureDetector.onScale*`——单指平移与双指缩放天然统一。
+///
+/// ## 位图分辨率
+/// `_qualityScale` 决定位图宽度，缩放过程中**冻结**，停手 250ms 才升级，
+/// 避免每帧请求新尺寸位图（一次捏合 60 帧 ≈ 60 张 12–50MB）。期间靠 GPU 拉伸，视觉稳定。
 class ScrollReaderView extends StatefulWidget {
   const ScrollReaderView({
     super.key,
@@ -33,7 +37,6 @@ class ScrollReaderView extends StatefulWidget {
     required this.cache,
     required this.initialPage,
     required this.onPageChanged,
-    this.zoom = 1,
     this.onZoomChanged,
   });
 
@@ -41,251 +44,225 @@ class ScrollReaderView extends StatefulWidget {
   final PageImageCache cache;
   final int initialPage;
   final ValueChanged<int> onPageChanged;
-
-  /// 初始倍率（AppBar 档位菜单用）。之后双指缩放会覆盖它。
-  final double zoom;
-
-  /// 倍率变化后回调，让 AppBar 的百分比跟着更新。
   final ValueChanged<double>? onZoomChanged;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
 }
 
-class ScrollReaderViewState extends State<ScrollReaderView> {
+class ScrollReaderViewState extends State<ScrollReaderView>
+    with SingleTickerProviderStateMixin {
   static const double _gap = 8;
-  static const double _minZoom = 1;
-  static const double _maxZoom = 3;
+  static const double _minScale = 1;
+  static const double _maxScale = 4;
 
-  final ScrollController _vertical = ScrollController();
-  final ScrollController _horizontal = ScrollController();
-  final Map<int, Offset> _pointers = <int, Offset>{};
+  /// 位图升级延迟：手指停下这么久之后才换高分辨率图
+  static const Duration _qualityDelay = Duration(milliseconds: 250);
 
-  List<double> _topOffsets = const <double>[];
-  List<double> _heights = const <double>[];
-  double _contentWidth = 0;
-  double _viewportHeight = 0;
-  int _current = 0;
-  bool _jumped = false;
-
-  /// 真实倍率：决定页宽与布局（拖动时连续变化）
-  double _zoom = 1;
-
-  /// 位图倍率：只在停手 250ms 后跟着 `_zoom` 更新一次
-  double _qualityZoom = 1;
+  late final Ticker _ticker;
   Timer? _qualityTimer;
 
-  double _pinchBaseDistance = 0;
-  double _pinchBaseZoom = 1;
+  /// 内容坐标系下的页顶/页高（baseWidth 排版，一次算好不再变）
+  List<double> _tops = const <double>[];
+  List<double> _heights = const <double>[];
+  double _contentW = 0;
+  double _contentH = 0;
+  Size _viewport = Size.zero;
 
-  int _anchorPage = 0;
-  double _anchorRatio = 0;
-  double _anchorFocalY = 0;
-  bool _needAnchorFix = false;
+  double _scale = 1;
+  double _qualityScale = 1;
 
-  bool get _pinching => _pointers.length >= 2;
+  /// 屏幕坐标 = 内容坐标 × _scale + _offset
+  Offset _offset = Offset.zero;
+
+  int _current = 0;
+  bool _initialized = false;
+
+  // 手势基准
+  double _startScale = 1;
+  Offset _focalContent = Offset.zero;
+
+  // 惯性
+  Offset _velocity = Offset.zero;
+  Duration _lastTick = Duration.zero;
 
   @override
   void initState() {
     super.initState();
-    _zoom = widget.zoom.clamp(_minZoom, _maxZoom);
-    _qualityZoom = _zoom;
-    _current = widget.initialPage.clamp(0, math.max(0, widget.pages.length - 1));
-    _vertical.addListener(_onScroll);
-  }
-
-  @override
-  void didUpdateWidget(covariant ScrollReaderView oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.zoom != widget.zoom && (widget.zoom - _zoom).abs() > 0.001) {
-      _zoom = widget.zoom.clamp(_minZoom, _maxZoom);
-      _qualityZoom = _zoom;
-      _contentWidth = 0;
-      _resyncToCurrent();
-    }
+    _ticker = createTicker(_onTick);
   }
 
   @override
   void dispose() {
     _qualityTimer?.cancel();
-    _vertical
-      ..removeListener(_onScroll)
-      ..dispose();
-    _horizontal.dispose();
+    _ticker.dispose();
     super.dispose();
   }
 
-  void _resyncToCurrent() {
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (!mounted || !_vertical.hasClients) {
-        return;
-      }
-      final double target = _topOffsets.isEmpty
-          ? 0
-          : _topOffsets[_current] - _gap;
-      _vertical.jumpTo(target.clamp(0, _vertical.position.maxScrollExtent));
-      if (_horizontal.hasClients) {
-        _horizontal.jumpTo(0);
-      }
-    });
-  }
+  // ── 布局（只算一次）────────────────────────────────────────────────────
 
-  // ── 指针：单指交给列表，双指自己算 ──────────────────────────────────────
-
-  void _onPointerDown(PointerDownEvent event) {
-    _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length == 2) {
-      _beginPinch();
-    }
-  }
-
-  void _beginPinch() {
-    _pinchBaseDistance = _distance();
-    _pinchBaseZoom = _zoom;
-    _qualityTimer?.cancel();
-
-    final List<Offset> points = _pointers.values.toList(growable: false);
-    final Offset focal = (points[0] + points[1]) / 2;
-    _anchorFocalY = focal.dy;
-    final double contentY =
-        (_vertical.hasClients ? _vertical.offset : 0) + focal.dy;
-    if (_topOffsets.isEmpty) {
-      _anchorPage = 0;
-      _anchorRatio = 0;
+  void _layout(double baseWidth) {
+    if (baseWidth == _contentW && _tops.isNotEmpty) {
       return;
     }
-    int page = 0;
-    for (int i = 0; i < _topOffsets.length; i++) {
-      page = i;
-      final double top = _topOffsets[i];
-      if (contentY >= top && contentY <= top + _heights[i]) {
-        break;
-      }
-    }
-    _anchorPage = page;
-    final double height = _heights[page];
-    _anchorRatio = height <= 0
-        ? 0
-        : ((contentY - _topOffsets[page]) / height).clamp(0.0, 1.0);
-  }
-
-  void _onPointerMove(PointerMoveEvent event) {
-    if (!_pointers.containsKey(event.pointer)) {
-      return;
-    }
-    _pointers[event.pointer] = event.localPosition;
-    if (!_pinching || _pinchBaseDistance <= 0) {
-      return;
-    }
-    final double target = (_pinchBaseZoom * _distance() / _pinchBaseDistance)
-        .clamp(_minZoom, _maxZoom);
-    if ((target - _zoom).abs() < 0.004) {
-      return;
-    }
-    setState(() {
-      _zoom = target;
-      // 注意：_qualityZoom 不动。位图宽度保持冻结，避免每帧重建位图。
-    });
-    _needAnchorFix = true;
-  }
-
-  void _onPointerEnd(PointerEvent event) {
-    _pointers.remove(event.pointer);
-    if (_pointers.length >= 2) {
-      _beginPinch();
-      return;
-    }
-    if (_pointers.isNotEmpty) {
-      _pinchBaseDistance = 0;
-      return;
-    }
-    // 手全部离开：停 250ms 再升级位图分辨率，避免"刚停下就重绘"的抖动
-    _qualityTimer?.cancel();
-    _qualityTimer = Timer(const Duration(milliseconds: 250), () {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _qualityZoom = _zoom;
-      });
-    });
-    widget.onZoomChanged?.call(_zoom);
-  }
-
-  double _distance() {
-    if (_pointers.length < 2) {
-      return 0;
-    }
-    final List<Offset> points = _pointers.values.toList(growable: false);
-    return (points[0] - points[1]).distance;
-  }
-
-  // ── 布局 ────────────────────────────────────────────────────────────────
-
-  void _layout(double width) {
-    if (width == _contentWidth && _topOffsets.isNotEmpty) {
-      return;
-    }
-    _contentWidth = width;
-    final List<double> heights = <double>[];
+    _contentW = baseWidth;
     final List<double> tops = <double>[];
+    final List<double> heights = <double>[];
     double y = 0;
     for (final WbPage page in widget.pages) {
       final double height = page.width <= 0
-          ? width
-          : width * page.height / page.width;
+          ? baseWidth
+          : baseWidth * page.height / page.width;
       tops.add(y);
       heights.add(height);
       y += height + _gap * 2;
     }
+    _tops = tops;
     _heights = heights;
-    _topOffsets = tops;
+    _contentH = y;
   }
 
-  /// 缩放后把滚动位置修正到"锚点仍在原屏幕位置"，避免视觉跳动。
-  void _scheduleAnchorFix() {
-    if (!_needAnchorFix || _topOffsets.isEmpty) {
+  Offset _clampOffset(Offset offset, double scale) {
+    final double scaledW = _contentW * scale;
+    final double scaledH = _contentH * scale;
+    // 横向：内容比视口窄时居中（否则会紧贴左边，看起来像没排版）
+    final double x = scaledW <= _viewport.width
+        ? (_viewport.width - scaledW) / 2
+        : offset.dx.clamp(_viewport.width - scaledW, 0);
+    // 纵向：内容比视口矮时顶部对齐
+    final double y = scaledH <= _viewport.height
+        ? 0
+        : offset.dy.clamp(_viewport.height - scaledH, 0);
+    return Offset(x, y);
+  }
+
+  void _initPosition() {
+    if (_initialized || _tops.isEmpty) {
       return;
     }
-    _needAnchorFix = false;
-    final int page = _anchorPage.clamp(0, _topOffsets.length - 1);
-    final double newContentY =
-        _topOffsets[page] + _anchorRatio * _heights[page];
-    final double target = newContentY - _anchorFocalY;
-    WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-      if (!mounted || !_vertical.hasClients) {
-        return;
-      }
-      _vertical.jumpTo(target.clamp(0, _vertical.position.maxScrollExtent));
+    _initialized = true;
+    final int page = widget.initialPage.clamp(0, _tops.length - 1);
+    _current = page;
+    // 该页顶部对齐视口顶部
+    _offset = _clampOffset(Offset(-_gap, -_tops[page] + _gap), _scale);
+  }
+
+  // ── 手势：单指平移 + 双指焦点缩放（同一个公式）─────────────────────────
+
+  void _onScaleStart(ScaleStartDetails details) {
+    _ticker.stop();
+    _velocity = Offset.zero;
+    _qualityTimer?.cancel();
+    _startScale = _scale;
+    // 焦点落在内容坐标系里的哪一点——缩放时这一点必须钉在屏幕上不动
+    _focalContent = (details.localFocalPoint - _offset) / _scale;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details) {
+    final double scale = (_startScale * details.scale).clamp(
+      _minScale,
+      _maxScale,
+    );
+    // 由"焦点内容点"反解 offset：focalScreen = focalContent * scale + offset
+    final Offset offset = details.localFocalPoint - _focalContent * scale;
+    setState(() {
+      _scale = scale;
+      _offset = _clampOffset(offset, scale);
+      _updateCurrentPage();
     });
   }
 
-  void _onScroll() {
-    if (_topOffsets.isEmpty || !_vertical.hasClients) {
+  void _onScaleEnd(ScaleEndDetails details) {
+    // 停手：延迟升级位图，并允许惯性
+    _qualityTimer?.cancel();
+    _qualityTimer = Timer(_qualityDelay, () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _qualityScale = _scale;
+      });
+    });
+    widget.onZoomChanged?.call(_scale);
+
+    final Offset velocity = details.velocity.pixelsPerSecond;
+    if (velocity.distance > 60) {
+      _velocity = velocity;
+      _lastTick = Duration.zero;
+      _ticker.start();
+    }
+  }
+
+  void _onTick(Duration elapsed) {
+    if (_lastTick == Duration.zero) {
+      _lastTick = elapsed;
       return;
     }
-    final double top = _vertical.offset;
-    final double bottom = top + _viewportHeight;
-    int best = 0;
-    double bestOverlap = -1;
-    for (int i = 0; i < _topOffsets.length; i++) {
-      final double itemTop = _topOffsets[i];
-      if (itemTop > bottom) {
+    final double dt = (elapsed - _lastTick).inMicroseconds / 1e6;
+    _lastTick = elapsed;
+    if (dt <= 0) {
+      return;
+    }
+    // 简单指数衰减：与平台惯性的手感接近，且实现只有几行
+    final Offset next = _offset + _velocity * dt;
+    _velocity *= math.pow(0.0025, dt).toDouble();
+    final Offset clamped = _clampOffset(next, _scale);
+    final bool hitEdge = clamped != next;
+    setState(() {
+      _offset = clamped;
+      _updateCurrentPage();
+    });
+    if (_velocity.distance < 40 || hitEdge) {
+      _velocity = Offset.zero;
+      _ticker.stop();
+    }
+  }
+
+  void _updateCurrentPage() {
+    if (_tops.isEmpty) {
+      return;
+    }
+    final double centerY =
+        (-_offset.dy + _viewport.height / 2) / _scale;
+    int page = 0;
+    for (int i = 0; i < _tops.length; i++) {
+      if (centerY >= _tops[i]) {
+        page = i;
+      } else {
         break;
       }
-      final double overlap =
-          math.min(itemTop + _heights[i], bottom) - math.max(itemTop, top);
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        best = i;
-      }
     }
-    if (best != _current) {
-      setState(() {
-        _current = best;
-      });
-      widget.onPageChanged(best);
+    if (page != _current) {
+      _current = page;
+      widget.onPageChanged(page);
     }
+  }
+
+  /// 供 AppBar 的档位菜单调用：以视口中心为焦点缩放到指定倍率。
+  void setScale(double value) {
+    final double next = value.clamp(_minScale, _maxScale);
+    final Offset center = Offset(_viewport.width / 2, _viewport.height / 2);
+    final Offset focalContent = (center - _offset) / _scale;
+    setState(() {
+      _scale = next;
+      _offset = _clampOffset(center - focalContent * next, next);
+      // 菜单是离散操作，直接升级位图（不需要等 250ms）
+      _qualityScale = next;
+      _updateCurrentPage();
+    });
+    widget.onZoomChanged?.call(next);
+  }
+
+  /// 供缩略图抽屉跳页：该页顶部对齐视口顶部。
+  void jumpTo(int index) {
+    if (index < 0 || index >= _tops.length || !_initialized) {
+      return;
+    }
+    setState(() {
+      _current = index;
+      _offset = _clampOffset(Offset(-_gap, -_tops[index] + _gap), _scale);
+    });
+    widget.onPageChanged(index);
   }
 
   @override
@@ -293,96 +270,56 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
-        final double fitWidth = math.min(
-          constraints.maxWidth,
+        _viewport = Size(constraints.maxWidth, constraints.maxHeight);
+        final double baseWidth = math.min(
+          constraints.maxWidth - ShqSpace.sm * 2,
           ShqLayout.maxReadingWidth,
         );
-        final double contentWidth = fitWidth * _zoom;
-        _layout(contentWidth);
-        _viewportHeight = constraints.maxHeight;
-        _scheduleAnchorFix();
+        _layout(baseWidth);
+        _initPosition();
 
-        if (!_jumped && _topOffsets.isNotEmpty) {
-          _jumped = true;
-          WidgetsBinding.instance.addPostFrameCallback((Duration _) {
-            if (!_vertical.hasClients) {
-              return;
-            }
-            final double target = _topOffsets[_current] - _gap;
-            _vertical.jumpTo(
-              target.clamp(0, _vertical.position.maxScrollExtent),
-            );
-          });
-        }
+        // 可见区间（内容坐标）
+        final double visibleTop = -_offset.dy / _scale;
+        final double visibleBottom =
+            visibleTop + constraints.maxHeight / _scale;
 
-        final double sidePadding =
-            math.max(0, (constraints.maxWidth - contentWidth) / 2) + ShqSpace.sm;
+        final int qualityWidth =
+            (_contentW * dpr * _qualityScale).round().clamp(1, 20000);
 
-        // 位图宽度用冻结的 _qualityZoom，而不是实时的 _zoom
-        final int qualityWidth = (fitWidth * dpr * _qualityZoom).round();
-
-        Widget list = ListView.builder(
-          controller: _vertical,
-          // 两指缩放期间不要滚动，否则画面一边缩放一边跑
-          physics: _pinching
-              ? const NeverScrollableScrollPhysics()
-              : const ClampingScrollPhysics(),
-          scrollCacheExtent: ScrollCacheExtent.pixels(
-            constraints.maxHeight * 0.8,
-          ),
-          padding: EdgeInsets.symmetric(
-            horizontal: sidePadding,
-            vertical: ShqSpace.sm,
-          ),
-          itemCount: widget.pages.length,
-          itemBuilder: (BuildContext context, int index) {
-            return Padding(
-              padding: const EdgeInsets.symmetric(vertical: _gap),
+        final List<Widget> layers = <Widget>[];
+        for (int i = 0; i < _tops.length; i++) {
+          if (_tops[i] > visibleBottom) {
+            break;
+          }
+          if (_tops[i] + _heights[i] < visibleTop) {
+            continue;
+          }
+          layers.add(
+            Positioned(
+              left: _offset.dx,
+              top: _tops[i] * _scale + _offset.dy,
+              width: _contentW * _scale,
+              height: _heights[i] * _scale,
               child: PageLayer(
                 cache: widget.cache,
-                page: widget.pages[index],
-                width: contentWidth,
+                page: widget.pages[i],
+                width: _contentW * _scale,
                 qualityWidth: qualityWidth,
-              ),
-            );
-          },
-        );
-
-        if (_zoom > 1.0) {
-          list = Scrollbar(
-            controller: _horizontal,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              controller: _horizontal,
-              child: SizedBox(
-                width: contentWidth + sidePadding * 2,
-                height: constraints.maxHeight,
-                child: list,
               ),
             ),
           );
         }
 
-        return Listener(
-          behavior: HitTestBehavior.translucent,
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerEnd,
-          onPointerCancel: _onPointerEnd,
-          child: ClipRect(child: list),
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onScaleStart: _onScaleStart,
+          onScaleUpdate: _onScaleUpdate,
+          onScaleEnd: _onScaleEnd,
+          child: ClipRect(
+            child: Stack(clipBehavior: Clip.none, children: layers),
+          ),
         );
       },
-    );
-  }
-
-  /// 供缩略图抽屉跳页。
-  void jumpTo(int index) {
-    if (index < 0 || index >= _topOffsets.length || !_vertical.hasClients) {
-      return;
-    }
-    _vertical.jumpTo(
-      (_topOffsets[index] - _gap).clamp(0, _vertical.position.maxScrollExtent),
     );
   }
 }

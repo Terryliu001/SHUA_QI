@@ -132,9 +132,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             PopupMenuButton<double>(
               tooltip: '缩放',
               initialValue: _scrollZoom,
-              onSelected: (double value) => setState(() {
-                _scrollZoom = value;
-              }),
+              onSelected: (double value) {
+                _scrollKey.currentState?.setScale(value);
+                setState(() {
+                  _scrollZoom = value;
+                });
+              },
               itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
                 for (final double zoom in _scrollZoomSteps)
                   PopupMenuItem<double>(
@@ -218,7 +221,6 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   cache: _cache!,
                   initialPage: initial,
                   onPageChanged: _onPageChanged,
-                  zoom: _scrollZoom,
                   // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
                   onZoomChanged: (double value) => setState(() {
                     _scrollZoom = value;
