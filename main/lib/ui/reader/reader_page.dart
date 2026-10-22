@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/reader/reader_prefs_store.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/reader_providers.dart';
+import 'package:shuaqi/ui/reader/ink_toolbar.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/paged_view.dart';
 import 'package:shuaqi/ui/reader/paper_style_sheet.dart';
@@ -134,6 +137,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 当前笔刷（全局唯一一份，只影响之后画的新笔）
+    final InkStrokeStyle brush = ref.watch(inkToolProvider);
     final AsyncValue<ReaderHandle> async = ref.watch(
       readerHandleProvider(widget.workbookId),
     );
@@ -237,7 +242,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               currentPage: _current,
               onSelected: _jumpTo,
             ),
-      body: _buildBody(theme, async, ready),
+      body: _buildBody(theme, async, ready, brush),
     );
   }
 
@@ -245,6 +250,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     ThemeData theme,
     AsyncValue<ReaderHandle> async,
     ReaderHandle? ready,
+    InkStrokeStyle brush,
   ) {
     if (async.hasError) {
       return Center(
@@ -274,31 +280,46 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Expanded(
-          child: _mode == ViewMode.paged
-              ? PagedReaderView(
-                  key: _pagedKey,
-                  pages: ready.pages,
-                  cache: _cache!,
-                  initialPage: initial,
-                  onPageChanged: _onPageChanged,
-                  style: _style,
-                  intensity: _intensity,
-                  sessionId: sessionId,
-                )
-              : ScrollReaderView(
-                  key: _scrollKey,
-                  pages: ready.pages,
-                  cache: _cache!,
-                  initialPage: initial,
-                  onPageChanged: _onPageChanged,
-                  style: _style,
-                  intensity: _intensity,
-                  sessionId: sessionId,
-                  // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
-                  onZoomChanged: (double value) => setState(() {
-                    _scrollZoom = value;
-                  }),
-                ),
+          child: Stack(
+            children: <Widget>[
+              Positioned.fill(
+                child: _mode == ViewMode.paged
+                    ? PagedReaderView(
+                        key: _pagedKey,
+                        pages: ready.pages,
+                        cache: _cache!,
+                        initialPage: initial,
+                        onPageChanged: _onPageChanged,
+                        style: _style,
+                        intensity: _intensity,
+                        sessionId: sessionId,
+                        inkStyle: brush,
+                      )
+                    : ScrollReaderView(
+                        key: _scrollKey,
+                        pages: ready.pages,
+                        cache: _cache!,
+                        initialPage: initial,
+                        onPageChanged: _onPageChanged,
+                        style: _style,
+                        intensity: _intensity,
+                        sessionId: sessionId,
+                        inkStyle: brush,
+                        // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
+                        onZoomChanged: (double value) => setState(() {
+                          _scrollZoom = value;
+                        }),
+                      ),
+              ),
+              // 笔刷工具栏浮在阅读区右下角：不进 AppBar（书写时手指要够得着），
+              // 也不遮正文（只占右下角一小块）。按钮吃掉指针，笔尖点它不会落墨。
+              const Positioned(
+                right: ShqSpace.md,
+                bottom: ShqSpace.sm,
+                child: SafeArea(top: false, child: InkToolbar()),
+              ),
+            ],
+          ),
         ),
         SafeArea(
           top: false,

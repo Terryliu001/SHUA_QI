@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
@@ -31,6 +32,7 @@ class PageLayer extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkEnabled = false,
+    this.inkStyle = InkStrokeStyle.pen,
   });
 
   final PageImageCache cache;
@@ -59,6 +61,9 @@ class PageLayer extends StatefulWidget {
 
   /// 这一页此刻是否接受落笔（分页模式放大中用 touch 平移，不写字）。
   final bool inkEnabled;
+
+  /// 当前笔刷。只影响之后画的笔。
+  final InkStrokeStyle inkStyle;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -121,62 +126,85 @@ class _PageLayerState extends State<PageLayer> {
     final double height = widget.width * widget.page.height / widget.page.width;
     final ui.Image? image = _image;
 
-    final Widget paper = PaperEffect(
-      style: widget.style,
-      intensity: widget.intensity,
-      child: Container(
-        width: widget.width,
-        height: height,
-        decoration: BoxDecoration(
-          color: ShqPaper.base,
-          // 暗色下页面与背景只差亮度，一圈极淡亮边让"纸"从近黑背景里显形；
-          // 投影同时换得更淡更暖（暗底里重投影显脏）。
-          border: isDark ? Border.all(color: ShqNight.pageEdge) : null,
-          boxShadow: <BoxShadow>[
-            BoxShadow(
-              color: isDark ? ShqNight.pageShadow : ShqPaper.lightPageShadow,
-              blurRadius: isDark ? 10 : 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: image == null
-            ? Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
+    // 背景层：PaperEffect 只染这一棵树。
+    //
+    // **RepaintBoundary 是滚动模式丝滑的关键**（2026-10-22）：
+    // 相机矩阵每帧在变，`RenderTransform` 只有在其子树
+    // `needsCompositing` 时才会推一个真正的合成层（TransformLayer），
+    // 否则就把矩阵压进 canvas —— 那一层的整页位图 + 噪点会被逐帧
+    // 重新光栅化（2 页 A4 ≈ 12.8MP/帧的填充），120Hz 必掉帧。
+    // 加一层 boundary 后，平移只是合成器搬一张缓存贴图。
+    // 它同时把"墨迹层每帧重绘"与"PDF 位图"隔开：写字时不重画背景。
+    final Widget paper = RepaintBoundary(
+      child: PaperEffect(
+        style: widget.style,
+        intensity: widget.intensity,
+        child: SizedBox(
+          width: widget.width,
+          height: height,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: ShqPaper.base,
+              // 暗色下页面与背景只差亮度，一圈极淡亮边让"纸"从近黑背景里显形；
+              // 投影同时换得更淡更暖（暗底里重投影显脏）。
+              border: isDark ? Border.all(color: ShqNight.pageEdge) : null,
+              boxShadow: <BoxShadow>[
+                BoxShadow(
+                  color: isDark ? ShqNight.pageShadow : ShqPaper.lightPageShadow,
+                  blurRadius: isDark ? 10 : 6,
+                  offset: const Offset(0, 2),
                 ),
-              )
-            : RawImage(
-                image: image,
-                fit: BoxFit.fill,
-                // low 而不是 medium：放大绘制时 medium 会走更贵的重采样，
-                // 缩放过程中明显掉帧。反正松手后会用更高倍率重渲染，画的瞬间不需要精致。
-                filterQuality: FilterQuality.low,
-              ),
+              ],
+            ),
+            child: image == null
+                ? Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  )
+                : RawImage(
+                    image: image,
+                    fit: BoxFit.fill,
+                    // low 而不是 medium：放大绘制时 medium 会走更贵的重采样，
+                    // 缩放过程中明显掉帧。反正松手后会用更高倍率重渲染，画的瞬间不需要精致。
+                    filterQuality: FilterQuality.low,
+                  ),
+          ),
+        ),
       ),
     );
 
-    // 墨迹层：PaperEffect 的兄弟节点（T1.6 红线），只吃自己的 stylus 手势
+    // 没有墨迹层：背景自己就带确定尺寸（width/height 已写死），直接返回。
     final String? sessionId = widget.sessionId;
     if (sessionId == null || !widget.inkEnabled) {
       return paper;
     }
-    return Stack(
-      children: <Widget>[
-        Positioned.fill(child: paper),
-        Positioned.fill(
-          child: InkLayer(
-            inkKey: InkPageKey(sessionId, widget.page.index),
-            pageWidthPt: widget.page.width,
-            width: widget.width,
+    // 墨迹层：PaperEffect 的兄弟节点（T1.6 红线），只吃自己的 stylus 手势。
+    //
+    // **必须用 SizedBox 把 Stack 钉在页面尺寸上**：Stack 若只有 Positioned 子节点，
+    // 会撑满父级给的约束——分页模式里父级是 `Center`（松散约束 = 整个视口），
+    // 于是页面被拉成视口比例（A4 变方形、题干变形）。这是 T2.1 引入的真实缺陷。
+    return SizedBox(
+      width: widget.width,
+      height: height,
+      child: Stack(
+        children: <Widget>[
+          Positioned.fill(child: paper),
+          Positioned.fill(
+            child: InkLayer(
+              inkKey: InkPageKey(sessionId, widget.page.index),
+              pageWidthPt: widget.page.width,
+              width: widget.width,
+              style: widget.inkStyle,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

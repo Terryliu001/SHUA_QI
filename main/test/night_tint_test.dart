@@ -56,14 +56,38 @@ void main() {
     expect(NightTint.matrix[19], 0);
   });
 
-  test('矩阵与 apply 数值一致（同一映射的两条路径）', () {
+  // ── 下面三条是"暗色整页死黑"事故的回归测试（2026-10-22）────────────────
+  // ColorFilter.matrix 的输入与偏移都是 0..255。旧实现把归一化的 ink 当偏移，
+  // 白纸算出来 ≈ -207 → 钳到 0 → 全黑；归一化口径的测试完全看不出来。
+
+  test('矩阵作用在字节通道上：白纸 → 夜读纸色（不是黑）', () {
+    final (double r, double g, double b) = NightTint.applyByte(255, 255, 255);
+    expect(r.round(), channel(NightRgb.paper, 16));
+    expect(g.round(), channel(NightRgb.paper, 8));
+    expect(b.round(), channel(NightRgb.paper, 0));
+    expect(r, greaterThan(8), reason: '纸色必须可见；0 就是"整页死黑"');
+  });
+
+  test('矩阵作用在字节通道上：黑字 → 暖白墨', () {
+    final (double r, double g, double b) = NightTint.applyByte(0, 0, 0);
+    expect(r.round(), channel(NightRgb.ink, 16));
+    expect(g.round(), channel(NightRgb.ink, 8));
+    expect(b.round(), channel(NightRgb.ink, 0));
+    expect(r, greaterThan(200), reason: '黑字必须翻成亮墨，否则暗色下看不见字');
+  });
+
+  test('矩阵与归一化 apply 同源（两条路径只差通道尺度）', () {
     const double r = 0.3;
     const double g = 0.6;
     const double b = 0.9;
     final (double ar, double ag, double ab) = NightTint.apply(r, g, b);
-    final List<double> m = NightTint.matrix;
-    expect(m[0] * r + m[1] * g + m[2] * b + m[4], closeTo(ar, 1e-9));
-    expect(m[5] * r + m[6] * g + m[7] * b + m[9], closeTo(ag, 1e-9));
-    expect(m[10] * r + m[11] * g + m[12] * b + m[14], closeTo(ab, 1e-9));
+    final (double br, double bg, double bb) = NightTint.applyByte(
+      r * 255,
+      g * 255,
+      b * 255,
+    );
+    expect(br / 255, closeTo(ar, 1e-9));
+    expect(bg / 255, closeTo(ag, 1e-9));
+    expect(bb / 255, closeTo(ab, 1e-9));
   });
 }

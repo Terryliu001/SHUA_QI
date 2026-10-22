@@ -6,4 +6,8 @@ abstract final class AppSettingKeys {
   /// 主题模式：`system` / `light` / `dark`（对应 Material 的 ThemeMode.name）。
   /// 缺失 = 跟随系统。
   static const String themeMode = 'app.theme_mode';
+
+  /// 上次用的笔刷：`pen` / `ballpoint` / `highlighter`（对应 InkStrokeStyle.name）。
+  /// 缺失 = 钢笔。只影响**之后**画的笔，不改已落笔的（T2.2）。
+  static const String inkBrush = 'ink.default_brush';
 }

@@ -45,15 +45,39 @@ abstract final class NightTint {
   static final double _inkB = _channel(NightRgb.ink, 0);
 
   /// `ColorFilter.matrix` 的 20 个参数（行优先：RGB 行 + 偏移列，alpha 恒等）。
+  ///
+  /// ## 单位陷阱（2026-10-22 真机"整页死黑"事故的根因，不许再犯）
+  /// `ColorFilter.matrix` 的**输入通道与第 5 列偏移都是 0..255 的字节值**，
+  /// 不是 0..1 的归一化值：
+  /// ```text
+  /// out_255 = m0·R255 + m1·G255 + m2·B255 + m4
+  /// ```
+  /// 系数是无量纲的（`dr·luma` 直接可用），但**偏移必须 ×255**。
+  /// 之前把归一化的 ink（≈0.91）当偏移填进去，白纸算出来是
+  /// `-0.816×255 + 0.91 ≈ -207` → 钳到 0 → 整页纯黑，黑字也被压成 0，
+  /// 于是"暗色下所有 PDF 都是一片死黑"。
   static final List<double> matrix = _buildMatrix();
 
-  /// 对单个归一化 RGB 应用映射（单测与文档用；UI 走 [matrix]）。
+  /// 对单个归一化 RGB 应用映射（文档 / 逻辑单测用；GPU 走 [matrix]）。
   static (double, double, double) apply(double r, double g, double b) {
     final double y = luma[0] * r + luma[1] * g + luma[2] * b;
     return (
       _inkR + (_paperR - _inkR) * y,
       _inkG + (_paperG - _inkG) * y,
       _inkB + (_paperB - _inkB) * y,
+    );
+  }
+
+  /// 把 [matrix] 作用到 **0..255** 的通道值上——与 GPU 的算法逐位一致。
+  ///
+  /// 单测必须走这条（而不是归一化的 [apply]），否则又会漏掉"偏移没乘 255"这类
+  /// 只在真机上才现形的事故。
+  static (double, double, double) applyByte(double r, double g, double b) {
+    final List<double> m = matrix;
+    return (
+      m[0] * r + m[1] * g + m[2] * b + m[4],
+      m[5] * r + m[6] * g + m[7] * b + m[9],
+      m[10] * r + m[11] * g + m[12] * b + m[14],
     );
   }
 
@@ -65,9 +89,9 @@ abstract final class NightTint {
     final double dg = _paperG - _inkG;
     final double db = _paperB - _inkB;
     return <double>[
-      dr * luma[0], dr * luma[1], dr * luma[2], 0, _inkR, //
-      dg * luma[0], dg * luma[1], dg * luma[2], 0, _inkG, //
-      db * luma[0], db * luma[1], db * luma[2], 0, _inkB, //
+      dr * luma[0], dr * luma[1], dr * luma[2], 0, _inkR * 255, //
+      dg * luma[0], dg * luma[1], dg * luma[2], 0, _inkG * 255, //
+      db * luma[0], db * luma[1], db * luma[2], 0, _inkB * 255, //
       0, 0, 0, 1, 0,
     ];
   }

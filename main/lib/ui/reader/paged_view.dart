@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
@@ -25,6 +26,7 @@ class PagedReaderView extends StatefulWidget {
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
+    this.inkStyle = InkStrokeStyle.pen,
   });
 
   final List<WbPage> pages;
@@ -36,6 +38,9 @@ class PagedReaderView extends StatefulWidget {
 
   /// 当前 draft 会话 id。null = 不挂墨迹层。
   final String? sessionId;
+
+  /// 当前笔刷（工具栏选中项）。
+  final InkStrokeStyle inkStyle;
 
   @override
   State<PagedReaderView> createState() => PagedReaderViewState();
@@ -237,6 +242,7 @@ class PagedReaderViewState extends State<PagedReaderView> {
                         widget.sessionId != null &&
                         index == _current &&
                         !_zoomed,
+                    inkStyle: widget.inkStyle,
                   ),
                 ),
               ),

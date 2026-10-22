@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/domain/reader/scroll_math.dart';
@@ -54,6 +55,7 @@ class ScrollReaderView extends StatefulWidget {
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
+    this.inkStyle = InkStrokeStyle.pen,
   });
 
   final List<WbPage> pages;
@@ -66,6 +68,9 @@ class ScrollReaderView extends StatefulWidget {
 
   /// 当前 draft 会话 id。null = 不挂墨迹层（纯阅读，比如以后的历史提交回看）。
   final String? sessionId;
+
+  /// 当前笔刷（工具栏选中项）。
+  final InkStrokeStyle inkStyle;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -88,7 +93,13 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   static const double _maxScale = 4;
 
   /// 单页位图像素宽上限。再往上就该走分块渲染（T1.5.1，未做）。
-  static const int _maxBitmapWidthPx = 4096;
+  ///
+  /// 3200 而不是 4096（2026-10-22 调整）：A4 在 3200 宽时一页位图 ≈ 52MB，
+  /// 视口 ±1 三页同屏 ≈ 156MB，留在 200MB 缓存与 650MB 峰值预算内。
+  /// 4096 时一页 95MB，三页 285MB —— 一捏合就触发淘汰与 GC，
+  /// 表现正是"多次双指放缩后滑动卡顿、页面发糊/空白"。
+  /// 代价：200% 以上放大的清晰度从 1:1 降到 0.75:1（真无损要等分块渲染）。
+  static const int _maxBitmapWidthPx = 3200;
 
   /// 清晰度档位：捏合停手后取 `>= scale` 的最小档，避免每次微小变化都重渲染。
   /// 相邻档比值 ≤1.25，肉眼看不出差别。
@@ -287,11 +298,23 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   // ── 矩阵层 ───────────────────────────────────────────────────────
 
   /// 把当前 offset/scale 发给矩阵层。值没变就跳过（否则无谓重建 Transform）。
+  ///
+  /// **位移对齐到物理像素**：1 倍时位图是 1:1 贴到屏幕上的（fit-width 宽正好是
+  /// 屏宽的 device px），偏移落在半个像素上就会触发一次双线性重采样 ——
+  /// 既糊又慢，滑动时还能看到细小抖动。取整到设备像素后，静止画面像素级对齐，
+  /// 滑动则是"每 0.4dp 一格的连续位移"，在 400dpi 屏上完全看不出台阶。
   void _publishCamera() {
-    if (_offset == _cam.value.offset && _scale == _cam.value.scale) {
+    final double dpr = _dpr;
+    final Offset offset = dpr > 0
+        ? Offset(
+            (_offset.dx * dpr).roundToDouble() / dpr,
+            (_offset.dy * dpr).roundToDouble() / dpr,
+          )
+        : _offset;
+    if (offset == _cam.value.offset && _scale == _cam.value.scale) {
       return;
     }
-    _cam.value = _Camera(_offset, _scale);
+    _cam.value = _Camera(offset, _scale);
   }
 
   // ── 手势 ─────────────────────────────────────────────────────────
@@ -423,21 +446,24 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     }
   }
 
-  /// 滚动中预热：向"正在去的方向"预热下一页。
+  /// 滚动中预热：向"正在去的方向"预热**即将进入视口的那一页**。
   ///
-  /// 为什么只预热 1 页：dpr 2.5 下 fit-width 位图 3000×4243 ≈ 51MB，
-  /// 200MB 缓存装 4 页；当前页 + 显示中的邻居 + 1 页预热 ≈ 153MB，留得出余量。
-  /// 反向页现渲染只要 ~12ms（pdfium 不走 UI 线程），来得及。
+  /// 为什么是 `_lastVisible + dir` 而不是 `_current + dir`：100% 时视口里常驻两页，
+  /// `_current + 1` 往往已经在屏上（不需要预热），真正需要的是可见集之外的那一页。
+  ///
+  /// 为什么只预热 1 页：一页 A4 在 3200px 宽下 ≈ 52MB，200MB 缓存装 3–4 页；
+  /// 当前页 + 显示中的邻居 + 1 页预热，留得出余量。反向页现渲染只要 ~12ms
+  /// （pdfium 不走 UI 线程），来得及。
   void _maybePrefetch() {
-    if (_bitmapWidthPx <= 0 || _tops.isEmpty) {
+    if (_bitmapWidthPx <= 0 || _tops.isEmpty || _lastVisible < 0) {
       return;
     }
     final int dir = _prefetchDir();
-    final int next = _current + dir;
+    final int next = dir > 0 ? _lastVisible + 1 : _firstVisible - 1;
     if (next < 0 || next >= widget.pages.length) {
       return;
     }
-    final String token = '$_current|$dir|$_bitmapWidthPx';
+    final String token = '$next|$_bitmapWidthPx';
     if (token == _prefetched) {
       return;
     }
@@ -537,6 +563,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 intensity: widget.intensity,
                 sessionId: widget.sessionId,
                 inkEnabled: widget.sessionId != null,
+                inkStyle: widget.inkStyle,
               ),
             ),
           );
