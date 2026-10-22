@@ -20,6 +20,7 @@ class PageLayer extends StatefulWidget {
     required this.page,
     required this.width,
     this.renderScale = 1,
+    this.qualityWidth,
   });
 
   final PageImageCache cache;
@@ -30,6 +31,14 @@ class PageLayer extends StatefulWidget {
 
   /// 出图倍率，1 表示只按屏幕 dpr 出图。
   final double renderScale;
+
+  /// 直接指定位图的像素宽（优先级高于 [renderScale]）。
+  ///
+  /// 滚动模式的双指缩放必须用它：缩放过程中布局宽每帧都在变，
+  /// 如果位图宽度跟着变，每一帧都会向缓存请求一张全新尺寸的图
+  /// （一次捏合 60 帧 ≈ 60 张 12–50MB 位图），缓存被反复冲刷 → 闪烁、卡顿、内存暴涨。
+  /// 所以缩放期间**冻结**这个值，停手后再升级一次。
+  final int? qualityWidth;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -50,14 +59,17 @@ class _PageLayerState extends State<PageLayer> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.page.index != widget.page.index ||
         oldWidget.width != widget.width ||
-        oldWidget.renderScale != widget.renderScale) {
+        oldWidget.renderScale != widget.renderScale ||
+        oldWidget.qualityWidth != widget.qualityWidth) {
       unawaited(_load());
     }
   }
 
   Future<void> _load() async {
     final double dpr = MediaQuery.devicePixelRatioOf(context);
-    final int widthPx = (widget.width * dpr * widget.renderScale).round();
+    final int widthPx =
+        widget.qualityWidth ??
+        (widget.width * dpr * widget.renderScale).round();
     final int request = ++_request;
     final ui.Image? image = await widget.cache.obtain(
       widget.page.index,

@@ -155,12 +155,12 @@ class PagedReaderViewState extends State<PagedReaderView> {
         _viewport = Size(constraints.maxWidth, constraints.maxHeight);
         _prefetchNeighbours(dpr);
 
-        return PageView.builder(
+        final Widget pager = PageView.builder(
           controller: _pageController,
-          // 放大时禁止翻页滑动，把横向手势让给平移
-          physics: _zoomed
-              ? const NeverScrollableScrollPhysics()
-              : const PageScrollPhysics(),
+          // 翻页只走左右按钮与缩略图，页面区域完全留给缩放。
+          // 之前用"边缘点击 + 滑动翻页"，会和捏合/平移在手势竞技场里互相抢，
+          // 表现就是"放大后第一次操作不跟手"。
+          physics: const NeverScrollableScrollPhysics(),
           itemCount: widget.pages.length,
           onPageChanged: (int index) {
             final TransformationController controller = _controllerFor(index);
@@ -186,14 +186,6 @@ class PagedReaderViewState extends State<PagedReaderView> {
 
             return GestureDetector(
               behavior: HitTestBehavior.translucent,
-              onTapUp: (TapUpDetails details) {
-                final double x = details.localPosition.dx;
-                if (x < constraints.maxWidth * 0.15) {
-                  _goTo(-1);
-                } else if (x > constraints.maxWidth * 0.85) {
-                  _goTo(1);
-                }
-              },
               // 双击：fit-width ↔ 2 倍
               onDoubleTap: () {
                 if (index != _current) {
@@ -207,8 +199,9 @@ class PagedReaderViewState extends State<PagedReaderView> {
                 maxScale: 4,
                 // 每页始终挂着自己的控制器，不再中途重挂
                 transformationController: controller,
-                // 缩放后单指平移才有意义；1x 时不开，避免和外层翻页抢手势
-                panEnabled: zoomed,
+                // 缩放后单指平移才有意义；1x 时不开，避免和平移/翻页抢手势。
+                // 当前页用 _zoomed（会随缩放触发重建），其它页用各自的静态状态。
+                panEnabled: index == _current ? _zoomed : zoomed,
                 scaleEnabled: true,
                 onInteractionEnd: (ScaleEndDetails details) =>
                     _commitScale(index),
@@ -226,7 +219,54 @@ class PagedReaderViewState extends State<PagedReaderView> {
             );
           },
         );
+
+        return Stack(
+          children: <Widget>[
+            Positioned.fill(child: pager),
+            Positioned(
+              left: ShqSpace.xs,
+              top: 0,
+              bottom: 0,
+              child: Center(child: _navButton(-1)),
+            ),
+            Positioned(
+              right: ShqSpace.xs,
+              top: 0,
+              bottom: 0,
+              child: Center(child: _navButton(1)),
+            ),
+          ],
+        );
       },
+    );
+  }
+
+  /// 左右翻页按钮。首/末页置灰（不可点），不做隐藏 —— 隐藏会让页面宽度跳动。
+  Widget _navButton(int delta) {
+    final int target = _current + delta;
+    final bool enabled = target >= 0 && target < widget.pages.length;
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 150),
+      opacity: enabled ? 1 : 0.25,
+      child: Material(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.92),
+        shape: const CircleBorder(),
+        elevation: 2,
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: enabled ? () => _goTo(delta) : null,
+          child: SizedBox(
+            width: 52,
+            height: 52,
+            child: Icon(
+              delta < 0 ? Icons.chevron_left : Icons.chevron_right,
+              size: 30,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
     );
   }
 
