@@ -2,7 +2,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/bootstrap.dart';
 import 'package:shuaqi/app/import/import_workbook.dart';
 import 'package:shuaqi/domain/model/workbook.dart';
-import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/infra/db/dao/workbook_dao.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
 
@@ -45,11 +44,3 @@ final FutureProvider<List<Workbook>> bookshelfProvider =
     FutureProvider<List<Workbook>>((Ref ref) {
       return ref.watch(workbookDaoProvider).listByRecent();
     });
-
-/// 当前阅读偏好。
-///
-/// 现在恒为默认值——真正的读写要等 `setting` 表接线（T1.6）。
-/// **故意不做成本地内存开关**：那会让"切了样式但重启就没了"变成隐藏 bug。
-final Provider<ReaderPrefs> readerPrefsProvider = Provider<ReaderPrefs>(
-  (Ref ref) => ReaderPrefs.defaults,
-);

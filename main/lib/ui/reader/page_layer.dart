@@ -3,8 +3,10 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
+import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
+import 'package:shuaqi/ui/widgets/paper_effect.dart';
 
 /// 单页图层：白纸 + 页位图。
 ///
@@ -21,6 +23,8 @@ class PageLayer extends StatefulWidget {
     required this.width,
     this.renderScale = 1,
     this.qualityWidth,
+    this.style = PaperStyle.original,
+    this.intensity = ReaderPrefs.defaultIntensity,
   });
 
   final PageImageCache cache;
@@ -39,6 +43,10 @@ class PageLayer extends StatefulWidget {
   /// （一次捏合 60 帧 ≈ 60 张 12–50MB 位图），缓存被反复冲刷 → 闪烁、卡顿、内存暴涨。
   /// 所以缩放期间**冻结**这个值，停手后再升级一次。
   final int? qualityWidth;
+
+  /// 纸感样式与强度。**只作用背景层**，第 2 周的墨迹层是兄弟节点，不吃这个滤镜。
+  final PaperStyle style;
+  final int intensity;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -100,37 +108,41 @@ class _PageLayerState extends State<PageLayer> {
     final double height = widget.width * widget.page.height / widget.page.width;
     final ui.Image? image = _image;
 
-    return Container(
-      width: widget.width,
-      height: height,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.18),
-            blurRadius: 6,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: image == null
-          ? Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-            )
-          : RawImage(
-              image: image,
-              fit: BoxFit.fill,
-              // low 而不是 medium：放大绘制时 medium 会走更贵的重采样，
-              // 缩放过程中明显掉帧。反正松手后会用更高倍率重渲染，画的瞬间不需要精致。
-              filterQuality: FilterQuality.low,
+    return PaperEffect(
+      style: widget.style,
+      intensity: widget.intensity,
+      child: Container(
+        width: widget.width,
+        height: height,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: <BoxShadow>[
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
             ),
+          ],
+        ),
+        child: image == null
+            ? Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              )
+            : RawImage(
+                image: image,
+                fit: BoxFit.fill,
+                // low 而不是 medium：放大绘制时 medium 会走更贵的重采样，
+                // 缩放过程中明显掉帧。反正松手后会用更高倍率重渲染，画的瞬间不需要精致。
+                filterQuality: FilterQuality.low,
+              ),
+      ),
     );
   }
 }

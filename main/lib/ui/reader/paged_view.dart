@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
+import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -20,12 +21,16 @@ class PagedReaderView extends StatefulWidget {
     required this.cache,
     required this.initialPage,
     required this.onPageChanged,
+    this.style = PaperStyle.original,
+    this.intensity = ReaderPrefs.defaultIntensity,
   });
 
   final List<WbPage> pages;
   final PageImageCache cache;
   final int initialPage;
   final ValueChanged<int> onPageChanged;
+  final PaperStyle style;
+  final int intensity;
 
   @override
   State<PagedReaderView> createState() => PagedReaderViewState();
@@ -213,6 +218,8 @@ class PagedReaderViewState extends State<PagedReaderView> {
                     renderScale: index == _current
                         ? _renderScale.toDouble()
                         : 1,
+                    style: widget.style,
+                    intensity: widget.intensity,
                   ),
                 ),
               ),

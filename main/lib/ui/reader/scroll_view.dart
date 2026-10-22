@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
+import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -52,6 +53,8 @@ class ScrollReaderView extends StatefulWidget {
     required this.initialPage,
     required this.onPageChanged,
     this.onZoomChanged,
+    this.style = PaperStyle.original,
+    this.intensity = ReaderPrefs.defaultIntensity,
   });
 
   final List<WbPage> pages;
@@ -59,6 +62,8 @@ class ScrollReaderView extends StatefulWidget {
   final int initialPage;
   final ValueChanged<int> onPageChanged;
   final ValueChanged<double>? onZoomChanged;
+  final PaperStyle style;
+  final int intensity;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -430,6 +435,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 page: widget.pages[i],
                 width: _baseWidth,
                 qualityWidth: _bitmapWidthPx,
+                style: widget.style,
+                intensity: widget.intensity,
               ),
             ),
           );

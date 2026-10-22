@@ -2,10 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/app/reader/reader_prefs_store.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/reader_providers.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/paged_view.dart';
+import 'package:shuaqi/ui/reader/paper_style_sheet.dart';
 import 'package:shuaqi/ui/reader/scroll_view.dart';
 import 'package:shuaqi/ui/reader/thumb_drawer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -33,8 +36,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
   PageImageCache? _cache;
   ReaderHandle? _handle;
-  ViewMode _mode = ViewMode.paged;
   int _current = 0;
+
+  /// 阅读偏好（mode / style / intensity）。null 表示还没从库加载完成，
+  /// 期间用 [ReaderPrefs.defaults] 渲染，加载完再无缝替换。
+  ReaderPrefs? _prefs;
+  ReaderPrefsStore? _store;
+  Timer? _prefsSaveTimer;
+  bool _prefsDirty = false;
 
   /// 滚动模式的档位缩放（分页模式用双指捏合，不使用它）
   double _scrollZoom = 1;
@@ -43,11 +52,36 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   int? _initialPage;
   Timer? _progress;
 
+  ViewMode get _mode => _prefs?.mode ?? ViewMode.paged;
+  PaperStyle get _style => _prefs?.style ?? PaperStyle.original;
+  int get _intensity => _prefs?.intensity ?? ReaderPrefs.defaultIntensity;
+
   @override
   void dispose() {
     _progress?.cancel();
+    _prefsSaveTimer?.cancel();
+    // 退出前若还有未落盘的偏好，立刻写一次（store/db 都比页面活得久，安全）
+    final ReaderPrefsStore? store = _store;
+    final ReaderPrefs? prefs = _prefs;
+    if (_prefsDirty && store != null && prefs != null) {
+      unawaited(store.save(widget.workbookId, prefs));
+    }
     _cache?.dispose();
     super.dispose();
+  }
+
+  /// 偏好变化 → 刷新界面 + 防抖落盘（500ms，拖滑条时不会每帧写库）。
+  void _updatePrefs(ReaderPrefs next) {
+    setState(() => _prefs = next);
+    _prefsDirty = true;
+    _prefsSaveTimer?.cancel();
+    _prefsSaveTimer = Timer(const Duration(milliseconds: 500), () {
+      final ReaderPrefsStore? store = _store;
+      if (store != null) {
+        unawaited(store.save(widget.workbookId, next));
+      }
+      _prefsDirty = false;
+    });
   }
 
   void _onPageChanged(int index) {
@@ -70,10 +104,22 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _switchMode() {
+    final ReaderPrefs next = (_prefs ?? ReaderPrefs.defaults)
+        .copyWith(mode: _mode == ViewMode.paged ? ViewMode.scroll : ViewMode.paged);
     setState(() {
       _initialPage = _current;
-      _mode = _mode == ViewMode.paged ? ViewMode.scroll : ViewMode.paged;
     });
+    _updatePrefs(next);
+  }
+
+  void _openDisplaySheet() {
+    unawaited(
+      showPaperStyleSheet(
+        context,
+        prefs: _prefs ?? ReaderPrefs.defaults,
+        onChanged: _updatePrefs,
+      ),
+    );
   }
 
   void _jumpTo(int index) {
@@ -108,6 +154,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
         );
         _current = _initialPage!;
       }
+    }
+
+    // 偏好：异步从库加载；首次拿到就用它，之后以本地 `_prefs` 为准（用户改了立即生效）。
+    final AsyncValue<ReaderPrefs> prefsAsync = ref.watch(
+      readerPrefsProvider(widget.workbookId),
+    );
+    final ReaderPrefs? loadedPrefs = prefsAsync.maybeWhen<ReaderPrefs?>(
+      data: (ReaderPrefs value) => value,
+      orElse: () => null,
+    );
+    if (loadedPrefs != null && _prefs == null) {
+      _store ??= ref.read(readerPrefsStoreProvider);
+      _prefs = loadedPrefs;
     }
 
     return Scaffold(
@@ -156,6 +215,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                 ),
               ),
             ),
+          IconButton(
+            tooltip: '显示设置',
+            onPressed: ready == null ? null : _openDisplaySheet,
+            icon: const Icon(Icons.palette_outlined),
+          ),
           IconButton(
             tooltip: '缩略图',
             onPressed: _cache == null
@@ -215,6 +279,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   cache: _cache!,
                   initialPage: initial,
                   onPageChanged: _onPageChanged,
+                  style: _style,
+                  intensity: _intensity,
                 )
               : ScrollReaderView(
                   key: _scrollKey,
@@ -222,6 +288,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   cache: _cache!,
                   initialPage: initial,
                   onPageChanged: _onPageChanged,
+                  style: _style,
+                  intensity: _intensity,
                   // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
                   onZoomChanged: (double value) => setState(() {
                     _scrollZoom = value;

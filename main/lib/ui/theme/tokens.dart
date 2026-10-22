@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/reader/paper_tint.dart';
 
 /// 设计令牌 —— 全局唯一来源（规格 §10：常量集中在 `ui/theme/tokens.dart`）。
 ///
@@ -73,15 +74,25 @@ abstract final class ShqPalette {
 }
 
 /// 纸张预设（§6.9.3）。`original` 为零处理，是可信基线。
+///
+/// 颜色值唯一来源在 `domain/reader/paper_tint.dart` 的 [PaperRgb]，这里只包成 Color，
+/// 避免同一色值两处各写一遍而漂移。
 abstract final class ShqPaper {
-  static const Color warm = Color(0xFFF6EFE3);
-  static const Color ivory = Color(0xFFF8F1DC);
-  static const Color gray = Color(0xFFF1F1EF);
-  static const Color green = Color(0xFFE9F1E7);
+  static const Color warm = Color(PaperRgb.warm);
+  static const Color ivory = Color(PaperRgb.ivory);
+  static const Color gray = Color(PaperRgb.gray);
+  static const Color green = Color(PaperRgb.green);
 
   /// 强度上限对应的最大不透明度系数（§6.9.3：α = intensity/100 × 0.35）。
   /// 默认强度 55 的真值在 `domain/reader/reader_prefs.dart`，不在这里重复定义。
   static const double maxAlpha = 0.35;
+
+  /// 深色模式下的暗色遮罩不透明度（§6.9.3：深色强制 original + 暗色遮罩）。
+  /// 0.18 在"压住刺眼白"与"保住文字对比度"之间取平衡，夜读不晃眼、字仍清晰。
+  static const double darkScrimAlpha = 0.18;
+
+  /// 噪点纹理的不透明度上限（§6.9.3：≤3%）。只做"纸感"的细腻颗粒，不抢内容。
+  static const double noiseOpacity = 0.03;
 }
 
 /// 版心。平板竖屏阅读区最大宽度，超过就留白居中，避免长行难读。

@@ -55,6 +55,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # 资源目录约定（T0.1 只建目录，暂不声明，避免把空目录打进包里）：
+  # 资源目录约定：
+  #   assets/textures/ 纸感噪点等轻量纹理（T1.6 起）
   #   assets/models/   引擎 B/C 的 ONNX 与字典 —— T0.5 产出后在此声明
   #   demo_assets/     演示试卷 / 截图 / 录屏 —— 不进包，仅供手工测试
+  assets:
+    - assets/textures/

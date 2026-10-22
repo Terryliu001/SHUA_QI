@@ -30,7 +30,8 @@ lib/
 │  ├─ reader/reader_page.dart         阅读器（T1.5 落地，现验证"深色退回原图"规则）
 │  └─ widgets/math/math_view.dart     公式渲染契约（T6.7 落地）
 ├─ state/
-│  └─ app_providers.dart              跨页面共享状态（readerPrefsProvider）
+│  ├─ app_providers.dart              跨页面共享状态（依赖装配、书架）
+│  └─ reader_prefs_providers.dart     阅读偏好读写（readerPrefsProvider + store）
 ├─ domain/
 │  ├─ ink/ink_doc.dart                InkPoint / InkRect / InkStroke / InkDoc
 │  ├─ ink/ink_store.dart              InkStore 契约
