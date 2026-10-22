@@ -23,6 +23,8 @@ class ReaderPage extends ConsumerStatefulWidget {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
+  static const List<double> _scrollZoomSteps = <double>[1, 1.25, 1.5, 2];
+
   final GlobalKey<PagedReaderViewState> _pagedKey =
       GlobalKey<PagedReaderViewState>();
   final GlobalKey<ScrollReaderViewState> _scrollKey =
@@ -33,6 +35,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   ReaderHandle? _handle;
   ViewMode _mode = ViewMode.paged;
   int _current = 0;
+
+  /// 滚动模式的档位缩放（分页模式用双指捏合，不使用它）
+  double _scrollZoom = 1;
 
   /// 切模式时的落点。null 表示还没定（首帧从会话进度恢复）。
   int? _initialPage;
@@ -123,6 +128,33 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   : Icons.auto_stories_outlined,
             ),
           ),
+          if (_mode == ViewMode.scroll && ready != null)
+            PopupMenuButton<double>(
+              tooltip: '缩放',
+              initialValue: _scrollZoom,
+              onSelected: (double value) => setState(() {
+                _scrollZoom = value;
+              }),
+              itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
+                for (final double zoom in _scrollZoomSteps)
+                  PopupMenuItem<double>(
+                    value: zoom,
+                    child: Text('${(zoom * 100).round()}%'),
+                  ),
+              ],
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: ShqSpace.sm),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(Icons.zoom_in, size: 20),
+                    Text(
+                      '${(_scrollZoom * 100).round()}%',
+                      style: theme.textTheme.labelLarge,
+                    ),
+                  ],
+                ),
+              ),
+            ),
           IconButton(
             tooltip: '缩略图',
             onPressed: _cache == null
@@ -186,6 +218,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   cache: _cache!,
                   initialPage: initial,
                   onPageChanged: _onPageChanged,
+                  zoom: _scrollZoom,
                 ),
         ),
         SafeArea(

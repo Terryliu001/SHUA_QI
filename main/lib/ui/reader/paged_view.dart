@@ -6,12 +6,12 @@ import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
-/// 分页模式：一屏一页 + 页内自由缩放（0.5–4.0）+ 左右边缘 15% 点击翻页。
+/// 分页模式：一屏一页 + 页内自由缩放（1.0–4.0）+ 左右边缘 15% 点击翻页 + 双击缩放。
 ///
-/// 两个关键实现点：
-/// 1. **放大时禁掉 PageView 的滑动**，否则双指平移会被 PageView 抢走，画面会抖。
-/// 2. **放大后按倍率重渲染**：显示尺寸不变、出图分辨率提高（T0.4 实测 4× 下一块 4ms）。
-///    只按 1× 出图再放大，400% 时必然糊。
+/// 为"丝滑"做的三件事（都是实测出来的卡点）：
+/// 1. **预渲染前后页**：翻页时目标页已就绪，不再每次翻页都等渲染 + 解码。
+/// 2. **只在手势结束时重渲染高倍率图**：缩放过程中每换一个倍率档就重渲染，会把 CPU 抢光。
+/// 3. **`filterQuality.low`**：缩放过程中的重采样更便宜，松手后再换清晰图。
 class PagedReaderView extends StatefulWidget {
   const PagedReaderView({
     super.key,
@@ -33,46 +33,68 @@ class PagedReaderView extends StatefulWidget {
 class PagedReaderViewState extends State<PagedReaderView> {
   late final PageController _pageController;
   late final TransformationController _zoom;
+
   late int _current;
   int _renderScale = 1;
   bool _zoomed = false;
+  Size _viewport = Size.zero;
+
+  /// 已经预热过的 (页, 像素宽)，避免 build 里重复发起
+  String _prefetched = '';
 
   @override
   void initState() {
     super.initState();
     _current = widget.initialPage.clamp(0, math.max(0, widget.pages.length - 1));
     _pageController = PageController(initialPage: _current);
-    _zoom = TransformationController()..addListener(_onZoomChanged);
+    _zoom = TransformationController()..addListener(_onZoomTick);
   }
 
   @override
   void dispose() {
     _zoom
-      ..removeListener(_onZoomChanged)
+      ..removeListener(_onZoomTick)
       ..dispose();
     _pageController.dispose();
     super.dispose();
   }
 
-  void _onZoomChanged() {
-    final double scale = _zoom.value.getMaxScaleOnAxis();
-    final bool zoomed = scale > 1.05;
-    // 只在"倍率档位"或"是否放大"变化时才重建，避免每一帧手势都触发重新渲染
-    final int bucket = scale <= 1.05 ? 1 : scale.round().clamp(1, 4);
-    if (bucket == _renderScale && zoomed == _zoomed) {
-      return;
+  /// 手势过程中只更新"是否已放大"（用来切 PageView 的 physics，代价极小）。
+  /// **不**在这里改 `_renderScale`——那会触发重渲染，缩放直接卡。
+  void _onZoomTick() {
+    final bool zoomed = _zoom.value.getMaxScaleOnAxis() > 1.05;
+    if (zoomed != _zoomed) {
+      setState(() {
+        _zoomed = zoomed;
+      });
     }
-    setState(() {
-      _renderScale = bucket;
-      _zoomed = zoomed;
-    });
   }
 
-  void _resetZoom() {
-    if (_zoom.value.isIdentity()) {
+  /// 手势结束才决定要不要换更高分辨率的图。
+  void _onInteractionEnd(ScaleEndDetails details) {
+    final double scale = _zoom.value.getMaxScaleOnAxis();
+    final int bucket = scale <= 1.05 ? 1 : scale.round().clamp(1, 4);
+    if (bucket != _renderScale) {
+      setState(() {
+        _renderScale = bucket;
+      });
+    }
+  }
+
+  void _setScale(double target) {
+    if (_viewport.isEmpty) {
       return;
     }
-    _zoom.value = Matrix4.identity();
+    if (target <= 1.0) {
+      _zoom.value = Matrix4.identity();
+    } else {
+      final Offset center = _viewport.center(Offset.zero);
+      _zoom.value = Matrix4.identity()
+        ..translateByDouble(center.dx, center.dy, 0, 1)
+        ..scaleByDouble(target, target, target, 1)
+        ..translateByDouble(-center.dx, -center.dy, 0, 1);
+    }
+    _onInteractionEnd(ScaleEndDetails());
   }
 
   void _goTo(int delta) {
@@ -87,10 +109,37 @@ class PagedReaderViewState extends State<PagedReaderView> {
     );
   }
 
+  void _prefetchNeighbours(double dpr) {
+    if (widget.pages.isEmpty) {
+      return;
+    }
+    final WbPage page = widget.pages[_current];
+    final double fit = math.min(
+      _viewport.width / page.width,
+      _viewport.height / page.height,
+    );
+    final int widthPx = (page.width * fit * dpr).round();
+    final String token = '$_current/$widthPx';
+    if (token == _prefetched) {
+      return;
+    }
+    _prefetched = token;
+    for (final int offset in <int>[-1, 1, 2]) {
+      final int index = _current + offset;
+      if (index >= 0 && index < widget.pages.length) {
+        widget.cache.prefetch(index, widthPx);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final double dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
+        _viewport = Size(constraints.maxWidth, constraints.maxHeight);
+        _prefetchNeighbours(dpr);
+
         return PageView.builder(
           controller: _pageController,
           // 放大时禁止翻页滑动，把横向手势让给平移
@@ -99,7 +148,7 @@ class PagedReaderViewState extends State<PagedReaderView> {
               : const PageScrollPhysics(),
           itemCount: widget.pages.length,
           onPageChanged: (int index) {
-            _resetZoom();
+            _zoom.value = Matrix4.identity();
             setState(() {
               _current = index;
               _renderScale = 1;
@@ -114,31 +163,36 @@ class PagedReaderViewState extends State<PagedReaderView> {
               constraints.maxHeight / page.height,
             );
             final double displayWidth = page.width * fit;
+            final bool active = index == _current;
 
             return GestureDetector(
               behavior: HitTestBehavior.translucent,
               onTapUp: (TapUpDetails details) {
                 final double x = details.localPosition.dx;
-                final double width = constraints.maxWidth;
-                if (x < width * 0.15) {
+                if (x < constraints.maxWidth * 0.15) {
                   _goTo(-1);
-                } else if (x > width * 0.85) {
+                } else if (x > constraints.maxWidth * 0.85) {
                   _goTo(1);
                 }
               },
+              // 双击：fit-width ↔ 2 倍。放大后想翻页先双击缩回，或点边缘翻页
+              onDoubleTap: () {
+                final double scale = _zoom.value.getMaxScaleOnAxis();
+                _setScale(scale > 1.5 ? 1.0 : 2.0);
+              },
               child: InteractiveViewer(
-                minScale: 0.5,
+                minScale: 1,
                 maxScale: 4,
                 panEnabled: _zoomed,
                 scaleEnabled: true,
-                // 只给"当前页"挂控制器；其他页各自用内部控制器
-                transformationController: index == _current ? _zoom : null,
+                transformationController: active ? _zoom : null,
+                onInteractionEnd: active ? _onInteractionEnd : null,
                 child: Center(
                   child: PageLayer(
                     cache: widget.cache,
                     page: page,
                     width: displayWidth,
-                    renderScale: index == _current ? _renderScale.toDouble() : 1,
+                    renderScale: active ? _renderScale.toDouble() : 1,
                   ),
                 ),
               ),

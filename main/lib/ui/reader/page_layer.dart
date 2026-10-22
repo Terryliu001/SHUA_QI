@@ -115,8 +115,9 @@ class _PageLayerState extends State<PageLayer> {
           : RawImage(
               image: image,
               fit: BoxFit.fill,
-              // 让位图按逻辑像素铺满，不要被 dpr 二次放大
-              filterQuality: FilterQuality.medium,
+              // low 而不是 medium：放大绘制时 medium 会走更贵的重采样，
+              // 缩放过程中明显掉帧。反正松手后会用更高倍率重渲染，画的瞬间不需要精致。
+              filterQuality: FilterQuality.low,
             ),
     );
   }

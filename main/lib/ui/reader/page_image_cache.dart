@@ -86,6 +86,31 @@ class PageImageCache {
     }
   }
 
+  /// 预渲染一页并放进缓存，**不返回 clone**（调用方不需要图，只是加热缓存）。
+  ///
+  /// 这是"翻页丝滑"的关键：不预热的话，翻到新一页才渲染 → 12ms 渲染 + 解码 + 首帧，
+  /// 每次翻页都会有一下顿挫。翻当前页时就顺手把前后页烘好，翻过去直接命中。
+  void prefetch(int pageIndex, int widthPx) {
+    final String key = _keyOf(pageIndex, widthPx);
+    if (_entries.containsKey(key) || _inflight.containsKey(key)) {
+      return;
+    }
+    final Future<ui.Image?> task = _inflight.putIfAbsent(key, () async {
+      try {
+        final ui.Image? image = await _render(pageIndex, widthPx);
+        if (image == null) {
+          return null;
+        }
+        _store(key, image);
+        return image;
+      } finally {
+        _inflight.remove(key)?.ignore();
+      }
+    });
+    // 预热失败不影响使用，只是下次还要现渲染
+    task.ignore();
+  }
+
   /// 清空并释放。页面退出时调用。
   void dispose() {
     for (final _CachedImage entry in _entries.values) {
