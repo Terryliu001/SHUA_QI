@@ -203,6 +203,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
 
     final int initial = _initialPage ?? 0;
     return Column(
+      // 必须 stretch：Column 默认 center 会把阅读视图按"自身宽度"居中，
+      // 阅读视图一旦不撑满宽度，它的裁剪边界就变成内容边界（实测会裁掉右侧内容）。
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
         Expanded(
           child: _mode == ViewMode.paged
