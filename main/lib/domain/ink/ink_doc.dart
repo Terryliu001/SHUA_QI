@@ -161,4 +161,58 @@ class InkDoc {
     final List<InkStroke> next = <InkStroke>[...strokes, stroke];
     return InkDoc(revision: revision + 1, strokes: next);
   }
+
+  /// 整体换一批笔画（擦除 / 撤销 / 清空都走它）。递增 revision。
+  ///
+  /// revision 就是"这一页的笔迹变过几次"，识别（W4）拿它做过期判定，
+  /// 所以**任何**改变笔画集合的操作都必须 +1，包括撤销和重做。
+  InkDoc withStrokes(List<InkStroke> next) {
+    return InkDoc(revision: revision + 1, strokes: List<InkStroke>.of(next));
+  }
+
+  /// 删掉 [uids] 里的笔画（保持其余顺序不变）。空集合时原样返回。
+  InkDoc withoutUids(Set<String> uids) {
+    if (uids.isEmpty) {
+      return this;
+    }
+    final List<InkStroke> next = strokes
+        .where((InkStroke stroke) => !uids.contains(stroke.uid))
+        .toList(growable: false);
+    if (next.length == strokes.length) {
+      return this;
+    }
+    return withStrokes(next);
+  }
+
+  /// 按原索引把 [items] 插回去（撤销删除用）。
+  ///
+  /// 按**索引升序**逐条插入即可还原原始 z 序：每次插入后，
+  /// 后续条目记录的原索引仍然指向它该在的位置（标准做法，见单测）。
+  InkDoc insertAll(List<({int index, InkStroke stroke})> items) {
+    if (items.isEmpty) {
+      return this;
+    }
+    final List<({int index, InkStroke stroke})> sorted =
+        List<({int index, InkStroke stroke})>.of(items)
+          ..sort(
+            (({int index, InkStroke stroke}) a, ({int index, InkStroke stroke}) b) =>
+                a.index.compareTo(b.index),
+          );
+    final List<InkStroke> next = List<InkStroke>.of(strokes);
+    for (final ({int index, InkStroke stroke}) item in sorted) {
+      final int at = item.index.clamp(0, next.length);
+      next.insert(at, item.stroke);
+    }
+    return withStrokes(next);
+  }
+
+  /// 某笔画的下标；不存在返回 -1。
+  int indexOfUid(String uid) {
+    for (int i = 0; i < strokes.length; i++) {
+      if (strokes[i].uid == uid) {
+        return i;
+      }
+    }
+    return -1;
+  }
 }

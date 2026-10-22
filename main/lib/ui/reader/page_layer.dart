@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
@@ -33,7 +33,7 @@ class PageLayer extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkEnabled = false,
-    this.inkStyle = InkStrokeStyle.pen,
+    this.inkTool = InkTool.pen,
     this.onPenDown,
   });
 
@@ -65,7 +65,7 @@ class PageLayer extends StatefulWidget {
   final bool inkEnabled;
 
   /// 当前笔刷。只影响之后画的笔。
-  final InkStrokeStyle inkStyle;
+  final InkTool inkTool;
 
   /// 笔落屏时通知外层（滚动模式用来停惯性滚动）。见 [InkLayer.onPenDown]。
   final VoidCallback? onPenDown;
@@ -213,7 +213,7 @@ class _PageLayerState extends State<PageLayer> {
               width: widget.width,
               // 墨色跟纸配对（不是跟界面主题配对）：夜读纸 → 暖白墨。
               inkColor: inkColorFor(widget.style),
-              style: widget.inkStyle,
+              tool: widget.inkTool,
               onPenDown: widget.onPenDown,
             ),
           ),

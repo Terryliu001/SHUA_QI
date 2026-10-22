@@ -5,7 +5,7 @@ import 'package:flutter/gestures.dart'
     show PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/domain/reader/scroll_math.dart';
@@ -57,7 +57,7 @@ class ScrollReaderView extends StatefulWidget {
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
-    this.inkStyle = InkStrokeStyle.pen,
+    this.inkTool = InkTool.pen,
     this.onPenMissed,
   });
 
@@ -73,7 +73,7 @@ class ScrollReaderView extends StatefulWidget {
   final String? sessionId;
 
   /// 当前笔刷（工具栏选中项）。
-  final InkStrokeStyle inkStyle;
+  final InkTool inkTool;
 
   /// 这一笔没落在纸上（落在纸外 / 纸还没就绪）时回调一次。
   ///
@@ -635,7 +635,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 intensity: widget.intensity,
                 sessionId: widget.sessionId,
                 inkEnabled: widget.sessionId != null,
-                inkStyle: widget.inkStyle,
+                inkTool: widget.inkTool,
                 // 落笔即停：笔一碰屏，惯性滚动立刻停（否则字画在"还在飘的纸"上）。
                 onPenDown: _onPenDownOnPaper,
               ),

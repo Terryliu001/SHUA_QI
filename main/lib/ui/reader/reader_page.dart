@@ -3,8 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/reader/reader_prefs_store.dart';
-import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/reader_providers.dart';
@@ -160,7 +161,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     // 当前笔刷（全局唯一一份，只影响之后画的新笔）
-    final InkStrokeStyle brush = ref.watch(inkToolProvider);
+    final InkTool brush = ref.watch(inkToolProvider);
     final AsyncValue<ReaderHandle> async = ref.watch(
       readerHandleProvider(widget.workbookId),
     );
@@ -272,7 +273,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     ThemeData theme,
     AsyncValue<ReaderHandle> async,
     ReaderHandle? ready,
-    InkStrokeStyle brush,
+    InkTool brush,
   ) {
     if (async.hasError) {
       return Center(
@@ -315,7 +316,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         style: _style,
                         intensity: _intensity,
                         sessionId: sessionId,
-                        inkStyle: brush,
+                        inkTool: brush,
                       )
                     : ScrollReaderView(
                         key: _scrollKey,
@@ -326,7 +327,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         style: _style,
                         intensity: _intensity,
                         sessionId: sessionId,
-                        inkStyle: brush,
+                        inkTool: brush,
                         // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
                         onPenMissed: _showPenMissed,
                         // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
@@ -337,10 +338,16 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               ),
               // 笔刷工具栏浮在阅读区右下角：不进 AppBar（书写时手指要够得着），
               // 也不遮正文（只占右下角一小块）。按钮吃掉指针，笔尖点它不会落墨。
-              const Positioned(
+              // 传当前页 key：撤销/重做是**按页**的（滚到第 3 页撤的是第 3 页）。
+              Positioned(
                 right: ShqSpace.md,
                 bottom: ShqSpace.sm,
-                child: SafeArea(top: false, child: InkToolbar()),
+                child: SafeArea(
+                  top: false,
+                  child: InkToolbar(
+                    pageKey: InkPageKey(sessionId, _current),
+                  ),
+                ),
               ),
             ],
           ),

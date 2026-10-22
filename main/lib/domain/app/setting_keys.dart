@@ -7,7 +7,8 @@ abstract final class AppSettingKeys {
   /// 缺失 = 跟随系统。
   static const String themeMode = 'app.theme_mode';
 
-  /// 上次用的笔刷：`pen` / `ballpoint` / `highlighter`（对应 InkStrokeStyle.name）。
-  /// 缺失 = 钢笔。只影响**之后**画的笔，不改已落笔的（T2.2）。
+  /// 上次用的工具：`pen` / `ballpoint` / `highlighter` / `eraser`（对应 InkTool.name）。
+  /// 缺失 = 钢笔。只影响**之后**落下的笔，不改已落笔的（T2.2/T2.3）。
+  /// 旧版本只存过前三者，读取时未知值一律回落钢笔，不需要数据迁移。
   static const String inkBrush = 'ink.default_brush';
 }

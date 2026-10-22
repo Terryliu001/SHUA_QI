@@ -3,15 +3,17 @@ import 'dart:async';
 import 'package:flutter/gestures.dart' show PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/domain/ink/eraser.dart';
 import 'package:shuaqi/domain/ink/ink_compress.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/ink/ink_width.dart';
 import 'package:shuaqi/domain/util/ulid.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/reader/ink_ribbon.dart';
 
-/// 一页的墨迹层（T2.1）：三层画布的最上两层 + stylus 输入分流。
+/// 一页的墨迹层（T2.1 三层画布 + T2.3 橡皮）。最上两层 + stylus 输入分流。
 ///
 /// ## 结构（T0.2 spike 验证过的三层画布）
 /// ```text
@@ -26,12 +28,18 @@ import 'package:shuaqi/ui/reader/ink_ribbon.dart';
 /// ## 输入分流（规格 §6.9.1：笔写、指滚）
 /// 只收 `stylus` / `invertedStylus`；touch 一律穿透到父层手势
 /// （滚动模式平移/缩放、分页模式缩放/双击）。**同一时刻只受理一个指针**：
-/// 手掌或第二根手指落上来也不会插进当前这笔（T0.2 实测过的"缝合线"事故）。
+/// 手掌或第二根手指落上来也不会插进当前这一笔（T0.2 实测过的"缝合线"事故）。
 ///
 /// ## 落笔路径（INV-01）
 /// 只有：坐标换算（→ 页面 pt）、[InkCompressor] 过滤、压力归一、
 /// ribbon append、`_activeTick` 通知。无 await / IO / setState。
-/// 落盘在抬笔后异步走 [InkDocController.commit]（T2.4 之前是内存存储）。
+/// 落盘在抬笔后异步走 [InkEditController.commit]（T2.4 之前是内存存储）。
+///
+/// ## 橡皮（T2.3）
+/// **笔画级**橡皮，不做位图擦除（会毁掉矢量结构：导出、识别、SIF 增量都靠它）。
+/// 判定在 [Eraser]（纯 Dart + 单测：12pt 阈值、包围盒预筛、段到段距离）。
+/// 一次拖动里删掉的笔画在抬笔时合成**一条**撤销命令 —— 用户按一次撤销恢复一划。
+/// 笔尾橡皮（`invertedStylus`）直接当橡皮，不用切工具。
 ///
 /// ## 压感（T2.2 返工，见 `domain/ink/ink_width.dart`）
 /// 真机 DOWN 事件的压力常读到 0，抬笔常读到 0/1——**都不能当真值用**，
@@ -44,7 +52,7 @@ class InkLayer extends ConsumerStatefulWidget {
     required this.pageWidthPt,
     required this.width,
     required this.inkColor,
-    this.style = InkStrokeStyle.pen,
+    this.tool = InkTool.pen,
     this.enabled = true,
     this.onPenDown,
   });
@@ -60,10 +68,10 @@ class InkLayer extends ConsumerStatefulWidget {
   /// **不由 App 主题决定**——笔迹要与它下面的那张纸配对，不是与界面配色配对。
   final Color inkColor;
 
-  /// 当前笔刷（钢笔 / 圆珠笔 / 荧光笔）。只影响**之后**画的笔，已落笔的不变。
-  final InkStrokeStyle style;
+  /// 当前工具（钢笔 / 圆珠笔 / 荧光笔 / 橡皮）。只影响**之后**落下的笔。
+  final InkTool tool;
 
-  /// false 时这一页不接受落笔（分页模式放大中用 touch 平移，不写字）。
+  /// false 时这一页不接受落笔（例如非当前页）。
   final bool enabled;
 
   /// 笔落屏时回调一次（**不 await、不 setState**，只用来停惯性滚动）。
@@ -86,11 +94,21 @@ class _InkLayerState extends ConsumerState<InkLayer> {
 
   InkCompressor? _compressor;
 
+  /// 当前这笔用的笔刷样式。**与 `widget.tool` 分开存**：
+  /// 写到一半切工具（比如点了一下工具栏）不能让这一笔半路换笔刷/变没。
+  InkStrokeStyle _activeStyle = InkStrokeStyle.pen;
+
   /// 当前这笔最近一次**有效**压力。DOWN / UP 的 0 读数用它兜底。
   double _lastPressure = InkWidth.neutralPressure;
 
   /// 当前这笔的 pointer id；-1 表示没在写。
   int _activePointer = -1;
+
+  /// 这笔是不是橡皮（工具是橡皮，或笔尾倒过来）。
+  bool _erasing = false;
+
+  /// 橡皮上一次的位置（用来判断"划过"的那一段）。
+  InkPoint? _lastEraseAt;
 
   /// 当前这笔最近一次收到事件的时刻（毫秒）。
   int _lastActiveEventMs = 0;
@@ -121,6 +139,16 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   Offset _toPagePt(Offset local) {
     final double scale = _scale;
     return Offset(local.dx / scale, local.dy / scale);
+  }
+
+  InkPoint _pointOf(PointerEvent event, {double pressure = 0.5}) {
+    final Offset pt = _toPagePt(event.localPosition);
+    return InkPoint(
+      x: pt.dx,
+      y: pt.dy,
+      pressure: pressure,
+      t: event.timeStamp.inMilliseconds,
+    );
   }
 
   /// 压力归一：把"不可信的读数"换成可用的值。
@@ -162,25 +190,32 @@ class _InkLayerState extends ConsumerState<InkLayer> {
         // 真的第二根手指（手掌搭屏）：不打断当前这一笔。
         return;
       }
-      // 上一笔僵死（UP 事件丢了）→ 复位并接管新笔，否则这一页再也写不了。
-      _activePointer = -1;
+      // 上一笔僵死（UP 事件丢了）→ 收尾并接管新笔，否则这一页再也写不了。
+      _finishActive();
     }
     _activePointer = event.pointer;
     _lastActiveEventMs = DateTime.now().millisecondsSinceEpoch;
-    _compressor = InkCompressor();
-    // 落笔即停：惯性滚动/甩动必须立刻停，否则字画在"还在飘的纸"上。
+    // 落笔即停：惯性/甩动必须立刻停，否则字画在"还在飘的纸"上（也适用于橡皮）。
     widget.onPenDown?.call();
+
+    // 笔尾橡皮（invertedStylus）直接当橡皮：不用切工具，也不用改选中态。
+    final bool erase =
+        widget.tool.isEraser || event.kind == PointerDeviceKind.invertedStylus;
+    if (erase) {
+      _beginErase(_pointOf(event));
+      return;
+    }
+
+    _erasing = false;
+    _lastEraseAt = null;
+    _activeStyle = widget.tool.strokeStyle ?? InkStrokeStyle.pen;
+    _compressor = InkCompressor();
     // 落笔：压力基线重置为中性，避免上一笔的重压"传染"到这一笔的起笔。
     _lastPressure = InkWidth.neutralPressure;
-    final InkRibbon ribbon = _ribbonFor(widget.style, widget.inkColor)..clear();
+    final InkRibbon ribbon = _ribbonFor(_activeStyle, widget.inkColor)..clear();
     ribbon.beginStroke();
 
-    final InkPoint first = InkPoint(
-      x: _toPagePt(event.localPosition).dx,
-      y: _toPagePt(event.localPosition).dy,
-      pressure: _pressureOf(event),
-      t: event.timeStamp.inMilliseconds,
-    );
+    final InkPoint first = _pointOf(event, pressure: _pressureOf(event));
     _compressor!.add(first);
     ribbon.addPoint(first);
     _activeTick.value++;
@@ -191,16 +226,17 @@ class _InkLayerState extends ConsumerState<InkLayer> {
       return;
     }
     _lastActiveEventMs = DateTime.now().millisecondsSinceEpoch;
+    if (_erasing) {
+      final InkPoint to = _pointOf(event);
+      _eraseAlong(_lastEraseAt, to);
+      _lastEraseAt = to;
+      return;
+    }
     final InkCompressor? compressor = _compressor;
     if (compressor == null) {
       return;
     }
-    final InkPoint point = InkPoint(
-      x: _toPagePt(event.localPosition).dx,
-      y: _toPagePt(event.localPosition).dy,
-      pressure: _pressureOf(event),
-      t: event.timeStamp.inMilliseconds,
-    );
+    final InkPoint point = _pointOf(event, pressure: _pressureOf(event));
     if (compressor.add(point)) {
       final InkRibbon? ribbon = _ribbon;
       if (ribbon != null) {
@@ -214,18 +250,20 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     if (_activePointer != event.pointer) {
       return;
     }
-    _commit(
-      InkPoint(
-        x: _toPagePt(event.localPosition).dx,
-        y: _toPagePt(event.localPosition).dy,
-        pressure: _lastPressure,
-        t: event.timeStamp.inMilliseconds,
-      ),
-    );
+    if (_erasing) {
+      _finishActive();
+      return;
+    }
+    _commit(_pointOf(event, pressure: _lastPressure));
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
     if (_activePointer != event.pointer) {
+      return;
+    }
+    if (_erasing) {
+      // 取消也要把已删的收成一步撤销，否则用户"按撤销却跳到更早的状态"。
+      _finishActive();
       return;
     }
     // 取消事件的坐标不可信：直接用最后一个已保留点收尾（距离 0，不会追加）。
@@ -237,11 +275,49 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     _commit(compressor.points.last);
   }
 
+  /// 收掉当前这笔（正常抬笔 / 僵死自愈 / 取消都走这里）。
+  void _finishActive() {
+    if (_erasing) {
+      _erasing = false;
+      _lastEraseAt = null;
+      _activePointer = -1;
+      _lastActiveEventMs = 0;
+      ref.read(inkEditProvider(widget.inkKey).notifier).endErase();
+      return;
+    }
+    _resetActive();
+  }
+
   void _resetActive() {
     _activePointer = -1;
     _compressor = null;
     _lastPressure = InkWidth.neutralPressure;
     _ribbon?.clear();
+    _activeTick.value++;
+  }
+
+  // ── 橡皮 ─────────────────────────────────────────────────────────
+
+  void _beginErase(InkPoint at) {
+    // 切到橡皮时把上一笔的活跃几何清掉，避免"残影"。
+    _compressor = null;
+    _ribbon?.clear();
+    _erasing = true;
+    _lastEraseAt = at;
+    _eraseAlong(null, at);
+  }
+
+  /// 擦掉 [from]→[to] 这一划经过的笔画（[from] 为 null = 落笔点一下）。
+  void _eraseAlong(InkPoint? from, InkPoint to) {
+    final InkDoc doc = ref.read(inkDocProvider(widget.inkKey));
+    if (doc.isEmpty) {
+      return;
+    }
+    final List<InkStroke> hit = Eraser.strokesHit(doc.strokes, from, to);
+    if (hit.isEmpty) {
+      return;
+    }
+    ref.read(inkEditProvider(widget.inkKey).notifier).eraseStrokes(hit);
     _activeTick.value++;
   }
 
@@ -253,15 +329,17 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   void _commit(InkPoint endPoint) {
     final InkCompressor? compressor = _compressor;
     final InkRibbon? ribbon = _ribbon;
+    final InkStrokeStyle style = _activeStyle;
     _activePointer = -1;
     _compressor = null;
+    _lastActiveEventMs = 0;
     if (compressor == null) {
       _resetActive();
       return;
     }
     final List<InkPoint> points = compressor.finish(endPoint);
     // 活动层与已提交层几何相同：清掉活动层不会闪——下一次 build 里
-    // InkDocController.commit 已经把这一笔同步写进 state（同一帧内完成）。
+    // InkEditController.commit 已经把这一笔同步写进 state（同一帧内完成）。
     ribbon?.endStroke();
     ribbon?.clear();
     _activeTick.value++;
@@ -271,10 +349,8 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     }
     unawaited(
       ref
-          .read(inkDocProvider(widget.inkKey).notifier)
-          .commit(
-            InkStroke(uid: Ulid.next(), points: points, style: widget.style),
-          ),
+          .read(inkEditProvider(widget.inkKey).notifier)
+          .commit(InkStroke(uid: Ulid.next(), points: points, style: style)),
     );
   }
 
@@ -289,7 +365,12 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     // 新笔画到了才同步缓存（InkDoc 不可变，append 产生新实例）
     _cache.sync(doc, inkColor: inkColor, highlighterColor: highlighterColorOf);
 
-    final InkRibbon active = _ribbonFor(widget.style, inkColor);
+    // 正在写的那一笔用**它自己的**笔刷（切工具不影响已落下的这一笔）；
+    // 没在写时用当前工具（橡皮时画布上没有活跃笔，回落到钢笔只为复用同一条 ribbon）。
+    final InkStrokeStyle drawStyle = _activePointer >= 0 && !_erasing
+        ? _activeStyle
+        : (widget.tool.strokeStyle ?? InkStrokeStyle.pen);
+    final InkRibbon active = _ribbonFor(drawStyle, inkColor);
     active.color = inkColor;
 
     return ClipRect(
