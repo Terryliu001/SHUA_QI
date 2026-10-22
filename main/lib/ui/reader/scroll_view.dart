@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart' show PointerDeviceKind;
+import 'package:flutter/gestures.dart'
+    show PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
@@ -319,7 +320,34 @@ class ScrollReaderViewState extends State<ScrollReaderView>
 
   // ── 手势 ─────────────────────────────────────────────────────────
 
+  // ── 笔优先（规格 T2.1：stylus 出现后 800ms 内忽略单指 touch）────────
+  //
+  // 为什么必须有：写字时手掌/手指搭在屏上是常态，touch 事件会照常进
+  // 缩放手势——表现是"一落笔页面就跟着跑"。100% 时横向被夹紧看不出来，
+  // 放大后横向有余量，现象最明显（用户报的"放大后无法书写"）。
+  // 实现：用时间戳门槛，**不 setState、不重建**——被挡住的手势直接在
+  // 回调里 return，页面不动，墨迹层照常写。双指（pointerCount ≥ 2）
+  // 不受影响：捏合缩放是手指的合法操作（§6.9.1）。
+  static const int _penGraceMs = 800;
+  int _lastPenSeenMs = -1000000;
+  bool _gestureBlocked = false;
+
+  void _observePointer(PointerEvent event) {
+    if (event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus) {
+      _lastPenSeenMs = DateTime.now().millisecondsSinceEpoch;
+    }
+  }
+
+  bool _penRecentlyActive(int pointerCount) =>
+      pointerCount < 2 &&
+      DateTime.now().millisecondsSinceEpoch - _lastPenSeenMs < _penGraceMs;
+
   void _onScaleStart(ScaleStartDetails details) {
+    _gestureBlocked = _penRecentlyActive(details.pointerCount);
+    if (_gestureBlocked) {
+      return;
+    }
     _ticker.stop();
     _velocity = Offset.zero;
     _qualityTimer?.cancel();
@@ -329,6 +357,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // 手势中途笔落下来（手掌先搭住、后动笔）：立刻冻结本次手势。
+    if (_gestureBlocked || _penRecentlyActive(details.pointerCount)) {
+      return;
+    }
     final double scale = (_startScale * details.scale).clamp(
       _minScale,
       _maxScale,
@@ -343,6 +375,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
+    final bool blocked = _gestureBlocked;
+    _gestureBlocked = false;
+    if (blocked) {
+      // 被笔优先挡掉的手势：不甩动、不清晰度升级也不触发（没有位移发生）。
+      return;
+    }
     widget.onZoomChanged?.call(_scale);
     _scheduleQualityUpgrade();
 
@@ -593,21 +631,30 @@ class ScrollReaderViewState extends State<ScrollReaderView>
             onScaleStart: _onScaleStart,
             onScaleUpdate: _onScaleUpdate,
             onScaleEnd: _onScaleEnd,
-            child: ClipRect(
-              // 丝滑关键：矩阵走 notifier 独立重建，页面列表作为静态 child
-              // 不参与每帧重建。
-              child: ValueListenableBuilder<_Camera>(
-                valueListenable: _cam,
-                builder: (BuildContext context, _Camera cam, Widget? child) {
-                  return Transform(
-                    alignment: Alignment.topLeft,
-                    transform: Matrix4.identity()
-                      ..translateByDouble(cam.offset.dx, cam.offset.dy, 0, 1)
-                      ..scaleByDouble(cam.scale, cam.scale, 1, 1),
-                    child: child,
-                  );
-                },
-                child: content,
+            child: Listener(
+              // 笔优先的观察哨：只记录"笔最近动过"的时间戳，
+              // 不消费、不拦截任何事件（translucent）。
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: _observePointer,
+              onPointerMove: _observePointer,
+              onPointerUp: _observePointer,
+              onPointerCancel: _observePointer,
+              child: ClipRect(
+                // 丝滑关键：矩阵走 notifier 独立重建，页面列表作为静态 child
+                // 不参与每帧重建。
+                child: ValueListenableBuilder<_Camera>(
+                  valueListenable: _cam,
+                  builder: (BuildContext context, _Camera cam, Widget? child) {
+                    return Transform(
+                      alignment: Alignment.topLeft,
+                      transform: Matrix4.identity()
+                        ..translateByDouble(cam.offset.dx, cam.offset.dy, 0, 1)
+                        ..scaleByDouble(cam.scale, cam.scale, 1, 1),
+                      child: child,
+                    );
+                  },
+                  child: content,
+                ),
               ),
             ),
           ),

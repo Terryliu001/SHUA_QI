@@ -51,6 +51,10 @@ class InkRibbon {
   // ── 流式状态（只对"当前这一笔"有效）──────────────────────────────
   InkPoint? _prev;
   double _lastWidth = InkWidth.penMid;
+
+  /// 本笔第一个采样点的原始宽度（未做 taperIn）。单点笔画画点时用它。
+  double _firstWidth = InkWidth.penMid;
+  int _pointCount = 0;
   int _openLevel = -1;
 
   /// 已经 append 进来的笔画数。用于判断"抬笔后的笔迹是否已经落到死笔层"。
@@ -63,6 +67,8 @@ class InkRibbon {
   void beginStroke() {
     _prev = null;
     _lastWidth = InkWidth.penMid;
+    _firstWidth = InkWidth.penMid;
+    _pointCount = 0;
     _openLevel = -1;
   }
 
@@ -73,15 +79,19 @@ class InkRibbon {
   void addPoint(InkPoint point) {
     final InkPoint? prev = _prev;
     if (prev == null) {
-      // 起笔：先按当前压力画一个圆点。笔尖落在纸上本来就会留一个点，
-      // 顺带解决"起笔是针尖、一帧后突然变粗"的观感。
-      final double width = InkWidth.forStroke(style, point.pressure);
-      _lastWidth = width;
-      _dot(point, width);
+      // 起笔：**不画点**。真机 DOWN 事件的压力读数系统性偏高，
+      // 直接按它画圆点就是用户看到的"起笔圆斑"。这里从 55% 宽度起笔，
+      // 让 EMA 在头 3 个采样点（≈13ms）内收敛到真实压力——
+      // 肉眼是"笔尖入纸"的自然渐细，不是圆斑。
+      final double raw = InkWidth.forStroke(style, point.pressure);
+      _firstWidth = raw;
+      _lastWidth = raw * InkWidth.taperIn;
       _prev = point;
+      _pointCount = 1;
       return;
     }
 
+    _pointCount++;
     final double raw = InkWidth.forStroke(style, point.pressure);
     final double width =
         _lastWidth + (raw - _lastWidth) * InkWidth.pressureSmoothing;
@@ -99,10 +109,18 @@ class InkRibbon {
   }
 
   /// 收笔：结束当前子路径，下一笔重新开口。
+  ///
+  /// 整笔只有 1 个点（点一下）→ 按原始起笔宽度补一个圆点：
+  /// 选择题打钩打点是合法输入，"点"必须是一个看得见的点而不是空笔。
   void endStroke() {
+    final InkPoint? only = _prev;
+    if (_pointCount == 1 && only != null) {
+      _dot(only, _firstWidth);
+    }
     _strokeCount++;
     _prev = null;
     _openLevel = -1;
+    _pointCount = 0;
   }
 
   /// 整笔一次性 append（已提交笔迹走这条）。与流式逐点调用结果完全一致。
@@ -169,6 +187,8 @@ class InkRibbon {
     _strokeCount = 0;
     _hasGeometry = false;
     _prev = null;
+    _firstWidth = InkWidth.penMid;
+    _pointCount = 0;
     _openLevel = -1;
   }
 }

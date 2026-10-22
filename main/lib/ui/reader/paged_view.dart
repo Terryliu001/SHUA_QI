@@ -1,6 +1,14 @@
 import 'dart:math' as math;
 
-import 'package:flutter/gestures.dart' show PointerDeviceKind;
+import 'package:flutter/gestures.dart'
+    show
+        GestureDisposition,
+        OneSequenceGestureRecognizer,
+        PointerDeviceKind,
+        PointerDownEvent,
+        PointerEvent,
+        PointerUpEvent,
+        PointerCancelEvent;
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
@@ -214,35 +222,37 @@ class PagedReaderViewState extends State<PagedReaderView> {
                 final double scale = controller.value.getMaxScaleOnAxis();
                 _setScale(scale > 1.5 ? 1.0 : 2.0);
               },
-              child: InteractiveViewer(
-                minScale: 1,
-                maxScale: 4,
-                // 每页始终挂着自己的控制器，不再中途重挂
-                transformationController: controller,
-                // 缩放后单指平移才有意义；1x 时不开，避免和平移/翻页抢手势。
-                // 当前页用 _zoomed（会随缩放触发重建），其它页用各自的静态状态。
-                panEnabled: index == _current ? _zoomed : zoomed,
-                scaleEnabled: true,
-                onInteractionEnd: (ScaleEndDetails details) =>
-                    _commitScale(index),
-                child: Center(
-                  child: PageLayer(
-                    cache: widget.cache,
-                    page: page,
-                    width: displayWidth,
-                    renderScale: index == _current
-                        ? _renderScale.toDouble()
-                        : 1,
-                    style: widget.style,
-                    intensity: widget.intensity,
-                    sessionId: widget.sessionId,
-                    // 放大状态禁用书写：那时 stylus 拖动应当平移页面，
-                    // 而不是又画又跑（T2.1 的取舍；1x 书写是刷题主路径）。
-                    inkEnabled:
-                        widget.sessionId != null &&
-                        index == _current &&
-                        !_zoomed,
-                    inkStyle: widget.inkStyle,
+              child: StylusGestureGuard(
+                child: InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 4,
+                  // 每页始终挂着自己的控制器，不再中途重挂
+                  transformationController: controller,
+                  // 缩放后单指平移才有意义；1x 时不开，避免和平移/翻页抢手势。
+                  // 当前页用 _zoomed（会随缩放触发重建），其它页用各自的静态状态。
+                  panEnabled: index == _current ? _zoomed : zoomed,
+                  scaleEnabled: true,
+                  onInteractionEnd: (ScaleEndDetails details) =>
+                      _commitScale(index),
+                  child: Center(
+                    child: PageLayer(
+                      cache: widget.cache,
+                      page: page,
+                      width: displayWidth,
+                      renderScale: index == _current
+                          ? _renderScale.toDouble()
+                          : 1,
+                      style: widget.style,
+                      intensity: widget.intensity,
+                      sessionId: widget.sessionId,
+                      // **放大状态下也允许书写**（2026-10-22 用户反馈推翻 T2.1 的取舍）：
+                      // 墨迹层在 IV 的变换子树里，指针事件的 localPosition 会被
+                      // IV 的矩阵自动逆变换到页面局部坐标，写哪儿落在哪儿；
+                      // stylus 不会平移页面——那由 [StylusGestureGuard] 挡住。
+                      // touch 仍走 IV 的平移/缩放（笔写、指滚，§6.9.1）。
+                      inkEnabled: widget.sessionId != null && index == _current,
+                      inkStyle: widget.inkStyle,
+                    ),
                   ),
                 ),
               ),
@@ -337,4 +347,71 @@ class PageIndicator extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 只认笔的"竞技场守卫"：笔一落屏就**立刻**接受手势。
+///
+/// ## 为什么需要它
+/// [InteractiveViewer] 内部是普通 `GestureDetector`（没有设备过滤）。
+/// 放大状态下它允许单指平移，而笔的拖动会被它的 `ScaleGestureRecognizer`
+/// 当成平移——表现就是"放大后一落笔页面就跑，字没法写"。
+/// 本守卫在 `PointerDownEvent` 派发期间就 `resolve(accepted)`，
+/// 把 IV 的识别器挤出竞技场（竞技场在 DOWN 派发结束时 sweep，
+/// 那时未决的竞技场会判给**第一个**成员——也就是 IV，所以必须抢在 sweep 前）。
+///
+/// touch 不在允许列表里：手指的缩放/平移照常走 IV，双击照常走外层
+/// GestureDetector——"笔写、指滚"（§6.9.1）在放大状态下依然成立。
+/// 墨迹层的 `Listener` 不是竞技场成员，照常收到笔事件用于书写。
+class StylusGestureGuard extends StatelessWidget {
+  const StylusGestureGuard({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return RawGestureDetector(
+      // translucent：只加入命中结果，不拦 touch 的命中链。
+      behavior: HitTestBehavior.translucent,
+      gestures: <Type, GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>>{
+        _StylusGuardRecognizer:
+            GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>(
+          () => _StylusGuardRecognizer(
+            supportedDevices: const <PointerDeviceKind>{
+              PointerDeviceKind.stylus,
+              PointerDeviceKind.invertedStylus,
+            },
+          ),
+          (_StylusGuardRecognizer instance) {},
+        ),
+      },
+      child: child,
+    );
+  }
+}
+
+class _StylusGuardRecognizer extends OneSequenceGestureRecognizer {
+  _StylusGuardRecognizer({super.supportedDevices});
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    startTrackingPointer(event.pointer, event.transform);
+    // 立刻接受：IV 的 pan/scale 识别器随即被 reject，本次笔划不再平移页面。
+    resolve(GestureDisposition.accepted);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerUpEvent || event is PointerCancelEvent) {
+      stopTrackingPointer(event.pointer);
+    }
+  }
+
+  @override
+  void didStopTrackingLastPointer(int pointer) {
+    // 已 resolve(accepted)，这里复位识别器状态；arena 侧的重复 resolve 是 no-op。
+    resolve(GestureDisposition.rejected);
+  }
+
+  @override
+  String get debugDescription => 'stylusGuard';
 }

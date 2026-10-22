@@ -64,14 +64,16 @@ void main() {
     // 而不是立刻跳到最细。
     final List<InkPoint> points = <InkPoint>[
       const InkPoint(x: 0, y: 0, pressure: 0.0),
-      const InkPoint(x: 5, y: 0, pressure: 0.6),
-      const InkPoint(x: 10, y: 0, pressure: 0.6),
+      const InkPoint(x: 5, y: 3, pressure: 0.6),
+      const InkPoint(x: 10, y: 6, pressure: 0.6),
     ];
     final InkRibbon ribbon = streamed(points);
     expect(ribbon.hasGeometry, isTrue);
-    // 起笔圆点的宽度 = 中性压力对应宽度（不是 0 压力的最细值）
-    final ui.Rect bounds = ribbon.levelBounds().firstWhere(_nonEmpty);
-    expect(bounds.width, greaterThan(0));
+    // 起笔不画圆斑（taperIn），几何来自线段：包围盒应覆盖全部采样点。
+    final ui.Rect bounds = ribbon.levelBounds().reduce(_union);
+    expect(bounds.left, closeTo(0, 1e-6));
+    expect(bounds.right, closeTo(10, 1e-6));
+    expect(bounds.bottom, closeTo(6, 1e-6));
   });
 
   test('单点笔画 = 一个点（选择题打钩打点也是合法输入）', () {
@@ -102,3 +104,5 @@ void main() {
 }
 
 bool _nonEmpty(ui.Rect rect) => !rect.isEmpty;
+
+ui.Rect _union(ui.Rect a, ui.Rect b) => a.expandToInclude(b);
