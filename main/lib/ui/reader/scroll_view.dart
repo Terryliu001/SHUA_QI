@@ -8,28 +8,34 @@ import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
-/// 连续滚动模式：**可缩放画布**（不是 ScrollView）。
+/// 连续滚动模式：**固定布局 + 单一变换矩阵**。
 ///
-/// ## 为什么要推倒重来
+/// ## 为什么是第三版（前两版都有结构性问题）
 ///
-/// 前两版都在"ListView 里塞缩放"，无论用 `InteractiveViewer` 还是自己数指针，
-/// 本质都是"改布局宽 → 重排 → 校正滚动偏移"。这条路有三个人为的天花板：
-/// 1. 每帧重排 + `jumpTo` 校正 → 视觉比手指慢半拍（用户反馈的"不跟手"）；
-/// 2. 缩放不能围绕双指焦点（布局是自上而下重算的，没有"焦点"概念）；
-/// 3. 位图宽度随布局变 → 缓存被反复冲刷。
+/// 前两版都在 `onScaleUpdate` 里改"页宽/页位置"然后让 Flutter 重排：
+/// - 第一版：改 ListView 的 item 宽度 → 每帧重排 + 每帧请求新尺寸位图（位图风暴）；
+/// - 第二版：改 `Positioned` 的 `top/height` → 每帧重排，分数尺寸在**缩小**过程中误差累积，
+///   页与页的边界会错开、互相叠压 —— 这就是"图层混乱"。
 ///
-/// 成熟 PDF 阅读器的做法是**把滚动画布化**：
-/// - 内容按 `baseWidth` 排一次版，位置固定不动；
-/// - 屏幕位置 = 内容坐标 × `scale` + `offset`（一个 2D 仿射变换，纯 GPU）；
-/// - 单指拖动改 `offset`，双指改 `scale` 并用同一个公式锁住焦点；
-/// - 只渲染与视口相交的页（懒加载靠"可见区间计算"，不靠 Sliver）。
+/// 这一版把两件事彻底分开：
+/// - **布局（内容坐标系）永远不变**：页在 `baseWidth` 下排一次版，坐标固定；
+/// - **视觉只由一个 `Matrix4` 决定**：`translate(offset) × scale`。
 ///
-/// 因为不再有 `Scrollable`，手势竞技场里没有别的竞争者，
-/// 可以直接用 `GestureDetector.onScale*`——单指平移与双指缩放天然统一。
+/// 因为缩放不参与布局，所以：页与页不可能错位；纯 GPU 变换，跟手；
+/// `PageLayer` 宽度恒定，缩放过程中**不会**重新请求位图。
 ///
-/// ## 位图分辨率
-/// `_qualityScale` 决定位图宽度，缩放过程中**冻结**，停手 250ms 才升级，
-/// 避免每帧请求新尺寸位图（一次捏合 60 帧 ≈ 60 张 12–50MB）。期间靠 GPU 拉伸，视觉稳定。
+/// ## 焦点缩放
+/// ```text
+/// focalContent = (focalScreen - offset) / scale      // 手势开始
+/// offset'      = focalScreen - focalContent * scale' // 每一步
+/// ```
+/// 该内容点恒钉在焦点屏幕上 → "在哪里放大就放大哪里"。
+///
+/// ## 位图清晰度
+/// 显示是拉伸的，位图按 `baseWidth × dpr × qualityScale` 出图。
+/// `qualityScale` 手势中**冻结**，停手 250ms 才升级一次。
+/// 单页位图宽度上限 4096px（≈1.9 倍清晰度），更高倍率会略软；
+/// 真正的高倍清晰要靠分块渲染（T1.5.1，未做）。
 class ScrollReaderView extends StatefulWidget {
   const ScrollReaderView({
     super.key,
@@ -55,34 +61,32 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   static const double _gap = 8;
   static const double _minScale = 1;
   static const double _maxScale = 4;
-
-  /// 位图升级延迟：手指停下这么久之后才换高分辨率图
+  static const int _maxBitmapWidth = 4096;
   static const Duration _qualityDelay = Duration(milliseconds: 250);
 
   late final Ticker _ticker;
   Timer? _qualityTimer;
 
-  /// 内容坐标系下的页顶/页高（baseWidth 排版，一次算好不再变）
+  /// 内容坐标系（永不随缩放改变）
+  double _baseWidth = 0;
   List<double> _tops = const <double>[];
   List<double> _heights = const <double>[];
-  double _contentW = 0;
   double _contentH = 0;
   Size _viewport = Size.zero;
-
-  double _scale = 1;
-  double _qualityScale = 1;
+  double _dpr = 2;
 
   /// 屏幕坐标 = 内容坐标 × _scale + _offset
+  double _scale = 1;
+  double _qualityScale = 1;
   Offset _offset = Offset.zero;
+  int _bitmapWidth = 0;
 
   int _current = 0;
   bool _initialized = false;
 
-  // 手势基准
   double _startScale = 1;
   Offset _focalContent = Offset.zero;
 
-  // 惯性
   Offset _velocity = Offset.zero;
   Duration _lastTick = Duration.zero;
 
@@ -99,13 +103,13 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     super.dispose();
   }
 
-  // ── 布局（只算一次）────────────────────────────────────────────────────
+  // ── 布局：只在 baseWidth 变化时算一次 ──────────────────────────────────
 
   void _layout(double baseWidth) {
-    if (baseWidth == _contentW && _tops.isNotEmpty) {
+    if (baseWidth == _baseWidth && _tops.isNotEmpty) {
       return;
     }
-    _contentW = baseWidth;
+    _baseWidth = baseWidth;
     final List<double> tops = <double>[];
     final List<double> heights = <double>[];
     double y = 0;
@@ -119,17 +123,15 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     }
     _tops = tops;
     _heights = heights;
-    _contentH = y;
+    _contentH = math.max(0, y - _gap * 2);
   }
 
   Offset _clampOffset(Offset offset, double scale) {
-    final double scaledW = _contentW * scale;
+    final double scaledW = _baseWidth * scale;
     final double scaledH = _contentH * scale;
-    // 横向：内容比视口窄时居中（否则会紧贴左边，看起来像没排版）
     final double x = scaledW <= _viewport.width
         ? (_viewport.width - scaledW) / 2
         : offset.dx.clamp(_viewport.width - scaledW, 0);
-    // 纵向：内容比视口矮时顶部对齐
     final double y = scaledH <= _viewport.height
         ? 0
         : offset.dy.clamp(_viewport.height - scaledH, 0);
@@ -141,20 +143,23 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       return;
     }
     _initialized = true;
-    final int page = widget.initialPage.clamp(0, _tops.length - 1);
-    _current = page;
-    // 该页顶部对齐视口顶部
-    _offset = _clampOffset(Offset(-_gap, -_tops[page] + _gap), _scale);
+    _current = widget.initialPage.clamp(0, _tops.length - 1);
+    _offset = _clampOffset(Offset(0, -_tops[_current] * _scale), _scale);
   }
 
-  // ── 手势：单指平移 + 双指焦点缩放（同一个公式）─────────────────────────
+  void _recomputeBitmapWidth() {
+    _bitmapWidth = (_baseWidth * _dpr * _qualityScale)
+        .round()
+        .clamp(1, _maxBitmapWidth);
+  }
+
+  // ── 手势 ────────────────────────────────────────────────────────────────
 
   void _onScaleStart(ScaleStartDetails details) {
     _ticker.stop();
     _velocity = Offset.zero;
     _qualityTimer?.cancel();
     _startScale = _scale;
-    // 焦点落在内容坐标系里的哪一点——缩放时这一点必须钉在屏幕上不动
     _focalContent = (details.localFocalPoint - _offset) / _scale;
   }
 
@@ -163,17 +168,15 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _minScale,
       _maxScale,
     );
-    // 由"焦点内容点"反解 offset：focalScreen = focalContent * scale + offset
     final Offset offset = details.localFocalPoint - _focalContent * scale;
+    // 只改矩阵参数，布局一个字节都不动 —— 不会有页错位
     setState(() {
       _scale = scale;
       _offset = _clampOffset(offset, scale);
-      _updateCurrentPage();
     });
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
-    // 停手：延迟升级位图，并允许惯性
     _qualityTimer?.cancel();
     _qualityTimer = Timer(_qualityDelay, () {
       if (!mounted) {
@@ -181,6 +184,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       }
       setState(() {
         _qualityScale = _scale;
+        _recomputeBitmapWidth();
       });
     });
     widget.onZoomChanged?.call(_scale);
@@ -190,6 +194,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _velocity = velocity;
       _lastTick = Duration.zero;
       _ticker.start();
+    } else {
+      _reportCurrentPage();
     }
   }
 
@@ -203,27 +209,26 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (dt <= 0) {
       return;
     }
-    // 简单指数衰减：与平台惯性的手感接近，且实现只有几行
     final Offset next = _offset + _velocity * dt;
-    _velocity *= math.pow(0.0025, dt).toDouble();
+    _velocity = _velocity * math.pow(0.0025, dt).toDouble();
     final Offset clamped = _clampOffset(next, _scale);
-    final bool hitEdge = clamped != next;
+    final bool hitEdge =
+        (clamped.dx - next.dx).abs() > 0.5 || (clamped.dy - next.dy).abs() > 0.5;
     setState(() {
       _offset = clamped;
-      _updateCurrentPage();
     });
     if (_velocity.distance < 40 || hitEdge) {
       _velocity = Offset.zero;
       _ticker.stop();
+      _reportCurrentPage();
     }
   }
 
-  void _updateCurrentPage() {
-    if (_tops.isEmpty) {
+  void _reportCurrentPage() {
+    if (_tops.isEmpty || _viewport.isEmpty) {
       return;
     }
-    final double centerY =
-        (-_offset.dy + _viewport.height / 2) / _scale;
+    final double centerY = (-_offset.dy + _viewport.height / 2) / _scale;
     int page = 0;
     for (int i = 0; i < _tops.length; i++) {
       if (centerY >= _tops[i]) {
@@ -238,7 +243,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     }
   }
 
-  /// 供 AppBar 的档位菜单调用：以视口中心为焦点缩放到指定倍率。
+  /// 供 AppBar 档位菜单：以视口中心为焦点缩放。
   void setScale(double value) {
     final double next = value.clamp(_minScale, _maxScale);
     final Offset center = Offset(_viewport.width / 2, _viewport.height / 2);
@@ -246,10 +251,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     setState(() {
       _scale = next;
       _offset = _clampOffset(center - focalContent * next, next);
-      // 菜单是离散操作，直接升级位图（不需要等 250ms）
       _qualityScale = next;
-      _updateCurrentPage();
+      _recomputeBitmapWidth();
     });
+    _reportCurrentPage();
     widget.onZoomChanged?.call(next);
   }
 
@@ -260,14 +265,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     }
     setState(() {
       _current = index;
-      _offset = _clampOffset(Offset(-_gap, -_tops[index] + _gap), _scale);
+      _offset = _clampOffset(Offset(0, -_tops[index] * _scale), _scale);
     });
     widget.onPageChanged(index);
   }
 
   @override
   Widget build(BuildContext context) {
-    final double dpr = MediaQuery.devicePixelRatioOf(context);
+    _dpr = MediaQuery.devicePixelRatioOf(context);
     return LayoutBuilder(
       builder: (BuildContext context, BoxConstraints constraints) {
         _viewport = Size(constraints.maxWidth, constraints.maxHeight);
@@ -277,16 +282,16 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         );
         _layout(baseWidth);
         _initPosition();
+        if (_bitmapWidth <= 0) {
+          _recomputeBitmapWidth();
+        }
 
         // 可见区间（内容坐标）
         final double visibleTop = -_offset.dy / _scale;
         final double visibleBottom =
             visibleTop + constraints.maxHeight / _scale;
 
-        final int qualityWidth =
-            (_contentW * dpr * _qualityScale).round().clamp(1, 20000);
-
-        final List<Widget> layers = <Widget>[];
+        final List<Widget> pageWidgets = <Widget>[];
         for (int i = 0; i < _tops.length; i++) {
           if (_tops[i] > visibleBottom) {
             break;
@@ -294,21 +299,28 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           if (_tops[i] + _heights[i] < visibleTop) {
             continue;
           }
-          layers.add(
+          pageWidgets.add(
             Positioned(
-              left: _offset.dx,
-              top: _tops[i] * _scale + _offset.dy,
-              width: _contentW * _scale,
-              height: _heights[i] * _scale,
+              left: 0,
+              top: _tops[i],
+              width: baseWidth,
+              height: _heights[i],
               child: PageLayer(
                 cache: widget.cache,
                 page: widget.pages[i],
-                width: _contentW * _scale,
-                qualityWidth: qualityWidth,
+                width: baseWidth,
+                qualityWidth: _bitmapWidth,
               ),
             ),
           );
         }
+
+        // 内容坐标固定；屏幕位置完全由外层矩阵决定
+        final Widget content = SizedBox(
+          width: baseWidth,
+          height: _contentH,
+          child: Stack(clipBehavior: Clip.none, children: pageWidgets),
+        );
 
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
@@ -316,7 +328,13 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           onScaleUpdate: _onScaleUpdate,
           onScaleEnd: _onScaleEnd,
           child: ClipRect(
-            child: Stack(clipBehavior: Clip.none, children: layers),
+            child: Transform(
+              alignment: Alignment.topLeft,
+              transform: Matrix4.identity()
+                ..translateByDouble(_offset.dx, _offset.dy, 0, 1)
+                ..scaleByDouble(_scale, _scale, 1, 1),
+              child: content,
+            ),
           ),
         );
       },

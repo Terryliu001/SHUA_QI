@@ -132,12 +132,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             PopupMenuButton<double>(
               tooltip: '缩放',
               initialValue: _scrollZoom,
-              onSelected: (double value) {
-                _scrollKey.currentState?.setScale(value);
-                setState(() {
-                  _scrollZoom = value;
-                });
-              },
+              // 只调 setScale，标签由 onZoomChanged 回调更新 —— 单一数据源，
+              // 避免"菜单显示 200% 但画面已经是 100%"这种不同步。
+              onSelected: (double value) =>
+                  _scrollKey.currentState?.setScale(value),
               itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
                 for (final double zoom in _scrollZoomSteps)
                   PopupMenuItem<double>(
