@@ -80,6 +80,27 @@ class PdfrxSource implements PdfSource {
     }
   }
 
+  /// 按**宽度**渲染成 `ui.Image`，**屏显走这条**。
+  ///
+  /// 这是 T0.4 的直接结论：渲染 3ms、PNG 编码 120ms。屏显要的是能被 GPU 直接贴图的
+  /// `ui.Image`，不是一段 PNG 字节。契约里的 [renderPage] 留给导出与 OCR 裁图。
+  Future<ui.Image?> renderUiImage(int index, {required int widthPx}) async {
+    final PdfPage page = _doc.pages[index];
+    final double scale = widthPx / page.width;
+    final PdfImage? image = await page.render(
+      fullWidth: page.width * scale,
+      fullHeight: page.height * scale,
+    );
+    if (image == null) {
+      return null;
+    }
+    try {
+      return await toUiImage(image);
+    } finally {
+      image.dispose();
+    }
+  }
+
   @override
   Future<List<TextRun>> extractText(int index) async {
     final PdfPage page = _doc.pages[index];
@@ -106,9 +127,9 @@ class PdfrxSource implements PdfSource {
     return runs;
   }
 
-  /// BGRA 裸像素 → ui.Image → PNG。
+  /// BGRA 裸像素 → ui.Image。
   /// 不用已废弃的 `decodeImageFromPixels`，走 `ImageDescriptor.raw`。
-  static Future<Uint8List> encodePng(PdfImage image) async {
+  static Future<ui.Image> toUiImage(PdfImage image) async {
     final ui.ImmutableBuffer buffer = await ui.ImmutableBuffer.fromUint8List(
       image.pixels,
     );
@@ -120,13 +141,22 @@ class PdfrxSource implements PdfSource {
     );
     final ui.Codec codec = await descriptor.instantiateCodec();
     final ui.FrameInfo frame = await codec.getNextFrame();
-    final ByteData? data = await frame.image.toByteData(
-      format: ui.ImageByteFormat.png,
-    );
-    frame.image.dispose();
     codec.dispose();
     descriptor.dispose();
     buffer.dispose();
-    return data?.buffer.asUint8List() ?? Uint8List(0);
+    return frame.image;
+  }
+
+  /// BGRA 裸像素 → PNG 字节（导出/OCR 用，不要用在屏显上）。
+  static Future<Uint8List> encodePng(PdfImage image) async {
+    final ui.Image uiImage = await toUiImage(image);
+    try {
+      final ByteData? data = await uiImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      return data?.buffer.asUint8List() ?? Uint8List(0);
+    } finally {
+      uiImage.dispose();
+    }
   }
 }
