@@ -1,0 +1,39 @@
+name: shuaqi
+description: "刷起 SHUAQI —— Android 平板刷题工具：PDF 背景 + 手写笔迹层，异步识别，交卷后几何归属与判题。"
+publish_to: 'none'
+
+# 版本与构建号。versionCode 由 + 后面的数字提供。
+version: 0.1.0+1
+
+environment:
+  # 锁定 Dart（随 Flutter 3.47.6 stable）。不要放宽到 <4.0.0，避免未来大版本静默升级。
+  sdk: ^3.13.5
+  flutter: ">=3.47.6"
+
+# ============================================================================
+# 依赖纪律（与规格 §5.3 / §9 一致）
+#   1. 只允许白名单内的包；新增即违规，必须先改文档再改代码。
+#   2. 一律使用精确版本（不带 ^ / ~），保证任何机器 `flutter pub get` 得到同一份代码。
+#   3. 增删依赖后必须把 pubspec.lock 一起提交，并在项目日志里记一行理由。
+#   白名单：flutter_riverpod / pdfrx / sqflite / path_provider / path / file_picker /
+#           google_mlkit_digital_ink_recognition / onnxruntime / flutter_math_fork /
+#           flutter_markdown / flutter_secure_storage / http / archive / crypto /
+#           share_plus / device_info_plus
+# ============================================================================
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # 静态检查规则集（仅开发期需要）。规则清单在 analysis_options.yaml。
+  flutter_lints: 6.0.0
+
+flutter:
+  uses-material-design: true
+
+  # 资源目录约定（T0.1 只建目录，暂不声明，避免把空目录打进包里）：
+  #   assets/models/   引擎 B/C 的 ONNX 与字典 —— T0.5 产出后在此声明
+  #   demo_assets/     演示试卷 / 截图 / 录屏 —— 不进包，仅供手工测试
