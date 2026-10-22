@@ -22,3 +22,10 @@ final FutureProvider<ReaderPrefs> Function(String) readerPrefsProvider =
     FutureProvider.family<ReaderPrefs, String>((Ref ref, String workbookId) {
       return ref.watch(readerPrefsStoreProvider).load(workbookId);
     });
+
+/// 全局阅读默认（设置页用）。改它只影响之后新读取的卷，
+/// 已打开过的卷有自己那份 `reader.view.<id>`，不被打扰。
+final FutureProvider<ReaderPrefs> readerDefaultsProvider =
+    FutureProvider<ReaderPrefs>((Ref ref) {
+      return ref.watch(readerPrefsStoreProvider).loadDefaults();
+    });

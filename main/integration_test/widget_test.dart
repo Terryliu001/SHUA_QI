@@ -36,10 +36,10 @@ void main() {
     expect(reader, isNotNull);
     expect(reader, isA<MaterialPageRoute<void>>());
 
-    final Route<dynamic>? bookshelf = AppRoutes.onGenerateRoute(
-      const RouteSettings(name: AppRoutes.bookshelf),
+    final Route<dynamic>? shell = AppRoutes.onGenerateRoute(
+      const RouteSettings(name: AppRoutes.shell),
     );
-    expect(bookshelf, isNotNull);
+    expect(shell, isNotNull);
 
     // 未知路由必须返回 null，让 Navigator 抛标准错误，而不是静默吞掉
     expect(AppRoutes.onGenerateRoute(const RouteSettings(name: '/nope')), isNull);

@@ -6,13 +6,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/import/import_workbook.dart';
 import 'package:shuaqi/domain/model/workbook.dart';
+import 'package:shuaqi/domain/model/workbook_search.dart';
 import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/state/app_providers.dart';
+import 'package:shuaqi/ui/bookshelf/workbook_menu_sheet.dart';
 import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
+import 'package:shuaqi/ui/widgets/empty_state.dart';
 
-/// 书架（T1.4）。当前做到"能导入、能看见导入的卷、能点开"，
-/// 搜索 / 长按菜单 / 下拉刷新 / 3 列网格留给 T1.4 的剩余部分。
+/// 书架（T1.4 完成态）：导入 / 列表 / 最近打开 / 长按菜单 / 搜索 /
+/// 下拉刷新 / 文件损坏态。
+///
+/// 本页是 app 的主页（外壳第一个 tab）。"我在刷哪些卷子、刷到哪了"
+/// 一眼可见；其余入口（记录 / 错题 / 设置）在侧边 rail 或底部 bar。
 class BookshelfPage extends ConsumerStatefulWidget {
   const BookshelfPage({super.key});
 
@@ -23,6 +29,19 @@ class BookshelfPage extends ConsumerStatefulWidget {
 class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   bool _importing = false;
   String _stage = '';
+
+  // ── 搜索 ─────────────────────────────────────────────────────────
+  // 客户端过滤（书架上限 50 卷，成本为零）：query 只存在本页，
+  // 不做成 provider——它是这一页的私有临时状态（state/ 目录的约定）。
+  bool _searching = false;
+  String _query = '';
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pickAndImport() async {
     if (_importing) {
@@ -93,17 +112,91 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
   }
 
+  // ── 长按菜单的三个动作 ────────────────────────────────────────────
+
+  Future<void> _rename(Workbook workbook) async {
+    final String? title = await showRenameDialog(
+      context,
+      initialTitle: workbook.title,
+    );
+    if (title == null || !mounted) {
+      return;
+    }
+    await ref.read(workbookDaoProvider).rename(workbook.id, title);
+    ref.invalidate(bookshelfProvider);
+  }
+
+  Future<void> _delete(Workbook workbook) async {
+    final bool confirmed = await showDeleteConfirmDialog(
+      context,
+      title: workbook.title,
+    );
+    if (!confirmed || !mounted) {
+      return;
+    }
+    // 先库后目录：库里没了，目录就算残留也会被下次启动的 sweepOrphans 收掉；
+    // 反过来（目录没了、库还在）会留下一条永远打不开的幽灵记录。
+    await ref.read(workbookDaoProvider).delete(workbook.id);
+    await ref.read(vaultProvider).deleteWorkbook(workbook.id);
+    ref.invalidate(bookshelfProvider);
+    _toast('已删除《${workbook.title}》');
+  }
+
+  void _openMenu(Workbook workbook) {
+    unawaited(
+      showWorkbookMenu(
+        context,
+        workbook: workbook,
+        onRename: () => unawaited(_rename(workbook)),
+        onDelete: () => unawaited(_delete(workbook)),
+      ),
+    );
+  }
+
+  // ── 搜索 ─────────────────────────────────────────────────────────
+
+  void _toggleSearch() {
+    setState(() {
+      _searching = !_searching;
+      _query = '';
+      _searchController.clear();
+    });
+  }
+
+  // ── 下拉刷新 ─────────────────────────────────────────────────────
+
+  Future<void> _refresh() async {
+    ref.invalidate(bookshelfProvider);
+    // 等新 future 真正完成，RefreshIndicator 的转圈才会在数据回来后收
+    await ref.read(bookshelfProvider.future);
+  }
+
   @override
   Widget build(BuildContext context) {
     final AsyncValue<List<Workbook>> books = ref.watch(bookshelfProvider);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('书架'),
+        title: _searching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  hintText: '搜索卷子',
+                  border: InputBorder.none,
+                ),
+                onChanged: (String value) => setState(() => _query = value),
+              )
+            : const Text('书架'),
         actions: <Widget>[
           IconButton(
+            tooltip: _searching ? '退出搜索' : '搜索',
+            onPressed: _toggleSearch,
+            icon: Icon(_searching ? Icons.close : Icons.search),
+          ),
+          IconButton(
             tooltip: '刷新',
-            onPressed: () => ref.invalidate(bookshelfProvider),
+            onPressed: () => unawaited(_refresh()),
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -114,8 +207,24 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           message: '$error',
           onRetry: () => ref.invalidate(bookshelfProvider),
         ),
-        data: (List<Workbook> items) =>
-            items.isEmpty ? _EmptyView(onImport: _pickAndImport) : _list(items),
+        data: (List<Workbook> items) {
+          final List<Workbook> visible = filterByQuery(items, _query);
+          if (items.isEmpty) {
+            return _EmptyView(onImport: _pickAndImport);
+          }
+          if (visible.isEmpty) {
+            // 有卷但搜索无果：单独的空态，别把"导入第一份"的引导露出来
+            return const EmptyState(
+              icon: Icons.search_off_outlined,
+              title: '没有匹配的卷子',
+              message: '换个标题关键词试试',
+            );
+          }
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: _list(visible),
+          );
+        },
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _importing ? null : () => unawaited(_pickAndImport()),
@@ -136,6 +245,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: ShqLayout.maxReadingWidth),
         child: ListView.separated(
+          // 始终可滚动：空结果态时 RefreshIndicator 也需要一个能滚动的 child
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(
             ShqSpace.md,
             ShqSpace.md,
@@ -145,18 +256,39 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           itemCount: items.length,
           separatorBuilder: (BuildContext context, int index) =>
               const SizedBox(height: ShqSpace.sm),
-          itemBuilder: (BuildContext context, int index) =>
-              _WorkbookTile(workbook: items[index]),
+          itemBuilder: (BuildContext context, int index) => _WorkbookTile(
+            workbook: items[index],
+            onTap: () => _open(items[index]),
+            onLongPress: () => _openMenu(items[index]),
+          ),
         ),
+      ),
+    );
+  }
+
+  void _open(Workbook workbook) {
+    unawaited(
+      Navigator.of(context).pushNamed(
+        AppRoutes.reader,
+        arguments: ReaderRouteArgs(workbookId: workbook.id),
       ),
     );
   }
 }
 
 class _WorkbookTile extends ConsumerWidget {
-  const _WorkbookTile({required this.workbook});
+  const _WorkbookTile({
+    required this.workbook,
+    required this.onTap,
+    required this.onLongPress,
+  });
 
   final Workbook workbook;
+
+  /// 文件损坏时置灰 + 改弹提示，由本 widget 自己判断（健康探测见
+  /// [workbookHealthProvider]）。
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -166,48 +298,90 @@ class _WorkbookTile extends ConsumerWidget {
         .watch(vaultProvider)
         .file(VaultPaths.thumb(workbook.id, 0));
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => unawaited(
-          Navigator.of(context).pushNamed(
-            AppRoutes.reader,
-            arguments: ReaderRouteArgs(workbookId: workbook.id),
+    // 文件损坏态：库里有记录、但 Vault 里的 PDF 没了。书架先置灰告知，
+    // 而不是让用户点进去才在阅读器里撞错误。
+    final AsyncValue<bool> health = ref.watch(
+      workbookHealthProvider(workbook.id),
+    );
+    final bool broken = health.maybeWhen<bool>(
+      data: (bool ok) => !ok,
+      orElse: () => false,
+    );
+
+    void handleTap() {
+      if (broken) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('这份卷的文件缺失了。长按可以删除它，然后重新导入。'),
+            duration: Duration(seconds: 4),
           ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(ShqSpace.md),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              _Thumb(file: thumb),
-              const SizedBox(width: ShqSpace.md),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        );
+        return;
+      }
+      onTap();
+    }
+
+    return Opacity(
+      opacity: broken ? 0.55 : 1,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: handleTap,
+          onLongPress: onLongPress,
+          child: Padding(
+            padding: const EdgeInsets.all(ShqSpace.md),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Stack(
                   children: <Widget>[
-                    Text(
-                      workbook.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: ShqSpace.xs),
-                    Text(
-                      '${workbook.pageCount} 页 · ${formatRelativeTime(workbook.sortTime)}',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                    if (workbook.layoutStatus == 'missing')
-                      Text(
-                        '文件缺失',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: ShqPalette.wrong,
+                    _Thumb(file: thumb),
+                    if (broken)
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        child: Container(
+                          color: theme.colorScheme.error,
+                          padding: const EdgeInsets.symmetric(
+                            vertical: ShqSpace.xxs,
+                          ),
+                          child: Text(
+                            '文件缺失',
+                            textAlign: TextAlign.center,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: theme.colorScheme.onError,
+                            ),
+                          ),
                         ),
                       ),
                   ],
                 ),
-              ),
-            ],
+                const SizedBox(width: ShqSpace.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        workbook.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: ShqSpace.xs),
+                      Text(
+                        '${workbook.pageCount} 页 · ${formatRelativeTime(workbook.sortTime)}',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                Icon(
+                  Icons.more_vert,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -255,35 +429,12 @@ class _EmptyView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(ShqSpace.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(
-              Icons.library_books_outlined,
-              size: 56,
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-            const SizedBox(height: ShqSpace.md),
-            Text('还没有导入任何卷子', style: theme.textTheme.titleLarge),
-            const SizedBox(height: ShqSpace.sm),
-            Text(
-              '把第一份真题 PDF 导进来，就能开始刷了',
-              style: theme.textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: ShqSpace.lg),
-            FilledButton.icon(
-              onPressed: () => unawaited(onImport()),
-              icon: const Icon(Icons.file_open_outlined),
-              label: const Text('导入 PDF'),
-            ),
-          ],
-        ),
-      ),
+    return EmptyState(
+      icon: Icons.library_books_outlined,
+      title: '还没有导入任何卷子',
+      message: '把第一份真题 PDF 导进来，就能开始刷了',
+      actionLabel: '导入 PDF',
+      onAction: () => unawaited(onImport()),
     );
   }
 }

@@ -25,6 +25,10 @@ abstract final class ShqRadius {
   static const double sm = 6;
   static const double md = 10;
   static const double lg = 16;
+
+  /// 底部浮层（bottom sheet）的顶部圆角。独立于 lg：浮层是"从屏幕边缘
+  /// 长出来的面板"，比卡片更需要宣告自己的边界。
+  static const double xl = 24;
   static const double pill = 999;
 }
 

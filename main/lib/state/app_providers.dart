@@ -3,6 +3,7 @@ import 'package:shuaqi/app/bootstrap.dart';
 import 'package:shuaqi/app/import/import_workbook.dart';
 import 'package:shuaqi/domain/model/workbook.dart';
 import 'package:shuaqi/infra/db/dao/workbook_dao.dart';
+import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
 
 /// 订阅状态的集中出口（`lib/state/`）。
@@ -43,4 +44,16 @@ final Provider<WorkbookImporter> workbookImporterProvider =
 final FutureProvider<List<Workbook>> bookshelfProvider =
     FutureProvider<List<Workbook>>((Ref ref) {
       return ref.watch(workbookDaoProvider).listByRecent();
+    });
+
+/// 一卷的 source.pdf 是否还在（书架"文件缺失"态用）。
+///
+/// 为什么需要它：库里有一条记录、但 Vault 里的 PDF 被用户从文件管理器删了
+/// （或上次导入中途被杀留下残局）——不探测的话，点进去才在阅读器里报错，
+/// 书架先置灰 + 给一句"可删除后重新导入"更诚实。
+/// `existsSync` 是一次 stat，放进 provider 而不是 build（INV-01：落笔路径外
+/// 也不该在 build 里做 IO）。
+final FutureProvider<bool> Function(String) workbookHealthProvider =
+    FutureProvider.family<bool, String>((Ref ref, String workbookId) async {
+      return ref.watch(vaultProvider).exists(VaultPaths.sourcePdf(workbookId));
     });

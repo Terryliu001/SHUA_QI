@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/state/theme_mode_provider.dart';
 import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/app_theme.dart';
 
@@ -20,17 +21,8 @@ class ShuaqiApp extends ConsumerWidget {
       theme: ShqTheme.light(),
       darkTheme: ShqTheme.dark(),
       themeMode: mode,
-      initialRoute: AppRoutes.bookshelf,
+      initialRoute: AppRoutes.shell,
       onGenerateRoute: AppRoutes.onGenerateRoute,
     );
   }
 }
-
-/// 主题模式。目前恒为 `system`，且**没有 UI 能改它**——
-/// 设置页与持久化属于 T6.1，现在给个可切换的开关只会制造"能点但不生效"的假功能。
-///
-/// 放在 `ui/` 而不是 `state/`：它返回的是 Material 的 [ThemeMode]，
-/// 属于展示层概念，不该污染 `state/` 的纯状态。
-final Provider<ThemeMode> themeModeProvider = Provider<ThemeMode>(
-  (Ref ref) => ThemeMode.system,
-);

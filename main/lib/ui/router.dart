@@ -1,20 +1,23 @@
 import 'package:flutter/material.dart';
-import 'package:shuaqi/ui/bookshelf/bookshelf_page.dart';
 import 'package:shuaqi/ui/reader/reader_page.dart';
+import 'package:shuaqi/ui/shell/app_shell.dart';
 
 /// 路由表。
 ///
 /// 用 Navigator 1.0 的 `onGenerateRoute`，不引入 go_router ——
 /// 后者不在白名单（§5.3 依赖白名单），而且本项目只有 6 个页面，手写表更可控。
+///
+/// 顶层只有一条路由：外壳（四个主 tab）。tab 切换是外壳内部状态，
+/// 不进路由栈——否则系统返回键会一级级退 tab，而不是直接退出阅读器。
 abstract final class AppRoutes {
-  static const String bookshelf = '/';
+  static const String shell = '/';
   static const String reader = '/reader';
 
   static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
     switch (settings.name) {
-      case bookshelf:
+      case shell:
         return MaterialPageRoute<void>(
-          builder: (BuildContext context) => const BookshelfPage(),
+          builder: (BuildContext context) => const AppShell(),
           settings: settings,
         );
       case reader:
