@@ -26,10 +26,24 @@ dependencies:
 
   # 状态管理（唯一允许的方案，见规格 §9：禁止 get_it / provider 混用）
   flutter_riverpod: 3.4.3
-  pdfrx: 2.9.0
+  # 本地存储与路径
+  path: 1.9.1
+  path_provider: 2.1.6
+  sqflite: 2.4.5
+
+  # pdfrx 暂时取掉（T0.4 已完成，spike 已归档到 spikes/_archive/）。
+  # 原因：它是 native assets 包，只要留在 dependencies 里，宿主机 `flutter test`
+  # 就会强制用 MSVC 编译 pdfium 的 gate 库；而本机沙箱禁止 reg.exe，
+  # native_toolchain_c 定位不到 Windows SDK → 整个测试套件报 C1083 无法运行。
+  # T1.5 开始做阅读器时再加回来：pdfrx: 2.9.0（并重跑 tool/patch_pdfium_mirror.py）。
 
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+
+  # 在真机上跑测试的 binding（来自 Flutter SDK，不额外下载包）。
+  # DB 测试放这里的理由见 integration_test/db_test.dart 顶部注释。
+  integration_test:
     sdk: flutter
 
   # 静态检查规则集（仅开发期需要）。规则清单在 analysis_options.yaml。

@@ -29,6 +29,9 @@ analyzer:
     - "**/*.g.dart"
     - "**/*.freezed.dart"
     - "**/*.mocks.dart"
+    # 已归档的阶段 0 spike：结论已写进项目日志，代码留档备查。
+    # 它们依赖被临时移除的 pdfrx，所以不参与静态检查。
+    - spikes/_archive/**
 
 linter:
   rules:
