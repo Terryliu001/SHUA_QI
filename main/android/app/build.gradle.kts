@@ -32,6 +32,12 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // 不要在这里写 ndk { abiFilters }：实测无效。
+        // Flutter 构建时会注入 -Ptarget-platform=android-arm,android-arm64,android-x64，
+        // 它在 Gradle 侧覆盖这里的 abiFilters（2026-10-22 验证：加了之后 APK 仍含三个 ABI）。
+        // 正确的收敛方式是命令行限定：flutter build apk --target-platform android-arm64
+        // （flutter run 也支持同一参数），本项目目标设备是 arm64。
     }
 
     buildTypes {

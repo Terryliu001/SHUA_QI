@@ -21,6 +21,8 @@ environment:
 #           share_plus / device_info_plus
 # ============================================================================
 dependencies:
+  crypto: 3.0.7
+  file_picker: 13.1.0
   flutter:
     sdk: flutter
 
@@ -31,11 +33,12 @@ dependencies:
   path_provider: 2.1.6
   sqflite: 2.4.5
 
-  # pdfrx 暂时取掉（T0.4 已完成，spike 已归档到 spikes/_archive/）。
-  # 原因：它是 native assets 包，只要留在 dependencies 里，宿主机 `flutter test`
-  # 就会强制用 MSVC 编译 pdfium 的 gate 库；而本机沙箱禁止 reg.exe，
-  # native_toolchain_c 定位不到 Windows SDK → 整个测试套件报 C1083 无法运行。
-  # T1.5 开始做阅读器时再加回来：pdfrx: 2.9.0（并重跑 tool/patch_pdfium_mirror.py）。
+  # PDF 渲染（T0.4 已验：首屏 28ms / 翻页 3ms）。
+  # ⚠️ 它是 native assets 包：只要在依赖里，宿主机 `flutter test` 就会试图用 MSVC
+  # 编译 pdfium 的 gate 库，而本机沙箱禁 reg.exe → 找不到 Windows SDK → 测试整个挂。
+  # 所以跑宿主机测试要用 `bash tool/run_tests.sh`（它会临时摘掉本依赖再跑）。
+  # 首次构建/换机后要重跑 tool/patch_pdfium_mirror.py（pdfium 从 github 下载，本机不通）。
+  pdfrx: 2.9.0
 
 dev_dependencies:
   flutter_test:
