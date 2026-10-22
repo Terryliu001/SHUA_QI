@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
@@ -23,6 +24,7 @@ class PagedReaderView extends StatefulWidget {
     required this.onPageChanged,
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
+    this.sessionId,
   });
 
   final List<WbPage> pages;
@@ -31,6 +33,9 @@ class PagedReaderView extends StatefulWidget {
   final ValueChanged<int> onPageChanged;
   final PaperStyle style;
   final int intensity;
+
+  /// 当前 draft 会话 id。null = 不挂墨迹层。
+  final String? sessionId;
 
   @override
   State<PagedReaderView> createState() => PagedReaderViewState();
@@ -191,6 +196,11 @@ class PagedReaderViewState extends State<PagedReaderView> {
 
             return GestureDetector(
               behavior: HitTestBehavior.translucent,
+              // 双击等页面手势只收 touch：stylus 的拖动交给墨迹层
+              //（规格 §6.9.1「笔写、指滚」）。
+              supportedDevices: const <PointerDeviceKind>{
+                PointerDeviceKind.touch,
+              },
               // 双击：fit-width ↔ 2 倍
               onDoubleTap: () {
                 if (index != _current) {
@@ -220,6 +230,13 @@ class PagedReaderViewState extends State<PagedReaderView> {
                         : 1,
                     style: widget.style,
                     intensity: widget.intensity,
+                    sessionId: widget.sessionId,
+                    // 放大状态禁用书写：那时 stylus 拖动应当平移页面，
+                    // 而不是又画又跑（T2.1 的取舍；1x 书写是刷题主路径）。
+                    inkEnabled:
+                        widget.sessionId != null &&
+                        index == _current &&
+                        !_zoomed,
                   ),
                 ),
               ),

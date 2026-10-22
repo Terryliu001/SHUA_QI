@@ -4,17 +4,21 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/ink_providers.dart';
+import 'package:shuaqi/ui/reader/ink_layer.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/paper_effect.dart';
 
-/// 单页图层：白纸 + 页位图。
-///
-/// 第 2 周的墨迹层会叠在它上面（所以这里刻意只管背景，不碰手势）。
+/// 单页图层：白纸 + 页位图（+ 第 2 周起的墨迹层）。
 ///
 /// [renderScale] 用来提高"放大后"的清晰度：显示尺寸不变，但按 `dpr × renderScale`
 /// 出图。T0.4 实测 4× 倍率下一块 200×120pt 只要 4ms，所以放大时重渲染是划算的；
 /// 反过来若一直用 1× 的图去放大，4 倍时就是一片糊。
+///
+/// ## 墨迹层的位置（T1.6 立下的红线）
+/// 墨迹层是 [PaperEffect] 的**兄弟节点**（叠在它上面），绝不是子节点——
+/// 否则笔迹会被纸感滤镜 / 夜读 duotone 染色（REQ-15）。
 class PageLayer extends StatefulWidget {
   const PageLayer({
     super.key,
@@ -25,6 +29,8 @@ class PageLayer extends StatefulWidget {
     this.qualityWidth,
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
+    this.sessionId,
+    this.inkEnabled = false,
   });
 
   final PageImageCache cache;
@@ -47,6 +53,12 @@ class PageLayer extends StatefulWidget {
   /// 纸感样式与强度。**只作用背景层**，第 2 周的墨迹层是兄弟节点，不吃这个滤镜。
   final PaperStyle style;
   final int intensity;
+
+  /// 所属会话（draft session id）。null = 不挂墨迹层（缩略图等场景）。
+  final String? sessionId;
+
+  /// 这一页此刻是否接受落笔（分页模式放大中用 touch 平移，不写字）。
+  final bool inkEnabled;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -109,7 +121,7 @@ class _PageLayerState extends State<PageLayer> {
     final double height = widget.width * widget.page.height / widget.page.width;
     final ui.Image? image = _image;
 
-    return PaperEffect(
+    final Widget paper = PaperEffect(
       style: widget.style,
       intensity: widget.intensity,
       child: Container(
@@ -147,6 +159,24 @@ class _PageLayerState extends State<PageLayer> {
                 filterQuality: FilterQuality.low,
               ),
       ),
+    );
+
+    // 墨迹层：PaperEffect 的兄弟节点（T1.6 红线），只吃自己的 stylus 手势
+    final String? sessionId = widget.sessionId;
+    if (sessionId == null || !widget.inkEnabled) {
+      return paper;
+    }
+    return Stack(
+      children: <Widget>[
+        Positioned.fill(child: paper),
+        Positioned.fill(
+          child: InkLayer(
+            inkKey: InkPageKey(sessionId, widget.page.index),
+            pageWidthPt: widget.page.width,
+            width: widget.width,
+          ),
+        ),
+      ],
     );
   }
 }

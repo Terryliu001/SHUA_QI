@@ -266,6 +266,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
 
     final int initial = _initialPage ?? 0;
+    // 走到这里 ready 一定非空（上面 guard 过），session 一定已建好
+    final String sessionId = ready.session.id;
     return Column(
       // 必须 stretch：Column 默认 center 会把阅读视图按"自身宽度"居中，
       // 阅读视图一旦不撑满宽度，它的裁剪边界就变成内容边界（实测会裁掉右侧内容）。
@@ -281,6 +283,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   onPageChanged: _onPageChanged,
                   style: _style,
                   intensity: _intensity,
+                  sessionId: sessionId,
                 )
               : ScrollReaderView(
                   key: _scrollKey,
@@ -290,6 +293,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   onPageChanged: _onPageChanged,
                   style: _style,
                   intensity: _intensity,
+                  sessionId: sessionId,
                   // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
                   onZoomChanged: (double value) => setState(() {
                     _scrollZoom = value;

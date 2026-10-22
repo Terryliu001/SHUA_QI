@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
@@ -52,6 +53,7 @@ class ScrollReaderView extends StatefulWidget {
     this.onZoomChanged,
     this.style = PaperStyle.original,
     this.intensity = ReaderPrefs.defaultIntensity,
+    this.sessionId,
   });
 
   final List<WbPage> pages;
@@ -61,6 +63,9 @@ class ScrollReaderView extends StatefulWidget {
   final ValueChanged<double>? onZoomChanged;
   final PaperStyle style;
   final int intensity;
+
+  /// 当前 draft 会话 id。null = 不挂墨迹层（纯阅读，比如以后的历史提交回看）。
+  final String? sessionId;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -530,6 +535,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 qualityWidth: _bitmapWidthPx,
                 style: widget.style,
                 intensity: widget.intensity,
+                sessionId: widget.sessionId,
+                inkEnabled: widget.sessionId != null,
               ),
             ),
           );
@@ -550,6 +557,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           height: viewport.height,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
+            // 只收 touch：stylus 的拖动是"写字"（墨迹层自己消费），
+            // 绝不能同时被这个缩放手势当成平移——否则边写边跑画面。
+            // 规格 §6.9.1「笔写、指滚」在滚动模式的落地方式。
+            supportedDevices: const <PointerDeviceKind>{
+              PointerDeviceKind.touch,
+            },
             onScaleStart: _onScaleStart,
             onScaleUpdate: _onScaleUpdate,
             onScaleEnd: _onScaleEnd,
