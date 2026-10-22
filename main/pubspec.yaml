@@ -26,6 +26,7 @@ dependencies:
 
   # 状态管理（唯一允许的方案，见规格 §9：禁止 get_it / provider 混用）
   flutter_riverpod: 3.4.3
+  pdfrx: 2.9.0
 
 dev_dependencies:
   flutter_test:
