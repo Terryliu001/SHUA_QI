@@ -96,7 +96,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   },
                 ),
               ),
-              const _Note('深色是「夜读」配色：暖黑纸 + 暖白墨，长时间读更省眼'),
+              const _Note('深色只影响界面骨架（书架 / 顶栏 / 浮层）。卷面配色在「阅读默认」里单独选：'
+                  '原图 = 白底黑字，夜读 = 黑底白字'),
             ],
           ),
           _Section(
@@ -266,7 +267,7 @@ class _ModeRow extends StatelessWidget {
   }
 }
 
-/// 默认纸感：五个色块 + 选中勾。色块填充按当前强度混合
+/// 默认纸感：六个色块 + 选中勾。色块填充按当前强度混合
 /// （白 → 纸色），拖动下面的滑条时这里能直接看到结果。
 class _StyleRow extends StatelessWidget {
   const _StyleRow({
@@ -285,6 +286,7 @@ class _StyleRow extends StatelessWidget {
     (PaperStyle.ivory, '象牙'),
     (PaperStyle.gray, '浅灰'),
     (PaperStyle.green, '护眼'),
+    (PaperStyle.night, '夜读'),
   ];
 
   @override
@@ -302,8 +304,10 @@ class _StyleRow extends StatelessWidget {
         children: <Widget>[
           Text('默认纸感', style: theme.textTheme.labelLarge),
           const SizedBox(height: ShqSpace.sm),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // Wrap 而不是 Row：窄屏（手机竖屏）六个色块一行放不下，要能折行。
+          Wrap(
+            spacing: ShqSpace.lg,
+            runSpacing: ShqSpace.md,
             children: <Widget>[
               for (final (PaperStyle style, String label) in _items)
                 _StyleDot(
@@ -337,6 +341,10 @@ class _StyleDot extends StatelessWidget {
   final VoidCallback onTap;
 
   Color get _fill {
+    // 夜读色块直接给夜读纸色：它的纸色不来自"白 × 增益"，是两端色映射的暗端。
+    if (style.isDarkPaper) {
+      return ShqNight.paper;
+    }
     final int? rgb = PaperRgb.of(style);
     if (rgb == null) {
       return ShqPaper.base; // original：白纸原样
@@ -368,7 +376,12 @@ class _StyleDot extends StatelessWidget {
               ),
             ),
             child: selected
-                ? Icon(Icons.check, size: 18, color: scheme.primary)
+                ? Icon(
+                    Icons.check,
+                    size: 18,
+                    // 暗纸色块上用暖白勾，否则深墨勾在近黑上看不见。
+                    color: style.isDarkPaper ? ShqNight.ink : scheme.primary,
+                  )
                 : null,
           ),
           const SizedBox(height: ShqSpace.xs),
@@ -400,7 +413,8 @@ class _IntensityRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final bool enabled = style != PaperStyle.original;
+    // 原图没有纸色可染；夜读是两端色映射（暗纸端 + 亮墨端），强度不参与。
+    final bool enabled = style != PaperStyle.original && !style.isDarkPaper;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
         ShqSpace.lg,

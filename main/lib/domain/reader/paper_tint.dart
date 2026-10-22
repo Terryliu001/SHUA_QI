@@ -11,6 +11,9 @@ abstract final class PaperRgb {
   static const int green = 0xFFE9F1E7;
 
   /// [PaperStyle.original] 没有颜色，返回 null。
+  ///
+  /// [PaperStyle.night] 也返回 null：夜读不是"乘法染纸"（乘法只能把白纸压暗，
+  /// 黑字会留在暗纸上变成 5:1 对比度），它走 `NightTint` 的 duotone 反色。
   static int? of(PaperStyle style) {
     switch (style) {
       case PaperStyle.warm:
@@ -22,6 +25,7 @@ abstract final class PaperRgb {
       case PaperStyle.green:
         return green;
       case PaperStyle.original:
+      case PaperStyle.night:
         return null;
     }
   }

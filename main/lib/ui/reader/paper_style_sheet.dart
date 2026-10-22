@@ -6,7 +6,9 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 /// 设计取向（设计哲学：谷歌的灵动 + iOS 的优雅简练）：
 /// - 顶部小圆拖拽把手、24dp 圆角、发丝线分隔，不堆阴影；
 /// - 色块选中态用 `AnimatedContainer` 100ms 收拢描边，即时反馈；
-/// - 深色模式整块置灰并给一句说明，而不是让用户点了没反应。
+/// - **纸样式与 App 主题正交**（2026-10-22 拍板）：深色界面下同样能选
+///   「原图」看白底黑字，浅色界面下同样能选「夜读」看黑底白字。
+///   所以这里不再有"深色模式整块置灰"的分支。
 Future<void> showPaperStyleSheet(
   BuildContext context, {
   required ReaderPrefs prefs,
@@ -42,7 +44,6 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final bool isDark = theme.brightness == Brightness.dark;
 
     return SafeArea(
       child: Container(
@@ -77,29 +78,29 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
             const SizedBox(height: ShqSpace.lg),
             Text('纸感', style: theme.textTheme.labelLarge),
             const SizedBox(height: ShqSpace.md),
-            _swatches(theme, scheme, isDark),
+            _swatches(theme, scheme),
             const SizedBox(height: ShqSpace.xl),
-            _intensity(theme, scheme, isDark),
-            if (isDark) ...<Widget>[
-              const SizedBox(height: ShqSpace.lg),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(ShqSpace.md),
-                decoration: BoxDecoration(
-                  color: scheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(ShqRadius.md),
-                ),
+            _intensity(theme, scheme),
+            const SizedBox(height: ShqSpace.lg),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(ShqSpace.md),
+              decoration: BoxDecoration(
+                color: scheme.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(ShqRadius.md),
+              ),
               child: Row(
                 children: <Widget>[
                   Icon(
-                    Icons.dark_mode_outlined,
+                    Icons.format_color_text,
                     size: 18,
                     color: scheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: ShqSpace.sm),
                   Expanded(
                     child: Text(
-                      '深色模式下纸感让位给夜读配色：暖黑纸 + 暖白墨，长时间读更省眼',
+                      '纸感只决定卷面配色：原图 = 白底黑字，夜读 = 黑底白字。'
+                      '它和 App 主题互不影响，深色界面下也能看白底黑字。',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: scheme.onSurfaceVariant,
                       ),
@@ -107,21 +108,21 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
                   ),
                 ],
               ),
-              ),
-            ],
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _swatches(ThemeData theme, ColorScheme scheme, bool isDark) {
+  Widget _swatches(ThemeData theme, ColorScheme scheme) {
     const List<(PaperStyle, String)> items = <(PaperStyle, String)>[
       (PaperStyle.original, '原图'),
       (PaperStyle.warm, '暖白'),
       (PaperStyle.ivory, '象牙'),
       (PaperStyle.gray, '浅灰'),
       (PaperStyle.green, '护眼'),
+      (PaperStyle.night, '夜读'),
     ];
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -131,7 +132,6 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
             style: style,
             label: label,
             selected: _prefs.style == style,
-            enabled: !isDark,
             scheme: scheme,
             onTap: () => _update(_prefs.copyWith(style: style)),
           ),
@@ -139,8 +139,10 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
     );
   }
 
-  Widget _intensity(ThemeData theme, ColorScheme scheme, bool isDark) {
-    final bool enabled = !isDark && _prefs.style != PaperStyle.original;
+  Widget _intensity(ThemeData theme, ColorScheme scheme) {
+    // 原图没有纸色可染；夜读是两端色映射，强度不参与。
+    final bool enabled =
+        _prefs.style != PaperStyle.original && !_prefs.style.isDarkPaper;
     return Row(
       children: <Widget>[
         Icon(
@@ -176,7 +178,6 @@ class _Swatch extends StatelessWidget {
     required this.style,
     required this.label,
     required this.selected,
-    required this.enabled,
     required this.scheme,
     required this.onTap,
   });
@@ -184,7 +185,6 @@ class _Swatch extends StatelessWidget {
   final PaperStyle style;
   final String label;
   final bool selected;
-  final bool enabled;
   final ColorScheme scheme;
   final VoidCallback onTap;
 
@@ -194,56 +194,55 @@ class _Swatch extends StatelessWidget {
     PaperStyle.ivory => ShqPaper.ivory,
     PaperStyle.gray => ShqPaper.gray,
     PaperStyle.green => ShqPaper.green,
+    PaperStyle.night => ShqNight.paper,
   };
 
   @override
   Widget build(BuildContext context) {
-    final double opacity = enabled ? 1 : 0.35;
-    return Opacity(
-      opacity: opacity,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: enabled ? onTap : null,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            AnimatedContainer(
-              duration: ShqMotion.instant,
-              curve: Curves.easeOutCubic,
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: _fill,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: selected
-                      ? scheme.primary
-                      : (style == PaperStyle.original
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          AnimatedContainer(
+            duration: ShqMotion.instant,
+            curve: Curves.easeOutCubic,
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: _fill,
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? scheme.primary
+                    : (style == PaperStyle.original
                           ? scheme.outline
                           : scheme.outlineVariant),
-                  width: selected ? 2 : 1,
-                ),
-              ),
-              child: selected
-                  ? Icon(
-                      Icons.check,
-                      size: 20,
-                      color: style == PaperStyle.original
-                          ? scheme.primary
-                          : ShqPalette.ink,
-                    )
-                  : null,
-            ),
-            const SizedBox(height: ShqSpace.xs),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: selected ? scheme.primary : scheme.onSurfaceVariant,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                // 夜读色块本身是近黑，选中描边要更醒目一点，否则看不出被选中。
+                width: selected ? (style.isDarkPaper ? 3 : 2) : 1,
               ),
             ),
-          ],
-        ),
+            child: selected
+                ? Icon(
+                    Icons.check,
+                    size: 20,
+                    // 勾要压在色块上看清楚：亮纸用深墨，暗纸用暖白墨。
+                    color: style == PaperStyle.original
+                        ? scheme.primary
+                        : (style.isDarkPaper ? ShqNight.ink : ShqPalette.ink),
+                  )
+                : null,
+          ),
+          const SizedBox(height: ShqSpace.xs),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+              color: selected ? scheme.primary : scheme.onSurfaceVariant,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            ),
+          ),
+        ],
       ),
     );
   }

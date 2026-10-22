@@ -7,6 +7,7 @@ import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_layer.dart';
+import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/paper_effect.dart';
@@ -126,9 +127,12 @@ class _PageLayerState extends State<PageLayer> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    final bool isDark = theme.brightness == Brightness.dark;
     final double height = widget.width * widget.page.height / widget.page.width;
     final ui.Image? image = _image;
+
+    // 纸是暗的还是亮的，只看**纸样式**（`PaperStyle.isDarkPaper`），
+    // 不看 App 主题：深色界面下看白底黑字的卷子是正常组合（2026-10-22 拍板）。
+    final bool darkPaper = widget.style.isDarkPaper;
 
     // 背景层：PaperEffect 只染这一棵树。
     //
@@ -139,27 +143,30 @@ class _PageLayerState extends State<PageLayer> {
     // 重新光栅化（2 页 A4 ≈ 12.8MP/帧的填充），120Hz 必掉帧。
     // 加一层 boundary 后，平移只是合成器搬一张缓存贴图。
     // 它同时把"墨迹层每帧重绘"与"PDF 位图"隔开：写字时不重画背景。
+    //
+    // 层次：**边框与投影在滤镜外层**。它们在滤镜里会被 duotone 一起反色
+    // （黑投影 → 暖白发光），夜读纸上就会出现一圈脏光。
     final Widget paper = RepaintBoundary(
-      child: PaperEffect(
-        style: widget.style,
-        intensity: widget.intensity,
-        child: SizedBox(
-          width: widget.width,
-          height: height,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: ShqPaper.base,
-              // 暗色下页面与背景只差亮度，一圈极淡亮边让"纸"从近黑背景里显形；
-              // 投影同时换得更淡更暖（暗底里重投影显脏）。
-              border: isDark ? Border.all(color: ShqNight.pageEdge) : null,
-              boxShadow: <BoxShadow>[
-                BoxShadow(
-                  color: isDark ? ShqNight.pageShadow : ShqPaper.lightPageShadow,
-                  blurRadius: isDark ? 10 : 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
+      child: SizedBox(
+        width: widget.width,
+        height: height,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            // 页面底色（位图未就绪时的底）：暗纸用夜读纸色，其余用白纸。
+            color: darkPaper ? ShqNight.paper : ShqPaper.base,
+            // 暗纸在暗背景里只差亮度，一圈极淡亮边让"纸"显形。
+            border: darkPaper ? Border.all(color: ShqNight.pageEdge) : null,
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: ShqPaper.lightPageShadow,
+                blurRadius: 6,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: PaperEffect(
+            style: widget.style,
+            intensity: widget.intensity,
             child: image == null
                 ? Center(
                     child: SizedBox(
@@ -204,6 +211,8 @@ class _PageLayerState extends State<PageLayer> {
               inkKey: InkPageKey(sessionId, widget.page.index),
               pageWidthPt: widget.page.width,
               width: widget.width,
+              // 墨色跟纸配对（不是跟界面主题配对）：夜读纸 → 暖白墨。
+              inkColor: inkColorFor(widget.style),
               style: widget.inkStyle,
               onPenDown: widget.onPenDown,
             ),

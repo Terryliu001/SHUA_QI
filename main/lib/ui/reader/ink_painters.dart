@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/ink_ribbon.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
@@ -161,11 +162,13 @@ class ActiveStrokePainter extends CustomPainter {
   }
 }
 
-/// 墨色按明暗环境取（设计哲学：暗色墨色与夜读纸同源，都是暖白）。
-Color inkColorOf(BuildContext context) =>
-    Theme.of(context).brightness == Brightness.dark
-    ? ShqNight.ink
-    : ShqPalette.ink;
+/// 墨色按**纸样式**取（不是按 App 主题取 —— 见 [PaperStyle] 的说明）。
+///
+/// 暗纸（夜读）用暖白墨，其余用深墨。判定的唯一来源是 `PaperStyle.isDarkPaper`，
+/// UI 层不许自己写 `== PaperStyle.night`，也不许看 `Theme.brightness`：
+/// 浅色界面 + 夜读纸、深色界面 + 原图纸都是合法组合。
+Color inkColorFor(PaperStyle paper) =>
+    paper.isDarkPaper ? ShqNight.ink : ShqPalette.ink;
 
-/// 荧光笔的合成色（不随明暗变化：它是"透明荧光膜"，乘在纸与字上）。
+/// 荧光笔的合成色（不随纸样式变化：它是"透明荧光膜"，乘在纸与字上）。
 const Color highlighterColorOf = ShqPalette.highlighter;

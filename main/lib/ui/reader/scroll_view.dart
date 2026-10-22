@@ -9,6 +9,7 @@ import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/domain/reader/scroll_math.dart';
+import 'package:shuaqi/ui/reader/camera_viewport.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -34,7 +35,7 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 ///
 /// 对应三改：
 ///
-/// 1. **相机矩阵独立成层**：`ValueNotifier<_Camera>` + `ValueListenableBuilder`
+/// 1. **相机矩阵独立成层**：`ValueNotifier<Camera>` + `ValueListenableBuilder`
 ///    只包住 `Transform`；每帧只更新矩阵（renderObject 标记重绘，element 树不动，
 ///    引擎复用子图层只改变换）。页面列表（Positioned × N）是静态 child，
 ///    **只在可见集变化时**才重建。
@@ -84,14 +85,6 @@ class ScrollReaderView extends StatefulWidget {
   State<ScrollReaderView> createState() => ScrollReaderViewState();
 }
 
-/// 相机状态。`ValueNotifier` 按引用比较，所以通知前手工判等（见 [_publishCamera]）。
-class _Camera {
-  const _Camera(this.offset, this.scale);
-
-  final Offset offset;
-  final double scale;
-}
-
 class ScrollReaderViewState extends State<ScrollReaderView>
     with SingleTickerProviderStateMixin {
   /// 页间距。规格 §6.9.1：连续滚动页间距 8dp。
@@ -137,8 +130,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   Timer? _qualityTimer;
 
   /// 矩阵层唯一数据源。手势 / ticker 每帧只改它，不 setState。
-  final ValueNotifier<_Camera> _cam = ValueNotifier<_Camera>(
-    const _Camera(Offset.zero, 1),
+  final ValueNotifier<Camera> _cam = ValueNotifier<Camera>(
+    const Camera(Offset.zero, 1),
   );
 
   // ── 内容坐标系（只在视口尺寸变化时重算，缩放不动它）───────────────
@@ -205,7 +198,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _scale = 1;
       _qualityScale = 1;
       _offset = Offset.zero;
-      _cam.value = const _Camera(Offset.zero, 1);
+      _cam.value = const Camera(Offset.zero, 1);
     }
   }
 
@@ -322,7 +315,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (offset == _cam.value.offset && _scale == _cam.value.scale) {
       return;
     }
-    _cam.value = _Camera(offset, _scale);
+    _cam.value = Camera(offset, _scale);
   }
 
   // ── 手势 ─────────────────────────────────────────────────────────
@@ -650,55 +643,38 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           );
         }
 
-        // 内容坐标固定；屏幕位置只由外层矩阵决定
+        // 内容坐标系里的整卷：宽 = 视口宽（fit-width），高 = 各页 + 页间距。
+        // 屏幕位置只由 [CameraViewport] 的矩阵决定，这里不含任何缩放。
         final Widget content = SizedBox(
           width: _baseWidth,
           height: _contentH,
           child: Stack(clipBehavior: Clip.none, children: pageWidgets),
         );
 
-        // 关键：外层必须**撑满视口**。
-        // 否则 LayoutBuilder 的尺寸会收缩到内容宽，ClipRect 就只裁这条窄带 ——
-        // 那正是第三版"右侧被切掉 + 放大后黑边框"的根因。
-        return SizedBox(
-          width: viewport.width,
-          height: viewport.height,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            // 只收 touch：stylus 的拖动是"写字"（墨迹层自己消费），
-            // 绝不能同时被这个缩放手势当成平移——否则边写边跑画面。
-            // 规格 §6.9.1「笔写、指滚」在滚动模式的落地方式。
-            supportedDevices: const <PointerDeviceKind>{
-              PointerDeviceKind.touch,
-            },
-            onScaleStart: _onScaleStart,
-            onScaleUpdate: _onScaleUpdate,
-            onScaleEnd: _onScaleEnd,
-            child: Listener(
-              // 笔优先的观察哨：只记录"笔最近动过"的时间戳，
-              // 不消费、不拦截任何事件（translucent）。
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: _observePointer,
-              onPointerMove: _observePointer,
-              onPointerUp: _observePointer,
-              onPointerCancel: _observePointer,
-              child: ClipRect(
-                // 丝滑关键：矩阵走 notifier 独立重建，页面列表作为静态 child
-                // 不参与每帧重建。
-                child: ValueListenableBuilder<_Camera>(
-                  valueListenable: _cam,
-                  builder: (BuildContext context, _Camera cam, Widget? child) {
-                    return Transform(
-                      alignment: Alignment.topLeft,
-                      transform: Matrix4.identity()
-                        ..translateByDouble(cam.offset.dx, cam.offset.dy, 0, 1)
-                        ..scaleByDouble(cam.scale, cam.scale, 1, 1),
-                      child: child,
-                    );
-                  },
-                  child: content,
-                ),
-              ),
+        // 视口、裁剪、矩阵三件事全在 [CameraViewport] 里 —— 那里有一条
+        // **不能改回的硬约束**：Transform 必须是"整卷尺寸"，否则命中区会被
+        // 压成视口大小（滚动模式下"看得到、写不上"的真凶，见 camera_viewport.dart）。
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // 只收 touch：stylus 的拖动是"写字"（墨迹层自己消费），
+          // 绝不能同时被这个缩放手势当成平移——否则边写边跑画面。
+          // 规格 §6.9.1「笔写、指滚」在滚动模式的落地方式。
+          supportedDevices: const <PointerDeviceKind>{PointerDeviceKind.touch},
+          onScaleStart: _onScaleStart,
+          onScaleUpdate: _onScaleUpdate,
+          onScaleEnd: _onScaleEnd,
+          child: Listener(
+            // 笔优先的观察哨：只记录"笔最近动过"的时间戳，
+            // 不消费、不拦截任何事件（translucent）。
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _observePointer,
+            onPointerMove: _observePointer,
+            onPointerUp: _observePointer,
+            onPointerCancel: _observePointer,
+            child: CameraViewport(
+              viewport: viewport,
+              camera: _cam,
+              content: content,
             ),
           ),
         );

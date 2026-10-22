@@ -43,6 +43,7 @@ class InkLayer extends ConsumerStatefulWidget {
     required this.inkKey,
     required this.pageWidthPt,
     required this.width,
+    required this.inkColor,
     this.style = InkStrokeStyle.pen,
     this.enabled = true,
     this.onPenDown,
@@ -54,6 +55,10 @@ class InkLayer extends ConsumerStatefulWidget {
   /// 页面尺寸（pt）与显示宽度（逻辑像素）。换算：`pt = local × pageWidthPt / width`。
   final double pageWidthPt;
   final double width;
+
+  /// 墨色。由纸样式决定（[inkColorFor]）：暗纸用暖白墨，其余用深墨。
+  /// **不由 App 主题决定**——笔迹要与它下面的那张纸配对，不是与界面配色配对。
+  final Color inkColor;
 
   /// 当前笔刷（钢笔 / 圆珠笔 / 荧光笔）。只影响**之后**画的笔，已落笔的不变。
   final InkStrokeStyle style;
@@ -167,7 +172,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     widget.onPenDown?.call();
     // 落笔：压力基线重置为中性，避免上一笔的重压"传染"到这一笔的起笔。
     _lastPressure = InkWidth.neutralPressure;
-    final InkRibbon ribbon = _ribbonFor(widget.style, inkColorOf(context))..clear();
+    final InkRibbon ribbon = _ribbonFor(widget.style, widget.inkColor)..clear();
     ribbon.beginStroke();
 
     final InkPoint first = InkPoint(
@@ -278,7 +283,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   @override
   Widget build(BuildContext context) {
     final InkDoc doc = ref.watch(inkDocProvider(widget.inkKey));
-    final Color inkColor = inkColorOf(context);
+    final Color inkColor = widget.inkColor;
     final double scale = _scale;
 
     // 新笔画到了才同步缓存（InkDoc 不可变，append 产生新实例）

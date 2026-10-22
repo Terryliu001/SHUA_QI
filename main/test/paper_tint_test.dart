@@ -17,6 +17,13 @@ void main() {
       }
     });
 
+    test('夜读不走乘法染纸（它由 NightTint 的 duotone 负责，任何强度都恒等）', () {
+      for (final int intensity in <int>[0, 30, 55, 100]) {
+        expect(PaperTint.forStyle(PaperStyle.night, intensity).isIdentity, isTrue);
+      }
+      expect(PaperRgb.of(PaperStyle.night), isNull);
+    });
+
     test('强度 100 = 白底完全变成纸色，黑字保持黑', () {
       final PaperTint warm = PaperTint.forStyle(PaperStyle.warm, 100);
       // 白(255) × gain = 纸色通道；黑(0) × gain = 0

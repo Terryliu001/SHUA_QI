@@ -101,9 +101,9 @@ abstract final class ShqPaper {
   static const double noiseOpacity = 0.03;
 }
 
-/// 夜读（暗色模式）专用色（T1.6 升级：暗色遮罩 → duotone 夜读）。
+/// 夜读纸样式专用色（`PaperStyle.night`，与 App 主题无关）。
 ///
-/// 与 [ShqDark]（app 骨架的冷灰）刻意分开：**页面是暖的，界面是冷的**。
+/// 与 [ShqDark]（app 骨架的冷灰）刻意分开：**纸是暖的，界面是冷的**。
 /// 暖黑纸 + 暖白墨延续浅色模式"纸感暖色 / 墨色"的基因，冷灰骨架让纸浮出来；
 /// 两头都低饱和，长时间看不累。
 abstract final class ShqNight {
@@ -111,13 +111,13 @@ abstract final class ShqNight {
   static const Color paper = Color(0xFF191612);
 
   /// 夜读墨色：duotone 亮端，黑字 → 它（`NightRgb.ink` 的 Color 形态）。
+  /// 同时也是夜读纸上的笔迹墨色（[inkColorFor]）。
   static const Color ink = Color(0xFFE9E3D5);
 
-  /// 页面发丝边：暗色下页面与背景只差亮度，一圈极淡亮边让"纸"显形。
+  /// 页面发丝边：暗纸与背景只差亮度，一圈极淡亮边让"纸"显形。
+  ///
+  /// 注意它画在**滤镜之外**：被 duotone 再反一次色就成了一块脏光。
   static const Color pageEdge = Color(0x0FFFFFFF);
-
-  /// 页面投影：暗背景里投影要更淡更暖，否则显脏。
-  static const Color pageShadow = Color(0x59000000);
 }
 
 /// 暗色表面阶梯（app 骨架：书架 / AppBar / 抽屉 / 浮层）。

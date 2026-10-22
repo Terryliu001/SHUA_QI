@@ -18,13 +18,33 @@ enum ViewMode {
 }
 
 /// 背景纸样式（REQ-15）。
+///
+/// **纸样式 = 卷面的配色，不是 App 主题。** 二者正交（2026-10-22 用户拍板）：
+/// App 主题只管骨架（书架 / AppBar / 浮层）的明暗，卷面永远按这里选的来。
+/// 所以「深色 App + 原图纸」是正常的白底黑字，「浅色 App + 夜读纸」也是合法的
+/// 黑底白字 —— 不要再用 `Theme.of(context).brightness` 去改卷面配色。
 enum PaperStyle {
-  /// 零处理，可信基线，也是导出与透明墨迹层的唯一选择。
+  /// 零处理，可信基线，也是导出与透明墨迹层的唯一选择（白底黑字）。
   original,
   warm,
   ivory,
   gray,
   green,
+
+  /// 夜读：duotone 翻转亮度轴（暖黑纸 + 暖白墨）。
+  ///
+  /// 这是**一种纸样式**，不是"深色模式的必然结果"：夜读下印刷内容退化为双色暖调，
+  /// 换来的是一天里任何时段都能读下去的对比度（详见 [NightTint]）。
+  night,
+}
+
+/// 纸样式到"纸是暗的还是亮的"的唯一判定。
+///
+/// 决定三件事：滤镜走 duotone 还是乘法、笔迹墨色取暖白还是深墨、
+/// 页面投影用暗底还是亮底那一套。只允许在 domain 判定，UI 不许自己写 `==`。
+extension PaperStyleTone on PaperStyle {
+  /// true = 暗纸亮墨（夜读）。
+  bool get isDarkPaper => this == PaperStyle.night;
 }
 
 /// `setting` 表中的键名（§5.3A）。键名是稳定契约，改名等于丢用户数据。
@@ -86,14 +106,12 @@ class ReaderPrefs {
     return this;
   }
 
-  /// 深色模式与纸感互斥（§6.9.3）：深色下强制退回 `original`，由暗色遮罩统一处理。
-  /// 纯函数，不读平台亮度，方便单测。
-  ReaderPrefs forSurfaceBrightness({required bool isDark}) {
-    if (!isDark || style == PaperStyle.original) {
-      return this;
-    }
-    return copyWith(style: PaperStyle.original);
-  }
+  /// 旧版"深色下纸感强制退回 original"的规则已废止（2026-10-22）。
+  ///
+  /// 原来的耦合会带来两个错：深色 App 下一卷试卷被强行涂成夜读（用户要的
+  /// 是"黑底白字作为一个风格选项"，不是"主题一黑 PDF 就黑"），
+  /// 而且浅色 App 里根本选不到夜读。现在纸样式与主题完全正交，
+  /// 由 [PaperStyle] 自身决定卷面配色。
 
   Map<String, Object?> toJson() => <String, Object?>{
     'mode': mode.name,

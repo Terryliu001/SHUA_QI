@@ -44,16 +44,23 @@ void main() {
       );
     });
 
-    test('深色下纸感强制退回 original（§6.9.3）', () {
-      const ReaderPrefs warm = ReaderPrefs(style: PaperStyle.warm);
-      expect(warm.forSurfaceBrightness(isDark: true).style, PaperStyle.original);
-      // 浅色下不动
-      expect(warm.forSurfaceBrightness(isDark: false).style, PaperStyle.warm);
-      // 本来就是 original 时保持原对象语义
-      expect(
-        const ReaderPrefs().forSurfaceBrightness(isDark: true).style,
-        PaperStyle.original,
-      );
+    test('纸样式与 App 主题正交：夜读只是一种纸样式，能存取、可往返', () {
+      // 深色 App 主题不再改卷面配色 —— 原图纸（白底黑字）就是原图纸。
+      const ReaderPrefs original = ReaderPrefs(style: PaperStyle.original);
+      expect(original.toJson()['style'], 'original');
+
+      // 夜读可被选中、能落盘、能读回（浅色界面下也合法）。
+      const ReaderPrefs night = ReaderPrefs(style: PaperStyle.night);
+      final ReaderPrefs restored = ReaderPrefs.fromJson(night.toJson());
+      expect(restored.style, PaperStyle.night);
+      expect(restored.style.isDarkPaper, isTrue);
+      expect(original.style.isDarkPaper, isFalse);
+    });
+
+    test('暗纸判定只认夜读（决定墨色与投影的那把钥匙）', () {
+      for (final PaperStyle style in PaperStyle.values) {
+        expect(style.isDarkPaper, style == PaperStyle.night);
+      }
     });
 
     test('setting 键名是稳定契约', () {
