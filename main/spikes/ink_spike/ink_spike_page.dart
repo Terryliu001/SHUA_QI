@@ -49,12 +49,25 @@ class _InkSpikePageState extends State<InkSpikePage> {
   Timer? _saveDebounce;
   bool _drawing = false;
   bool _allowNonStylus = false;
+
+  /// 当前正在书写的那根手指/笔的 pointer id。
+  ///
+  /// **为什么必须有它**：`Listener` 会收到屏幕上所有指针的事件。若不按 id 过滤，
+  /// 手掌或第二根手指的点会插进同一笔中间，画面上就是一条从笔尖飞到手掌的直线。
+  /// 2026-10-22 在平板上实测：开关「非笔输入」后确实出现过这种"缝合线"的风险。
+  /// 产品化（T2.1）还要再叠一层：非笔输入一律不落笔（手掌防误触）。
+  int _activePointer = -1;
+
   double _scale = 1;
   int _pageIndex = 0;
   int _lastHudBumpMs = 0;
   int _restoredStrokes = 0;
   String _saveStatus = '未落盘';
   String? _savePath;
+
+  /// 最近一次被接受的指针类型（stylus / invertedStylus / touch / mouse）。
+  /// 显示在 HUD 上，用来一眼确认"只收笔"的判定是否真的生效。
+  String _lastInputKind = '—';
 
   @override
   void initState() {
@@ -122,9 +135,12 @@ class _InkSpikePageState extends State<InkSpikePage> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
-    if (!_accepts(event.kind)) {
+    // 已经在写了：后来的指针（第二根手指、手掌）一律忽略，直到当前这笔抬起。
+    if (_drawing || !_accepts(event.kind)) {
       return;
     }
+    _activePointer = event.pointer;
+    _lastInputKind = event.kind.name;
     final Offset point = _toPagePoint(event.localPosition);
     _activePoints
       ..clear()
@@ -144,7 +160,10 @@ class _InkSpikePageState extends State<InkSpikePage> {
   }
 
   void _onPointerMove(PointerMoveEvent event) {
-    if (!_drawing || !_accepts(event.kind) || _activePoints.isEmpty) {
+    if (!_drawing ||
+        event.pointer != _activePointer ||
+        !_accepts(event.kind) ||
+        _activePoints.isEmpty) {
       return;
     }
     final Offset point = _toPagePoint(event.localPosition);
@@ -166,14 +185,14 @@ class _InkSpikePageState extends State<InkSpikePage> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    if (!_drawing) {
+    if (!_drawing || event.pointer != _activePointer) {
       return;
     }
     _commitActiveStroke();
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
-    if (!_drawing) {
+    if (!_drawing || event.pointer != _activePointer) {
       return;
     }
     _commitActiveStroke();
@@ -181,6 +200,7 @@ class _InkSpikePageState extends State<InkSpikePage> {
 
   void _commitActiveStroke() {
     _drawing = false;
+    _activePointer = -1;
     if (_activePoints.length < 2) {
       _activePoints.clear();
       _activeTick.value++;
@@ -368,6 +388,7 @@ class _InkSpikePageState extends State<InkSpikePage> {
               _metric('估算内存', '${estimateKb.toStringAsFixed(0)}KB'),
               _metric('页码', '${_pageIndex + 1}/$_pageCount'),
               _metric('计时', _formatDuration(_session.elapsed)),
+              _metric('输入', _lastInputKind),
               _metric('落盘', _saveStatus),
               if (_restoredStrokes > 0) _metric('已恢复', '$_restoredStrokes 笔'),
             ],
