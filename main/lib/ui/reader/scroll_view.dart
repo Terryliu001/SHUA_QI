@@ -10,13 +10,18 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 连续滚动模式：竖向连排、页间距 8dp、按"与视口重叠面积最大"取主可见页。
 ///
-/// **放大怎么做的**（滚动模式也要能放大）：
-/// 横向滚动放在**外层**（`SingleChildScrollView(horizontal)`），纵向列表在**内层**，
-/// 两个轴向各管各的——这样不会像 `InteractiveViewer` 包整个页列表那样抢手势
-/// （那种做法下双指缩放会和竖向滚动互相打断，画面会抖，是规格点名的坑）。
+/// ## 双指缩放为什么不直接用 InteractiveViewer
 ///
-/// 代价：滚动模式的放大是**档位**（100/125/150/200%），不是双指捏合。
-/// 这是刻意取舍——捏合缩放与纵向滚动没有不打架的实现方式。
+/// `InteractiveViewer` 内部是 `ScaleGestureRecognizer`，它把**单指拖动**也当作缩放手势的
+/// 平移分支，会赢下手势竞技场、把纵向滚动吃掉；反过来关掉它的 pan，识别器依然占位，
+/// 列表照样滚不动——这就是"缩放与滚动互相打架"的根因。
+///
+/// 这里走成熟方案（photo_view 的思路）：**不参与手势竞技场**，用最底层的 [Listener] 数指针：
+/// - 单指：什么都不做，完全交给 ListView，滚动跟原生一样跟手；
+/// - 双指：自己算两指距离，过程中用 `Transform.scale` 做**实时预览**（纯 GPU，零布局成本），
+///   松手时才提交成新的页宽并重新布局（避免每帧重建位图）。
+///
+/// 放大后页面比视口宽，横向由外层 `SingleChildScrollView` 负责，纵向仍归列表。
 class ScrollReaderView extends StatefulWidget {
   const ScrollReaderView({
     super.key,
@@ -25,6 +30,7 @@ class ScrollReaderView extends StatefulWidget {
     required this.initialPage,
     required this.onPageChanged,
     this.zoom = 1,
+    this.onZoomChanged,
   });
 
   final List<WbPage> pages;
@@ -32,8 +38,11 @@ class ScrollReaderView extends StatefulWidget {
   final int initialPage;
   final ValueChanged<int> onPageChanged;
 
-  /// 档位缩放：1.0 / 1.25 / 1.5 / 2.0。页宽 = fit 宽 × zoom。
+  /// 初始倍率（AppBar 档位菜单用）。之后双指缩放会覆盖它。
   final double zoom;
+
+  /// 倍率被双指改变后回调，让 AppBar 的百分比跟着更新。
+  final ValueChanged<double>? onZoomChanged;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -41,6 +50,8 @@ class ScrollReaderView extends StatefulWidget {
 
 class ScrollReaderViewState extends State<ScrollReaderView> {
   static const double _gap = 8;
+  static const double _minZoom = 1;
+  static const double _maxZoom = 3;
 
   final ScrollController _vertical = ScrollController();
   final ScrollController _horizontal = ScrollController();
@@ -52,9 +63,21 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
   int _current = 0;
   bool _jumped = false;
 
+  /// 已提交的倍率（决定页宽与布局）
+  double _zoom = 1;
+
+  /// 捏合过程中的临时倍率，只用于 `Transform` 预览
+  double _liveScale = 1;
+
+  final Map<int, Offset> _pointers = <int, Offset>{};
+  double _pinchBaseDistance = 0;
+
+  bool get _pinching => _pointers.length >= 2;
+
   @override
   void initState() {
     super.initState();
+    _zoom = widget.zoom.clamp(_minZoom, _maxZoom);
     _current = widget.initialPage.clamp(0, math.max(0, widget.pages.length - 1));
     _vertical.addListener(_onScroll);
   }
@@ -62,8 +85,8 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
   @override
   void didUpdateWidget(covariant ScrollReaderView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.zoom != widget.zoom) {
-      // 缩放后每页高度都变了，旧的滚动偏移不再对应同一页 → 回到当前页
+    if (oldWidget.zoom != widget.zoom && (widget.zoom - _zoom).abs() > 0.001) {
+      _zoom = widget.zoom.clamp(_minZoom, _maxZoom);
       _contentWidth = 0;
       _resyncToCurrent();
     }
@@ -92,6 +115,73 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
     _horizontal.dispose();
     super.dispose();
   }
+
+  // ── 双指缩放：只用原始指针，不参与手势竞技场 ─────────────────────────────
+
+  void _onPointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length == 2) {
+      _pinchBaseDistance = _distanceBetweenPointers();
+      setState(() {
+        _liveScale = 1;
+      });
+    }
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (!_pointers.containsKey(event.pointer)) {
+      return;
+    }
+    _pointers[event.pointer] = event.localPosition;
+    if (!_pinching || _pinchBaseDistance <= 0) {
+      return;
+    }
+    final double distance = _distanceBetweenPointers();
+    final double target = (_zoom * distance / _pinchBaseDistance).clamp(
+      _minZoom,
+      _maxZoom,
+    );
+    final double preview = target / _zoom;
+    if ((preview - _liveScale).abs() < 0.002) {
+      return;
+    }
+    // 只更新预览倍率：Transform 是纯 GPU 变换，这个 setState 很便宜
+    setState(() {
+      _liveScale = preview;
+    });
+  }
+
+  void _onPointerEnd(PointerEvent event) {
+    _pointers.remove(event.pointer);
+    if (_pointers.isNotEmpty) {
+      return;
+    }
+    if ((_liveScale - 1).abs() > 0.01) {
+      // 所有手指离开：把预览倍率提交成真实倍率
+      final double next = (_zoom * _liveScale).clamp(_minZoom, _maxZoom);
+      setState(() {
+        _zoom = next;
+        _liveScale = 1;
+        _contentWidth = 0; // 强制重算布局
+      });
+      widget.onZoomChanged?.call(next);
+      _resyncToCurrent();
+    } else if (_liveScale != 1) {
+      setState(() {
+        _liveScale = 1;
+      });
+    }
+  }
+
+  double _distanceBetweenPointers() {
+    if (_pointers.length < 2) {
+      return 0;
+    }
+    final List<Offset> points = _pointers.values.toList(growable: false);
+    return (points[0] - points[1]).distance;
+  }
+
+  // ── 布局 ────────────────────────────────────────────────────────────────
 
   void _layout(double width) {
     if (width == _contentWidth && _topOffsets.isNotEmpty) {
@@ -124,7 +214,7 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
     for (int i = 0; i < _topOffsets.length; i++) {
       final double itemTop = _topOffsets[i];
       if (itemTop > bottom) {
-        break; // 后面的都在视口下方
+        break;
       }
       final double overlap =
           math.min(itemTop + _heights[i], bottom) - math.max(itemTop, top);
@@ -149,13 +239,12 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
           constraints.maxWidth,
           ShqLayout.maxReadingWidth,
         );
-        final double contentWidth = fitWidth * widget.zoom;
+        final double contentWidth = fitWidth * _zoom;
         _layout(contentWidth);
         _viewportHeight = constraints.maxHeight;
 
         if (!_jumped && _topOffsets.isNotEmpty) {
           _jumped = true;
-          // 首帧后跳到最后阅读位置；用 addPostFrameCallback 避免在 build 里动控制器
           WidgetsBinding.instance.addPostFrameCallback((Duration _) {
             if (!_vertical.hasClients) {
               return;
@@ -170,9 +259,12 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
         final double sidePadding =
             math.max(0, (constraints.maxWidth - contentWidth) / 2) + ShqSpace.sm;
 
-        final Widget list = ListView.builder(
+        Widget list = ListView.builder(
           controller: _vertical,
-          // 预构建视口外的内容：滚动时下一屏的页已在渲染，不会闪白
+          // 捏合的两指期间不要滚动，否则画面会一边缩放一边跑
+          physics: _pinching
+              ? const NeverScrollableScrollPhysics()
+              : const ClampingScrollPhysics(),
           scrollCacheExtent: ScrollCacheExtent.pixels(
             constraints.maxHeight * 0.8,
           ),
@@ -193,22 +285,38 @@ class ScrollReaderViewState extends State<ScrollReaderView> {
           },
         );
 
-        // 不需要横向滚动时不要套 ScrollView：少一层手势竞技，滚动手感更直接
-        if (widget.zoom <= 1.0) {
-          return list;
-        }
-        return Scrollbar(
-          controller: _horizontal,
-          thumbVisibility: true,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
+        if (_zoom > 1.0) {
+          list = Scrollbar(
             controller: _horizontal,
-            child: SizedBox(
-              width: contentWidth + sidePadding * 2,
-              height: constraints.maxHeight,
-              child: list,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              controller: _horizontal,
+              child: SizedBox(
+                width: contentWidth + sidePadding * 2,
+                height: constraints.maxHeight,
+                child: list,
+              ),
             ),
-          ),
+          );
+        }
+
+        return Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: _onPointerDown,
+          onPointerMove: _onPointerMove,
+          onPointerUp: _onPointerEnd,
+          onPointerCancel: _onPointerEnd,
+          child: _liveScale == 1
+              ? list
+              // 捏合预览：只做视觉缩放，不动布局；ClipRect 防止放大时画到父级外面
+              : ClipRect(
+                  child: Transform.scale(
+                    scale: _liveScale,
+                    alignment: Alignment.center,
+                    child: list,
+                  ),
+                ),
         );
       },
     );

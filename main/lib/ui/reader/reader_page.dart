@@ -219,6 +219,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                   initialPage: initial,
                   onPageChanged: _onPageChanged,
                   zoom: _scrollZoom,
+                  // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
+                  onZoomChanged: (double value) => setState(() {
+                    _scrollZoom = value;
+                  }),
                 ),
         ),
         SafeArea(
