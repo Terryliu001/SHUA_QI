@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/undo_stack.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 
 /// T2.3 编辑控制器（抬笔 / 擦除 / 撤销 / 重做）的集成测试。
@@ -47,7 +48,7 @@ void main() {
     expect(uids(container, key), <String>['a']);
   });
 
-  test('一次擦除拖动（删多笔）= 一步撤销，恢复后顺序正确', () async {
+  test('一次擦除拖动（整笔擦掉两笔）= 一步撤销，恢复后顺序正确', () async {
     final ProviderContainer container = newContainer();
     addTearDown(container.dispose);
     final InkEditController ctrl = container.read(
@@ -58,9 +59,16 @@ void main() {
     }
 
     final InkDoc doc = container.read(inkDocProvider(key));
-    ctrl.eraseStrokes(<InkStroke>[doc.strokes[0], doc.strokes[2]]);
-    expect(uids(container, key), <String>['b'], reason: '边划边删：立刻消失');
-    ctrl.eraseStrokes(<InkStroke>[doc.strokes[1]]);
+    // 整笔擦掉 = 碎片为空
+    ctrl.applyErasePatches(<ErasePatch>[
+      (index: 0, original: doc.strokes[0], fragments: const <InkStroke>[]),
+      (index: 2, original: doc.strokes[2], fragments: const <InkStroke>[]),
+    ]);
+    expect(uids(container, key), <String>['b'], reason: '边划边擦：立刻消失');
+    final InkDoc afterFirst = container.read(inkDocProvider(key));
+    ctrl.applyErasePatches(<ErasePatch>[
+      (index: 0, original: afterFirst.strokes[0], fragments: const <InkStroke>[]),
+    ]);
     expect(uids(container, key), isEmpty);
     ctrl.endErase();
 
@@ -76,6 +84,71 @@ void main() {
     }
     expect(uids(container, key), isEmpty);
     expect(container.read(inkEditProvider(key)).canUndo, isFalse);
+  });
+
+  test('局部擦除：一笔切成两笔，撤销换回原笔（uid 也回来）', () async {
+    final ProviderContainer container = newContainer();
+    addTearDown(container.dispose);
+    final InkEditController ctrl = container.read(
+      inkEditProvider(key).notifier,
+    );
+    await ctrl.commit(stroke('a'));
+    final InkStroke original = container.read(inkDocProvider(key)).strokes.single;
+
+    final List<InkStroke> fragments = <InkStroke>[
+      InkStroke(uid: 'a1', points: original.points.sublist(0, 1)),
+      InkStroke(
+        uid: 'a2',
+        points: original.points.sublist(1),
+        style: original.style,
+        colorIndex: original.colorIndex,
+        widthLevel: original.widthLevel,
+      ),
+    ];
+    ctrl.applyErasePatches(<ErasePatch>[
+      (index: 0, original: original, fragments: fragments),
+    ]);
+    expect(uids(container, key), <String>['a1', 'a2']);
+    ctrl.endErase();
+
+    expect(ctrl.undo(), isTrue);
+    expect(uids(container, key), <String>['a'], reason: '碎片要换回原笔，不是留着碎片');
+    expect(ctrl.redo(), isTrue);
+    expect(uids(container, key), <String>['a1', 'a2']);
+  });
+
+  test('结构性改动会推进 epoch（绘制层据此整体重建）', () async {
+    final ProviderContainer container = newContainer();
+    addTearDown(container.dispose);
+    final InkEditController ctrl = container.read(
+      inkEditProvider(key).notifier,
+    );
+    await ctrl.commit(stroke('a'));
+    final int afterAppend = container.read(inkEditProvider(key)).epoch;
+    // 纯追加不动 epoch
+    await ctrl.commit(stroke('b'));
+    expect(
+      container.read(inkEditProvider(key)).epoch,
+      afterAppend,
+      reason: '抬笔是纯追加，绘制层可以走增量',
+    );
+    // 擦除会动
+    final InkDoc doc = container.read(inkDocProvider(key));
+    ctrl.applyErasePatches(<ErasePatch>[
+      (index: 0, original: doc.strokes.first, fragments: const <InkStroke>[]),
+    ]);
+    expect(
+      container.read(inkEditProvider(key)).epoch,
+      greaterThan(afterAppend),
+    );
+    // 撤销也会动
+    final int afterErase = container.read(inkEditProvider(key)).epoch;
+    ctrl.endErase();
+    ctrl.undo();
+    expect(
+      container.read(inkEditProvider(key)).epoch,
+      greaterThan(afterErase),
+    );
   });
 
   test('新编辑清空重做分支', () async {

@@ -28,15 +28,21 @@ class CommittedInkCache {
 
   int _paintedStrokeCount = 0;
   bool _darkPaper = false;
+  int _epoch = -1;
 
   /// 当前缓存里的组合数（HUD / 单测用）。
   int get specCount => _ribbons.length;
 
   /// 与新 [InkDoc] 同步：只 append 新增的笔画。
-  void sync(InkDoc doc, {required bool darkPaper}) {
-    // 纸的明暗变了：所有取色与荧光笔合成方式都要重算，整体重建一次。
-    if (darkPaper != _darkPaper) {
+  ///
+  /// [epoch] 是控制器的"结构性改动"计数（擦除 / 撤销 / 重做 / 清空都会 +1）。
+  /// 那些操作让笔迹集合**既不是纯追加、长度也可能不变**（一笔换两笔），
+  /// 只比 `strokeCount` 会漏判，所以 epoch 一变就整体重建。
+  void sync(InkDoc doc, {required bool darkPaper, required int epoch}) {
+    // 纸的明暗变了：所有取色都要重算；epoch 变了：前缀不再可信。两者都整体重建。
+    if (darkPaper != _darkPaper || epoch != _epoch) {
       _darkPaper = darkPaper;
+      _epoch = epoch;
       clear();
     }
     if (doc.strokeCount < _paintedStrokeCount) {

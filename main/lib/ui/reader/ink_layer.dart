@@ -8,6 +8,7 @@ import 'package:shuaqi/domain/ink/ink_compress.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/ink/ink_width.dart';
+import 'package:shuaqi/domain/ink/undo_stack.dart';
 import 'package:shuaqi/domain/util/ulid.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_brush_spec.dart';
@@ -324,17 +325,43 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     _eraseAlong(null, at);
   }
 
-  /// 擦掉 [from]→[to] 这一划经过的笔画（[from] 为 null = 落笔点一下）。
+  /// 擦掉 [from]→[to] 这一划**经过的那一段**（[from] 为 null = 落笔点一下）。
+  ///
+  /// 局部擦除：不是删整笔，而是把每笔按橡皮圆切开、保留剩下的碎片
+  /// （见 `domain/ink/eraser.dart` 的 `carve`）。一笔被擦中间 → 变成两笔。
+  /// 一次拖动里发生的所有替换在抬笔时合成**一步**撤销。
   void _eraseAlong(InkPoint? from, InkPoint to) {
     final InkDoc doc = ref.read(inkDocProvider(widget.inkKey));
     if (doc.isEmpty) {
       return;
     }
-    final List<InkStroke> hit = Eraser.strokesHit(doc.strokes, from, to);
-    if (hit.isEmpty) {
+    // 橡皮大小复用"粗细档"：每支笔（含橡皮）分别记忆自己的设置。
+    final double radius = Eraser.radiusOf(widget.widthLevel);
+    final List<InkPoint> path = <InkPoint>[?from, to];
+    final List<ErasePatch> patches = <ErasePatch>[];
+    for (int i = 0; i < doc.strokes.length; i++) {
+      final InkStroke stroke = doc.strokes[i];
+      // 便宜的包围盒预筛：5000 笔的页不能每个 move 事件都全量求交。
+      if (!Eraser.mayTouch(stroke, from, to, radius: radius)) {
+        continue;
+      }
+      final List<InkStroke>? fragments = Eraser.carve(
+        stroke: stroke,
+        eraserPath: path,
+        radius: radius,
+        newUid: Ulid.next,
+      );
+      if (fragments == null) {
+        continue;
+      }
+      patches.add((index: i, original: stroke, fragments: fragments));
+    }
+    if (patches.isEmpty) {
       return;
     }
-    ref.read(inkEditProvider(widget.inkKey).notifier).eraseStrokes(hit);
+    ref
+        .read(inkEditProvider(widget.inkKey).notifier)
+        .applyErasePatches(patches);
     _activeTick.value++;
   }
 
@@ -384,11 +411,16 @@ class _InkLayerState extends ConsumerState<InkLayer> {
 
   @override
   Widget build(BuildContext context) {
-    final InkDoc doc = ref.watch(inkDocProvider(widget.inkKey));
+    // 同时拿 doc 与 epoch：纯追加只要 doc，结构性改动（擦除/撤销）看 epoch。
+    final (InkDoc doc, int epoch) = ref.watch(
+      inkEditProvider(
+        widget.inkKey,
+      ).select((InkEditState s) => (s.doc, s.epoch)),
+    );
     final double scale = _scale;
 
     // 新笔画到了才同步缓存（InkDoc 不可变，append 产生新实例）
-    _cache.sync(doc, darkPaper: widget.darkPaper);
+    _cache.sync(doc, darkPaper: widget.darkPaper, epoch: epoch);
 
     // 正在写的那一笔用**它自己的** spec（切工具/换色不影响已落下的这一笔）；
     // 没在写时用当前设置（橡皮时画布上没有活跃笔，回落到钢笔只为复用同一条 ribbon）。

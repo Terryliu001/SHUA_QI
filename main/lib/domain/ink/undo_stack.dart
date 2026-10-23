@@ -90,6 +90,95 @@ class ClearPage extends InkCommand {
   String get debugLabel => 'clear ×${removed.length}';
 }
 
+/// 一次"局部擦除"里对**某一笔**的替换：原笔画 → 保留的碎片（可能 0..n 段）。
+///
+/// 局部擦除不是"删一笔"，而是"把一笔换成几笔"，所以必须有 [fragments]：
+/// - `fragments` 为空 = 这一笔被擦光了；
+/// - `fragments` 非空 = 这一笔被切成几段（通常 2 段：擦中间留两头）。
+typedef ErasePatch = ({
+  int index,
+  InkStroke original,
+  List<InkStroke> fragments,
+});
+
+/// 把若干笔替换成各自的碎片（局部擦除的正向操作）。可逆：撤销时把碎片换回原笔。
+///
+/// 为什么按 [ErasePatch.index] 就地替换而不是"删掉再追加"：
+/// 笔迹的 z 序（荧光笔垫底、墨迹按落笔顺序）必须原样保留，
+/// 否则擦一下就可能让某段跑到别的笔画下面去。
+class EraseStrokes extends InkCommand {
+  const EraseStrokes(this.patches);
+
+  final List<ErasePatch> patches;
+
+  @override
+  InkDoc apply(InkDoc doc) {
+    final List<InkStroke> next = List<InkStroke>.of(doc.strokes);
+    // 从后往前替换：前面的下标才不会被已经改变的列表长度带偏。
+    final List<ErasePatch> ordered = List<ErasePatch>.of(patches)
+      ..sort((ErasePatch a, ErasePatch b) => b.index.compareTo(a.index));
+    for (final ErasePatch patch in ordered) {
+      final int at = patch.index.clamp(0, next.length - 1);
+      if (at < 0 || at >= next.length || next[at].uid != patch.original.uid) {
+        continue; // 数据对不上（理论上不该发生）：跳过，绝不抛
+      }
+      next.replaceRange(at, at + 1, patch.fragments);
+    }
+    return doc.withStrokes(next);
+  }
+
+  @override
+  InkDoc revert(InkDoc doc) {
+    final List<InkStroke> next = List<InkStroke>.of(doc.strokes);
+    // 反向：先把所有碎片从列表里摘掉，再按原下标插回原笔（从大到小插）。
+    final Set<String> fragmentUids = <String>{
+      for (final ErasePatch patch in patches)
+        for (final InkStroke fragment in patch.fragments) fragment.uid,
+    };
+    next.removeWhere((InkStroke s) => fragmentUids.contains(s.uid));
+    final List<ErasePatch> ordered = List<ErasePatch>.of(patches)
+      ..sort((ErasePatch a, ErasePatch b) => b.index.compareTo(a.index));
+    for (final ErasePatch patch in ordered) {
+      final int at = patch.index.clamp(0, next.length);
+      next.insert(at, patch.original);
+    }
+    return doc.withStrokes(next);
+  }
+
+  @override
+  String get debugLabel => 'erase ×${patches.length}';
+}
+
+/// 一次橡皮拖动里累计的所有替换（抬笔时合成**一步**撤销）。
+class EraseBatch extends InkCommand {
+  const EraseBatch(this.steps);
+
+  final List<EraseStrokes> steps;
+
+  @override
+  InkDoc apply(InkDoc doc) {
+    InkDoc next = doc;
+    for (final EraseStrokes step in steps) {
+      next = step.apply(next);
+    }
+    return next;
+  }
+
+  @override
+  InkDoc revert(InkDoc doc) {
+    InkDoc next = doc;
+    // 反向撤销：后发生的先还原，否则下标对不上。
+    for (final EraseStrokes step in steps.reversed) {
+      next = step.revert(next);
+    }
+    return next;
+  }
+
+  @override
+  String get debugLabel =>
+      'erase-batch ×${steps.length} (${steps.fold<int>(0, (int sum, EraseStrokes s) => sum + s.patches.length)} strokes)';
+}
+
 /// 撤销/重做历史（规格 T2.3：命令栈，深度 50 步）。
 ///
 /// 只做三件事：记命令、报 canUndo/canRedo、弹出命令。

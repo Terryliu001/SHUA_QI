@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/domain/ink/eraser.dart';
 import 'package:shuaqi/domain/ink/ink_brush.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_palette.dart';
@@ -215,9 +216,27 @@ class _ToolPanel extends ConsumerWidget {
               ),
             ],
             if (erased) ...<Widget>[
-              const SizedBox(height: ShqSpace.sm),
+              const SizedBox(height: ShqSpace.md),
+              const _SectionLabel('橡皮大小'),
+              const SizedBox(height: ShqSpace.xs),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  for (int level = 0; level < Eraser.sizeLevels; level++)
+                    _EraserSizeButton(
+                      level: level,
+                      selected: brush.widthLevel == level,
+                      onTap: () {
+                        // 橡皮大小复用 widthLevel（每支笔分别记忆自己的设置）。
+                        controller.selectWidth(level);
+                        onPick(level);
+                      },
+                    ),
+                ],
+              ),
+              const SizedBox(height: ShqSpace.xs),
               Text(
-                '橡皮：划过即删（笔画级，可撤销）',
+                '划过即擦：只擦掉碰到的那一段，可撤销',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -281,6 +300,14 @@ class InkToolStrip extends ConsumerWidget implements PreferredSizeWidget {
             _Divider(color: scheme.outlineVariant),
             for (int level = 0; level < InkStroke.widthLevels; level++)
               _WidthButton(
+                level: level,
+                selected: brush.widthLevel == level,
+                onTap: () => controller.selectWidth(level),
+              ),
+          ] else ...<Widget>[
+            // 橡皮：一排"大小"而不是颜色/粗细。
+            for (int level = 0; level < Eraser.sizeLevels; level++)
+              _EraserSizeButton(
                 level: level,
                 selected: brush.widthLevel == level,
                 onTap: () => controller.selectWidth(level),
@@ -480,6 +507,65 @@ class _WidthButton extends StatelessWidget {
                     ? scheme.onSecondaryContainer
                     : scheme.onSurfaceVariant,
                 shape: BoxShape.circle,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 橡皮大小：三个"空心圆"表示擦除范围，选中那档填色。
+///
+/// 为什么不用大小实心点（像粗细那样）：橡皮是"范围"而不是"笔宽"，
+/// 空心圆更像"擦掉一块区域"，也和粗细按钮在视觉上区分开。
+class _EraserSizeButton extends StatelessWidget {
+  const _EraserSizeButton({
+    required this.level,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final int level;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    // 与真实半径成比例（6/12/22pt），但压在 8–18dp 的可见范围内。
+    final double size = 8 + level * 5;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '橡皮大小${level + 1}',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          width: 36,
+          height: 36,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: selected ? scheme.secondaryContainer : Colors.transparent,
+            shape: BoxShape.circle,
+          ),
+          child: Center(
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: selected
+                    ? scheme.onSecondaryContainer.withValues(alpha: 0.25)
+                    : Colors.transparent,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: selected
+                      ? scheme.onSecondaryContainer
+                      : scheme.onSurfaceVariant,
+                  width: 1.5,
+                ),
               ),
             ),
           ),
