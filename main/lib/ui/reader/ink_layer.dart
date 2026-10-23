@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/domain/ink/eraser.dart';
 import 'package:shuaqi/domain/ink/ink_compress.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_store.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/ink/ink_width.dart';
 import 'package:shuaqi/domain/ink/undo_stack.dart';
@@ -15,6 +16,7 @@ import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_brush_spec.dart';
 import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/reader/ink_ribbon.dart';
+import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 一页的墨迹层（T2.1 三层画布 + T2.3 橡皮）。最上两层 + stylus 输入分流。
 ///
@@ -491,11 +493,12 @@ class _InkLayerState extends ConsumerState<InkLayer>
 
   @override
   Widget build(BuildContext context) {
-    // 同时拿 doc 与 epoch：纯追加只要 doc，结构性改动（擦除/撤销）看 epoch。
-    final (InkDoc doc, int epoch) = ref.watch(
+    // 同时拿 doc / epoch / 载入问题：纯追加只要 doc，结构性改动（擦除/撤销）
+    // 看 epoch；issue 用来给"已从备份恢复 / 文件损坏"一句明确提示。
+    final (InkDoc doc, int epoch, InkLoadIssue issue) = ref.watch(
       inkEditProvider(
         widget.inkKey,
-      ).select((InkEditState s) => (s.doc, s.epoch)),
+      ).select((InkEditState s) => (s.doc, s.epoch, s.issue)),
     );
     final double scale = _scale;
 
@@ -565,6 +568,15 @@ class _InkLayerState extends ConsumerState<InkLayer>
               ),
             ),
           ),
+          // 文件载入问题：只在真出过事时出现，不挡笔。
+          if (issue != InkLoadIssue.none)
+            Positioned(
+              left: ShqSpace.md,
+              top: ShqSpace.md,
+              child: IgnorePointer(
+                child: _LoadIssueBanner(issue: issue),
+              ),
+            ),
           // 输入层铺满整页：translucent 让 touch 继续穿透到父层手势
           // （滚动平移/缩放、分页缩放），stylus 由本层消费。
           Positioned.fill(
@@ -575,6 +587,54 @@ class _InkLayerState extends ConsumerState<InkLayer>
               onPointerUp: _onPointerUp,
               onPointerCancel: _onPointerCancel,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 载入问题提示条：只在 `.bak` 恢复 / 文件损坏时出现，`IgnorePointer` 不挡笔。
+///
+/// 为什么必须给提示：用户看不到"磁盘上有文件但解码失败"这件事，
+/// 如果只是悄悄给一张空页，他会以为笔迹被自己弄丢了。
+class _LoadIssueBanner extends StatelessWidget {
+  const _LoadIssueBanner({required this.issue});
+
+  final InkLoadIssue issue;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final bool recovered = issue == InkLoadIssue.recoveredFromBackup;
+    final Color bg = recovered
+        ? scheme.tertiaryContainer
+        : scheme.errorContainer;
+    final Color fg = recovered
+        ? scheme.onTertiaryContainer
+        : scheme.onErrorContainer;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: ShqSpace.sm,
+        vertical: 4,
+      ),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(ShqRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            recovered ? Icons.restore : Icons.warning_amber_rounded,
+            size: 14,
+            color: fg,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            recovered ? '已从备份恢复这一页' : '笔迹文件损坏，已跳过（原文件保留）',
+            style: theme.textTheme.labelSmall?.copyWith(color: fg),
           ),
         ],
       ),

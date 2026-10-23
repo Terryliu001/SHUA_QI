@@ -31,7 +31,8 @@ class ReaderPage extends ConsumerStatefulWidget {
   ConsumerState<ReaderPage> createState() => _ReaderPageState();
 }
 
-class _ReaderPageState extends ConsumerState<ReaderPage> {
+class _ReaderPageState extends ConsumerState<ReaderPage>
+    with WidgetsBindingObserver {
   final GlobalKey<PagedReaderViewState> _pagedKey =
       GlobalKey<PagedReaderViewState>();
   final GlobalKey<ScrollReaderViewState> _scrollKey =
@@ -66,13 +67,42 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     if (!kReleaseMode) {
       _frameStats = FrameStatsCollector();
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // T2.4：切后台/被系统杀之前把待写页落盘。paused 已经可能来不及，
+    // 所以防抖仍然是第一道保险，这里是最后一道。
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      unawaited(
+        ref.read(inkWriterProvider(widget.workbookId)).flushAll(),
+      );
+    }
+  }
+
+  /// 立刻落一页（切页 / 切模式时调用）。
+  void _flushInk(int page) {
+    final session = _handle?.session;
+    if (session == null) {
+      return;
+    }
+    unawaited(
+      ref
+          .read(inkWriterProvider(widget.workbookId))
+          .flush(session.id, page),
+    );
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // 退出阅读器前把 500ms 防抖窗口里的内容也写掉。
+    unawaited(ref.read(inkWriterProvider(widget.workbookId)).flushAll());
     _frameStats?.dispose();
     _progress?.cancel();
     _prefsSaveTimer?.cancel();
@@ -106,6 +136,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     if (index == _current) {
       return;
     }
+    // 离开这一页：把 500ms 防抖窗口里的笔迹立刻落掉（切页触发条件）。
+    _flushInk(_current);
     setState(() {
       _current = index;
     });
@@ -120,6 +152,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _switchMode() {
+    _flushInk(_current);
     final ReaderPrefs next = (_prefs ?? ReaderPrefs.defaults).copyWith(
       mode: _mode == ViewMode.paged ? ViewMode.scroll : ViewMode.paged,
     );
@@ -218,7 +251,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
 
     // 撤销/重做看的是**当前页**的历史（滚到第 3 页撤的是第 3 页的笔）。
-    final InkPageKey pageKey = InkPageKey(ready?.session.id ?? '', _current);
+    final InkPageKey pageKey = InkPageKey(
+      ready?.session.id ?? '',
+      _current,
+      workbookId: widget.workbookId,
+    );
     final bool pinnedToolbar = ref.watch(inkToolbarPinnedProvider);
     final bool canUndo =
         ready != null &&
@@ -414,7 +451,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                     child: DebugHud(
                       collector: _frameStats!,
                       doc: ref.watch(
-                        inkDocProvider(InkPageKey(sessionId, _current)),
+                        inkDocProvider(
+                          InkPageKey(
+                            sessionId,
+                            _current,
+                            workbookId: widget.workbookId,
+                          ),
+                        ),
                       ),
                       cache: _cache!,
                     ),

@@ -20,3 +20,24 @@ abstract interface class InkStore {
   /// 落盘并返回新的 revision。
   Future<int> save(String sessionId, int pageIndex, InkDoc doc);
 }
+
+/// 一次载入的结果（给 UI 的明确提示，不塞进 [InkDoc]）。
+enum InkLoadIssue {
+  /// 正常。
+  none,
+
+  /// 主文件坏了/不存在，但 `.bak` 可用且已恢复。
+  recoveredFromBackup,
+
+  /// 主文件与 `.bak` 都不可用；这一页按空页处理，原文件保留。
+  corrupt,
+}
+
+/// 可选的"载入问题报告"能力。
+///
+/// 不改 [InkStore] 契约（规格要求签名稳定）：SIF 实现额外实现本接口，
+/// `InkEditController` 用 `is` 探测。内存实现不实现 → 永远没有 issue。
+abstract interface class InkIssueReporter {
+  /// 取走（并清空）某页最近一次载入的问题。没有返回 [InkLoadIssue.none]。
+  InkLoadIssue takeLoadIssue(String sessionId, int pageIndex);
+}

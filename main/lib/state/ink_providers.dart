@@ -1,38 +1,82 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/app/bootstrap.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_store.dart';
 import 'package:shuaqi/domain/ink/undo_stack.dart';
+import 'package:shuaqi/infra/ink/ink_writer.dart';
 import 'package:shuaqi/infra/ink/memory_ink_store.dart';
+import 'package:shuaqi/infra/ink/sif_ink_store.dart';
+import 'package:shuaqi/state/app_providers.dart';
 
-/// 笔迹存储（T2.1 内存实现；T2.4 换 SIF 时只改这一行）。
-final Provider<InkStore> inkStoreProvider = Provider<InkStore>((Ref ref) {
-  return MemoryInkStore();
-});
+/// 笔迹存储（T2.4：真实 SIF 落盘）。
+///
+/// 按 **workbookId** 分 family：SIF 的路径是
+/// `workbooks/<workbookId>/sessions/<sessionId>/ink/pNNN.sif`，
+/// 而 [InkStore] 契约只有 session/page。store 实例记住 workbookId，
+/// 契约本身保持规格里的签名不变。
+///
+/// `workbookId == ''` 时回落内存实现：编辑器的宿主机单测不建库、不碰文件。
+final Provider<InkStore> Function(String) inkStoreProvider =
+    Provider.family<InkStore, String>((Ref ref, String workbookId) {
+      if (workbookId.isEmpty) {
+        return MemoryInkStore();
+      }
+      final AppDependencies deps = ref.watch(appDependenciesProvider);
+      return SifInkStore(
+        vault: deps.vault,
+        db: deps.db.raw,
+        workbookId: workbookId,
+      );
+    });
+
+/// 落盘调度器（500ms 防抖）。阅读器生命周期里 `flushAll()`。
+final Provider<InkWriter> Function(String) inkWriterProvider =
+    Provider.family<InkWriter, String>((Ref ref, String workbookId) {
+      final InkWriter writer = InkWriter(
+        store: ref.watch(inkStoreProvider(workbookId)),
+        // 测试（空 workbookId）走零防抖；生产 500ms。
+        debounce: workbookId.isEmpty
+            ? Duration.zero
+            : const Duration(milliseconds: 500),
+      );
+      ref.onDispose(() {
+        unawaited(writer.flushAll().whenComplete(writer.dispose));
+      });
+      return writer;
+    });
 
 /// 一页笔迹的定位键。做成值对象而不是 `'$sessionId#$pageIndex'` 字符串：
 /// family 的 arg 直接当 Map 键用，字符串拼接要小心分隔符碰撞，
 /// 值对象靠结构相等，编译期就能发现漏字段。
 class InkPageKey {
-  const InkPageKey(this.sessionId, this.pageIndex);
+  const InkPageKey(
+    this.sessionId,
+    this.pageIndex, {
+    this.workbookId = '',
+  });
 
   final String sessionId;
   final int pageIndex;
+
+  /// SIF 落盘路径需要它；宿主机单测不传（回落内存 store）。
+  final String workbookId;
 
   @override
   bool operator ==(Object other) {
     return identical(this, other) ||
         other is InkPageKey &&
             other.sessionId == sessionId &&
-            other.pageIndex == pageIndex;
+            other.pageIndex == pageIndex &&
+            other.workbookId == workbookId;
   }
 
   @override
-  int get hashCode => Object.hash(sessionId, pageIndex);
+  int get hashCode => Object.hash(sessionId, pageIndex, workbookId);
 
   @override
-  String toString() => 'InkPageKey($sessionId#$pageIndex)';
+  String toString() => 'InkPageKey($workbookId/$sessionId#$pageIndex)';
 }
 
 /// 一页的编辑态：笔迹 + 撤销/重做是否可用。
@@ -46,11 +90,15 @@ class InkEditState {
     this.canUndo = false,
     this.canRedo = false,
     this.epoch = 0,
+    this.issue = InkLoadIssue.none,
   });
 
   final InkDoc doc;
   final bool canUndo;
   final bool canRedo;
+
+  /// 落盘文件载入结果：备份恢复 / 损坏。UI 用它给一句明确提示。
+  final InkLoadIssue issue;
 
   /// 结构性改动计数（2026-10-23 加，配合局部擦除）。
   ///
@@ -66,12 +114,14 @@ class InkEditState {
     bool? canUndo,
     bool? canRedo,
     int? epoch,
+    InkLoadIssue? issue,
   }) {
     return InkEditState(
       doc: doc ?? this.doc,
       canUndo: canUndo ?? this.canUndo,
       canRedo: canRedo ?? this.canRedo,
       epoch: epoch ?? this.epoch,
+      issue: issue ?? this.issue,
     );
   }
 }
@@ -114,10 +164,6 @@ class InkEditController extends Notifier<InkEditState> {
   /// 撤销时按相反顺序还原，能精确回到拖动之前的样子（不是"整笔恢复"）。
   final List<EraseStrokes> _pendingEraseSteps = <EraseStrokes>[];
 
-  /// 落盘代次：每次开始保存 +1。保存完成时如果代次没变（期间没有新编辑），
-  /// 才把磁盘返回的 revision 回填到 state——否则会被旧保存覆盖新状态。
-  int _saveGeneration = 0;
-
   @override
   InkEditState build() {
     unawaited(_load());
@@ -127,9 +173,22 @@ class InkEditController extends Notifier<InkEditState> {
   InkDoc get doc => state.doc;
 
   Future<void> _load() async {
-    final InkDoc loaded = await ref
-        .read(inkStoreProvider)
-        .load(_key.sessionId, _key.pageIndex);
+    final InkStore store = ref.read(inkStoreProvider(_key.workbookId));
+    InkDoc loaded = InkDoc.empty;
+    InkLoadIssue issue = InkLoadIssue.none;
+    try {
+      loaded = await store.load(_key.sessionId, _key.pageIndex);
+      if (store is InkIssueReporter) {
+        issue = (store as InkIssueReporter).takeLoadIssue(
+          _key.sessionId,
+          _key.pageIndex,
+        );
+      }
+    } on Object {
+      // 载入异常不该把阅读器打崩；按空页处理，让用户继续写（原文件保留）。
+      loaded = InkDoc.empty;
+      issue = InkLoadIssue.corrupt;
+    }
     if (!ref.mounted) {
       return;
     }
@@ -142,7 +201,11 @@ class InkEditController extends Notifier<InkEditState> {
     // 磁盘来的 doc 是新的基线：旧历史（如果有）对不上，直接清掉。
     _history.clear();
     _pendingEraseSteps.clear();
-    state = InkEditState(doc: loaded, epoch: state.epoch + 1);
+    state = InkEditState(
+      doc: loaded,
+      epoch: state.epoch + 1,
+      issue: issue,
+    );
   }
 
   // ── 书写 ─────────────────────────────────────────────────────────
@@ -190,7 +253,7 @@ class InkEditController extends Notifier<InkEditState> {
       canUndo: _history.canUndo,
       canRedo: _history.canRedo,
     );
-    unawaited(_save());
+    _scheduleSave();
   }
 
   /// 放弃进行中的擦除（笔被 cancel / 页面被换掉）：已擦的仍然算数，
@@ -214,7 +277,7 @@ class InkEditController extends Notifier<InkEditState> {
       canRedo: _history.canRedo,
       epoch: state.epoch + 1,
     );
-    unawaited(_save());
+    _scheduleSave();
     return true;
   }
 
@@ -231,7 +294,7 @@ class InkEditController extends Notifier<InkEditState> {
       canRedo: _history.canRedo,
       epoch: state.epoch + 1,
     );
-    unawaited(_save());
+    _scheduleSave();
     return true;
   }
 
@@ -260,7 +323,7 @@ class InkEditController extends Notifier<InkEditState> {
       canRedo: _history.canRedo,
       epoch: structural ? state.epoch + 1 : state.epoch,
     );
-    unawaited(_save());
+    _scheduleSave();
   }
 
   /// 把进行中的擦除收成一步撤销（没有就什么也不做）。
@@ -273,17 +336,14 @@ class InkEditController extends Notifier<InkEditState> {
     }
   }
 
-  Future<void> _save() async {
-    final int generation = ++_saveGeneration;
-    final InkDoc snapshot = state.doc;
-    final int revision = await ref
-        .read(inkStoreProvider)
-        .save(_key.sessionId, _key.pageIndex, snapshot);
-    if (!ref.mounted || generation != _saveGeneration) {
-      // 期间又有新编辑：那次保存会带回更新的版本号，这次不回填
-      return;
-    }
-    // 只回填版本号，不动笔画集合，也不动撤销历史。
-    state = state.copyWith(doc: state.doc.copyWith(revision: revision));
+  /// 只排入调度器，不 await：落盘绝不能挡抬笔（INV-01）。
+  ///
+  /// 真实保存在 [InkWriter] 里做 500ms 防抖；生命周期/切页由 ReaderPage
+  /// 调 `flushAll`。`InkDoc.revision` 保持"这一页变过几次"的本地语义，
+  /// 不被磁盘 revision 回填（回填会让它倒退，识别失效判定更不可靠）。
+  void _scheduleSave() {
+    ref
+        .read(inkWriterProvider(_key.workbookId))
+        .schedule(_key.sessionId, _key.pageIndex, state.doc);
   }
 }

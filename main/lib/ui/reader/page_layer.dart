@@ -272,7 +272,11 @@ class _PageLayerState extends State<PageLayer> {
             // drawPath/帧）。包一层 boundary 后，滚动时墨迹层直接复用缓存图层。
             child: RepaintBoundary(
               child: InkLayer(
-                inkKey: InkPageKey(sessionId, widget.page.index),
+                inkKey: InkPageKey(
+                  sessionId,
+                  widget.page.index,
+                  workbookId: widget.page.workbookId,
+                ),
                 pageWidthPt: widget.page.width,
                 width: widget.width,
                 // 墨色跟纸配对（不是跟界面主题配对）：夜读纸 → 提亮的取色表。

@@ -46,6 +46,17 @@ abstract final class VaultPaths {
   static String inkFile(String workbookId, String sessionId, int pageIndex) =>
       '${inkDir(workbookId, sessionId)}/p${pageIndex.toString().padLeft(3, '0')}.sif';
 
+  /// 原子写的临时文件（写完 rename 成 [inkFile]）。
+  static String inkFileTemp(String workbookId, String sessionId, int pageIndex) =>
+      '${inkFile(workbookId, sessionId, pageIndex)}.tmp';
+
+  /// 上一版备份（每次成功写入前把旧 [inkFile] rename 成它）。
+  static String inkFileBackup(
+    String workbookId,
+    String sessionId,
+    int pageIndex,
+  ) => '${inkFile(workbookId, sessionId, pageIndex)}.bak';
+
   /// 交卷快照与分析产物。T5.x 写入。
   static String exportDir(String workbookId) => '${workbookDir(workbookId)}/exports';
 

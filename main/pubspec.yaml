@@ -21,6 +21,8 @@ environment:
 #           share_plus / device_info_plus
 # ============================================================================
 dependencies:
+  # SIF 的整文件 zlib（T2.4）。纯 Dart，白名单内；锁到 pubspec.lock 已解析的版本。
+  archive: 4.5.2
   crypto: 3.0.7
   file_picker: 13.1.0
   flutter:

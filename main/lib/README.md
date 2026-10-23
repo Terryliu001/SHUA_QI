@@ -50,7 +50,8 @@ lib/
 │  └─ theme_mode_provider.dart        主题模式（Notifier + setting 持久化）
 ├─ domain/
 │  ├─ ink/ink_doc.dart                InkPoint / InkRect / InkStroke / InkDoc
-│  ├─ ink/ink_store.dart              InkStore 契约
+│  ├─ ink/ink_store.dart              InkStore 契约 + InkLoadIssue
+│  ├─ ink/sif_codec.dart              SIF v1 编解码（zlib / CRC / 量化）
 │  ├─ app/setting_keys.dart           App 级 setting 键名（app.theme_mode）
 │  ├─ model/workbook.dart             Workbook 值对象
 │  ├─ model/workbook_search.dart      书架标题搜索过滤（纯函数）
@@ -59,6 +60,9 @@ lib/
 │  ├─ reader/night_tint.dart          夜读 duotone 矩阵（纯函数）
 │  └─ reader/scroll_math.dart         滚动画布纯几何（可见集/主可见页/夹紧）
 └─ infra/
+   ├─ ink/sif_ink_store.dart          SIF InkStore（原子写/.bak/isolate）
+   ├─ ink/ink_writer.dart             500ms 防抖落盘调度
+   ├─ db/dao/ink_state_dao.dart       ink_state（revision/字节数/路径）
    ├─ pdf/pdf_source.dart             PdfSource 契约 + PageBitmapSource（屏显位图）+ TextRun
    ├─ pdf/paper_renderer.dart         PaperRenderer 契约
    ├─ ocr/ocr_engine.dart             OcrEngine 契约 + OcrOutput / OcrLine

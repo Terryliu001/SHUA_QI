@@ -239,10 +239,12 @@ void main() {
     );
     await ctrl.commit(stroke('a'));
     ctrl.undo();
-    // _save 是 unawaited 的，等它跑完
-    await Future<void>.delayed(Duration.zero);
+    // 落盘走 500ms 防抖（测试用零防抖），flush 后读文件语义
+    await container
+        .read(inkWriterProvider(key.workbookId))
+        .flush(key.sessionId, key.pageIndex);
     final InkDoc saved = await container
-        .read(inkStoreProvider)
+        .read(inkStoreProvider(key.workbookId))
         .load(key.sessionId, key.pageIndex);
     expect(saved.strokeCount, 0);
   });
