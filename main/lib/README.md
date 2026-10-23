@@ -34,7 +34,14 @@ lib/
 │  ├─ mistakes/mistakes_page.dart     错题本 tab（占位，T7.2）
 │  ├─ settings/settings_page.dart     设置：主题/阅读默认（真实）+ AI/存储（置灰说明）
 │  ├─ reader/reader_page.dart         阅读器（T1.5 落地）
-│  ├─ widgets/empty_state.dart        共享空态组件
+│  ├─ reader/page_image_cache.dart    页位图缓存（独立 clone 交付契约，见 030）
+│  ├─ reader/page_layer.dart          单页图层 + 取图失败可重试态
+│  ├─ reader/scroll_view.dart         连续滚动（相机矩阵 / 预热 / 轴向锁定）
+│  ├─ reader/paged_view.dart          分页 + 页码胶囊
+│  ├─ reader/thumb_drawer.dart        缩略图抽屉（当前页描边 + 页码）
+│  ├─ widgets/empty_state.dart        共享空态组件（动作图标可传参）
+│  ├─ widgets/soft_icon.dart          软底图标公共件
+│  ├─ widgets/feature_preview_page.dart 诚实的路线图预览页（记录/错题）
 │  ├─ widgets/paper_effect.dart       纸感/夜读合成（只作用背景层）
 │  └─ widgets/math/math_view.dart     公式渲染契约（T6.7 落地）
 ├─ state/
@@ -52,7 +59,7 @@ lib/
 │  ├─ reader/night_tint.dart          夜读 duotone 矩阵（纯函数）
 │  └─ reader/scroll_math.dart         滚动画布纯几何（可见集/主可见页/夹紧）
 └─ infra/
-   ├─ pdf/pdf_source.dart             PdfSource 契约 + TextRun
+   ├─ pdf/pdf_source.dart             PdfSource 契约 + PageBitmapSource（屏显位图）+ TextRun
    ├─ pdf/paper_renderer.dart         PaperRenderer 契约
    ├─ ocr/ocr_engine.dart             OcrEngine 契约 + OcrOutput / OcrLine
    ├─ formula/formula_engine.dart     FormulaEngine 契约 + FormulaResult
