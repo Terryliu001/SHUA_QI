@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
@@ -93,7 +94,8 @@ class InkLayer extends ConsumerStatefulWidget {
   ConsumerState<InkLayer> createState() => _InkLayerState();
 }
 
-class _InkLayerState extends ConsumerState<InkLayer> {
+class _InkLayerState extends ConsumerState<InkLayer>
+    with SingleTickerProviderStateMixin {
   final ValueNotifier<int> _activeTick = ValueNotifier<int>(0);
   final CommittedInkCache _cache = CommittedInkCache();
 
@@ -138,26 +140,45 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   // 大小就是真实笔触大小，松手后淡出。这里落在**最后一次落笔的位置**，
   // 因为那是用户注意力所在的地方（工具面板在右下角，纸在这儿）。
   //
-  // 实现上用 ValueNotifier<Offset?> 而不是 setState：
-  // 显示/隐藏只重建这一圈，不碰墨迹层与已提交的 Path 缓存。
+  // ## 为什么位置与动画分开两个 notifier（2026-10-23 返工）
+  // 第一版只有一个 `ValueNotifier<Offset?>`：显示=立刻出现、1.4s 后=立刻消失。
+  // 用户反馈"动画不自然、隐退要做好"。现在是：
+  // - `_halo`（位置）：只在"换地方"时变；
+  // - `_haloAnim`（0→1）：进入 160ms 淡入 + 轻微放大，停留 1100ms，
+  //   退出 260ms 淡出 + 轻微收缩（[Curves.easeOutCubic] / [Curves.easeInCubic]）。
+  late final AnimationController _haloAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 160),
+    reverseDuration: const Duration(milliseconds: 260),
+  );
+
   final ValueNotifier<Offset?> _halo = ValueNotifier<Offset?>(null);
 
   /// 最后一次落笔的位置（页面坐标 pt）。改粗细时用它定位参考圈。
   Offset? _lastInkAt;
 
-  Timer? _haloTimer;
+  Timer? _haloHoldTimer;
 
-  static const Duration _haloHold = Duration(milliseconds: 1400);
+  static const Duration _haloHold = Duration(milliseconds: 1100);
 
-  /// 在 [at]（页面坐标）处显示大小参考圈，[hold] 后自动淡出。
+  /// 在 [at]（页面坐标）处显示大小参考圈：淡入 → 停留 → 淡出。
   void _flashHalo(Offset at) {
     _lastInkAt = at;
     _halo.value = at;
-    _haloTimer?.cancel();
-    _haloTimer = Timer(_haloHold, () {
-      if (mounted) {
-        _halo.value = null;
+    _haloAnim.forward();
+    _haloHoldTimer?.cancel();
+    _haloHoldTimer = Timer(_haloHold, () {
+      if (!mounted) {
+        return;
       }
+      unawaited(
+        _haloAnim.reverse().whenComplete(() {
+          // 淡出完再拆掉位置，避免"消失瞬间还能看到一点"。
+          if (mounted && _haloAnim.status == AnimationStatus.dismissed) {
+            _halo.value = null;
+          }
+        }),
+      );
     });
   }
 
@@ -188,7 +209,8 @@ class _InkLayerState extends ConsumerState<InkLayer> {
 
   @override
   void dispose() {
-    _haloTimer?.cancel();
+    _haloHoldTimer?.cancel();
+    _haloAnim.dispose();
     _halo.dispose();
     _activeTick.dispose();
     super.dispose();
@@ -514,8 +536,8 @@ class _InkLayerState extends ConsumerState<InkLayer> {
               ),
             ),
           ),
-          // 大小参考圈：在最后一次落笔处浮一个真实大小的圆，1.4s 后淡出。
-          // 只在改粗细/换工具时出现，不干扰书写（IgnorePointer，不挡输入）。
+          // 大小参考圈：在最后一次落笔处浮一个"真实大小"的标记。
+          // 淡入 160ms / 停留 1.1s / 淡出 260ms（见 _flashHalo），IgnorePointer 不挡落笔。
           Positioned.fill(
             child: IgnorePointer(
               child: ValueListenableBuilder<Offset?>(
@@ -524,21 +546,20 @@ class _InkLayerState extends ConsumerState<InkLayer> {
                   if (at == null) {
                     return const SizedBox.shrink();
                   }
-                  final double r = _brushRadiusPt * scale;
-                  // 直径按真实大小，但**不小于 14dp**：钢笔最细档只有 0.9pt，
-                  // 按原尺寸画出来是 3px 的小点，等于没提示。
-                  // 粗档（>14dp）时圈会跟着变大，所以"参考"依然成立。
-                  final double d = (r * 2).clamp(14.0, 480.0);
-                  return Stack(
-                    children: <Widget>[
-                      Positioned(
-                        left: at.dx * scale - d / 2,
-                        top: at.dy * scale - d / 2,
-                        width: d,
-                        height: d,
-                        child: const _BrushHalo(),
-                      ),
-                    ],
+                  return _HaloLayer(
+                    at: at,
+                    scale: scale,
+                    radiusPt: _brushRadiusPt,
+                    animation: _haloAnim,
+                    // 笔尖的"点"用当前颜色，橡皮用中性色（见 _BrushHalo）
+                    color: widget.tool.isEraser
+                        ? null
+                        : previewColorOf(
+                            style: widget.tool.strokeStyle ??
+                                InkStrokeStyle.pen,
+                            colorIndex: widget.colorIndex,
+                            darkPaper: widget.darkPaper,
+                          ),
                   );
                 },
               ),
@@ -561,21 +582,89 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   }
 }
 
-/// 大小参考圈：一圈半透明描边 + 极淡填充（在纸上看得到，又不盖住内容）。
-class _BrushHalo extends StatelessWidget {
-  const _BrushHalo();
+/// 大小参考圈：一圈"定位环" + 一个**真实大小**的实心点。
+///
+/// 为什么是两个元素（2026-10-23 返工）：
+/// 只画真实大小的话，钢笔细档只有 ~1.3dp，屏幕上 4 个像素，等于没提示；
+/// 只画固定大小的圈，又失去了"参考"的意义。所以：
+/// - **实心点 = 真实笔尖/橡皮大小**（最小 3dp 保证能看见）；
+/// - **定位环 = max(真实大小, 26dp)**，把视线钉在"最后落笔的位置"。
+/// 荧光笔/橡皮这类本来就大于 26dp 的笔刷，环会跟着真实尺寸变大。
+class _HaloLayer extends StatelessWidget {
+  const _HaloLayer({
+    required this.at,
+    required this.scale,
+    required this.radiusPt,
+    required this.animation,
+    required this.color,
+  });
+
+  /// 页面坐标（pt）。
+  final Offset at;
+
+  /// 页面 pt → 本地 dp 的倍率。
+  final double scale;
+
+  /// 笔刷半径（pt）：笔 = 线宽/2，橡皮 = 擦除半径。
+  final double radiusPt;
+
+  /// 0→1 的进出场动画（淡入 + 轻微放大）。
+  final Animation<double> animation;
+
+  /// 笔尖点的颜色；橡皮为 null（用中性色）。
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Container(
-      decoration: BoxDecoration(
-        color: scheme.primary.withValues(alpha: 0.10),
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: scheme.primary.withValues(alpha: 0.75),
-          width: 1.6,
-        ),
+    final double real = (radiusPt * 2 * scale).clamp(3.0, 480.0);
+    final double ring = math.max(real, 26.0);
+    final Color dotColor = color ?? scheme.onSurfaceVariant;
+
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (BuildContext context, Widget? child) {
+        final double t = Curves.easeOutCubic.transform(animation.value);
+        return Opacity(
+          opacity: t,
+          child: Transform.scale(
+            // 88% → 100%：像"浮起来"而不是"蹦出来"
+            scale: 0.88 + 0.12 * t,
+            child: child,
+          ),
+        );
+      },
+      child: Stack(
+        children: <Widget>[
+          Positioned(
+            left: at.dx * scale - ring / 2,
+            top: at.dy * scale - ring / 2,
+            width: ring,
+            height: ring,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dotColor.withValues(alpha: 0.06),
+                border: Border.all(
+                  color: dotColor.withValues(alpha: 0.55),
+                  width: 1.4,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: at.dx * scale - real / 2,
+            top: at.dy * scale - real / 2,
+            width: real,
+            height: real,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: dotColor.withValues(alpha: 0.85),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

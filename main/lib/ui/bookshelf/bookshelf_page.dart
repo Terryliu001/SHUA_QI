@@ -13,6 +13,7 @@ import 'package:shuaqi/ui/bookshelf/workbook_menu_sheet.dart';
 import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/empty_state.dart';
+import 'package:shuaqi/ui/widgets/pressable.dart';
 
 /// 书架（T1.4 完成态）：导入 / 列表 / 最近打开 / 长按菜单 / 搜索 /
 /// 下拉刷新 / 文件损坏态。
@@ -386,11 +387,12 @@ class _WorkbookTile extends ConsumerWidget {
 
     return Opacity(
       opacity: broken ? 0.55 : 1,
-      child: Card(
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: handleTap,
-          onLongPress: onLongPress,
+      child: Pressable(
+        onTap: handleTap,
+        onLongPress: onLongPress,
+        scale: 0.985,
+        child: Card(
+          clipBehavior: Clip.antiAlias,
           child: Padding(
             padding: const EdgeInsets.all(ShqSpace.md),
             child: Row(
@@ -590,41 +592,49 @@ class _FolderChip extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: ShqSpace.sm),
       child: Center(
-        child: Material(
-          color: selected
-              ? scheme.secondaryContainer
-              : scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(ShqRadius.pill),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: ShqSpace.md,
-                vertical: 6,
+        child: Pressable(
+          onTap: onTap,
+          scale: 0.94,
+          haptic: true,
+          child: AnimatedContainer(
+            duration: ShqMotion.base,
+            curve: ShqMotion.curveEmphasized,
+            padding: const EdgeInsets.symmetric(
+              horizontal: ShqSpace.md,
+              vertical: 6,
+            ),
+            decoration: BoxDecoration(
+              color: selected
+                  ? scheme.secondaryContainer
+                  : scheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(ShqRadius.pill),
+              border: Border.all(
+                color: selected
+                    ? scheme.secondaryContainer
+                    : scheme.outlineVariant,
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  Icon(
-                    icon,
-                    size: 15,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Icon(
+                  icon,
+                  size: 15,
+                  color: selected
+                      ? scheme.onSecondaryContainer
+                      : scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  label,
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
                     color: selected
                         ? scheme.onSecondaryContainer
                         : scheme.onSurfaceVariant,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                   ),
-                  const SizedBox(width: 5),
-                  Text(
-                    label,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: selected
-                          ? scheme.onSecondaryContainer
-                          : scheme.onSurfaceVariant,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),

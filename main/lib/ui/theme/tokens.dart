@@ -21,24 +21,41 @@ abstract final class ShqSpace {
 }
 
 /// 圆角。手写场景尽量少用大圆角，避免和笔迹抢视觉。
+///
+/// 2026-10-23 整体放大一档（10/14/20）：配合"灵动现代简约"——
+/// 更圆的外形 + 发丝描边 + 极浅阴影，是 ColorOS / iOS 近两年的共同语言。
 abstract final class ShqRadius {
-  static const double sm = 6;
-  static const double md = 10;
-  static const double lg = 16;
+  static const double sm = 10;
+  static const double md = 14;
+  static const double lg = 20;
 
   /// 底部浮层（bottom sheet）的顶部圆角。独立于 lg：浮层是"从屏幕边缘
   /// 长出来的面板"，比卡片更需要宣告自己的边界。
-  static const double xl = 24;
+  static const double xl = 28;
   static const double pill = 999;
 }
 
-/// 动效时长。
+/// 动效时长与曲线（2026-10-23 统一）。
+///
+/// 三条纪律：
+/// 1. **入场慢、出场快**（iOS 的默认直觉）：进 200–240ms，退 140–160ms；
+/// 2. 按压这类**直接反馈**要快（90ms），否则会觉得"没反应"；
+/// 3. 位移类一律用减速曲线（`easeOutCubic`），只有强调场合才用轻微回弹。
 abstract final class ShqMotion {
-  /// 背景样式切换（REQ-15：≤100ms）。
-  static const Duration instant = Duration(milliseconds: 100);
+  /// 背景样式切换 / 按压反馈（REQ-15：≤100ms）。
+  static const Duration instant = Duration(milliseconds: 90);
   static const Duration fast = Duration(milliseconds: 150);
-  static const Duration base = Duration(milliseconds: 200);
-  static const Duration slow = Duration(milliseconds: 320);
+  static const Duration base = Duration(milliseconds: 220);
+  static const Duration slow = Duration(milliseconds: 340);
+
+  /// 标准减速：几乎所有位移 / 淡入。
+  static const Curve curveStandard = Curves.easeOutCubic;
+
+  /// 强调：前后各留一点缓冲（Material 3 的 emphasized）。
+  static const Cubic curveEmphasized = Cubic(0.2, 0.0, 0.0, 1.0);
+
+  /// 退场：比入场快，且加速离开（不拖泥带水）。
+  static const Curve curveExit = Curves.easeInCubic;
 }
 
 /// 字阶。中文正文从 16 起，12 只用于 HUD / 角标这类非阅读文本。

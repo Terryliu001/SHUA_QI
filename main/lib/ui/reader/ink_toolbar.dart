@@ -8,6 +8,7 @@ import 'package:shuaqi/domain/ink/ink_width.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
+import 'package:shuaqi/ui/widgets/pressable.dart';
 
 /// 笔刷工具条（T2.2/T2.3 → 2026-10-23 重做）。
 ///
@@ -512,9 +513,10 @@ class _ToolButton extends StatelessWidget {
       button: true,
       selected: selected,
       label: tool.label,
-      child: InkWell(
+      child: Pressable(
         onTap: onTap,
-        customBorder: const StadiumBorder(),
+        scale: 0.94,
+        haptic: true,
         child: AnimatedContainer(
           duration: ShqMotion.instant,
           curve: Curves.easeOutCubic,

@@ -305,8 +305,17 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _offset = _clampOffset(Offset(0, -_tops[_current] * _scale), _scale);
   }
 
-  /// 夹紧平移量。**1 倍 = fit-width**，所以横向永远正好铺满，不会露黑边。
-  Offset _clampOffset(Offset offset, double scale) {
+  /// 夹紧平移量。
+  ///
+  /// [allowOverscroll] = true 时**允许越界**，但越界部分按 iOS 的"橡皮筋"曲线
+  /// 衰减（拉得越远越拉不动），松手后由 [_startBounce] 用弹簧弹回去。
+  /// 2026-10-23 用户反馈"一到边界就立刻停很自然"，这是对应的修法：
+  /// 边界不再是一堵硬墙，而是一根有阻尼的皮筋。
+  Offset _clampOffset(
+    Offset offset,
+    double scale, {
+    bool allowOverscroll = false,
+  }) {
     final (double x, double y) = ScrollMath.clampOffset(
       offsetX: offset.dx,
       offsetY: offset.dy,
@@ -316,7 +325,69 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       viewportWidth: _viewport.width,
       viewportHeight: _viewport.height,
     );
-    return Offset(x, y);
+    if (!allowOverscroll) {
+      return Offset(x, y);
+    }
+    return Offset(
+      x + _rubberBand(offset.dx - x, _viewport.width),
+      y + _rubberBand(offset.dy - y, _viewport.height),
+    );
+  }
+
+  /// 橡皮筋衰减：`f(o) = (1 - 1/(o/c + 1)) · c · sign(o)`，`c = 0.35·dim`。
+  ///
+  /// 性质：o=0 时 0；o 很大时趋近 `c`（拉到头也只会超出约 1/3 屏），
+  /// 一阶导数在 0 处为 1（刚开始跟手），越拉越钝 —— 正是"皮筋"的手感。
+  static double _rubberBand(double over, double dim) {
+    if (over == 0 || dim <= 0) {
+      return 0;
+    }
+    final double c = dim * 0.35;
+    final double pulled = (1 - 1 / (over.abs() / c + 1)) * c;
+    return pulled * over.sign;
+  }
+
+  // ── 边界回弹（2026-10-23）──────────────────────────────────────────
+  //
+  // 欠阻尼弹簧：`a = -k·位移 - c·速度`。k/c 选得让它"弹一下、不过冲太多"：
+  // ζ = c / (2√k) = 26 / (2·√260) ≈ 0.81 —— 轻微过冲，像 iOS 的回弹。
+  static const double _bounceStiffness = 260;
+  static const double _bounceDamping = 26;
+  Offset _bounceVelocity = Offset.zero;
+  bool _bouncing = false;
+
+  void _startBounce(Offset velocity) {
+    _bouncing = true;
+    _bounceVelocity = velocity;
+    _velocity = Offset.zero;
+    _lastTick = Duration.zero;
+    _gestureActive = true; // 回弹期间也延后页码上报
+    if (!_ticker.isActive) {
+      _ticker.start();
+    }
+  }
+
+  void _tickBounce(double dt) {
+    final Offset target = _clampOffset(_offset, _scale);
+    final Offset disp = _offset - target;
+    if (disp.distance < 0.4 && _bounceVelocity.distance < 8) {
+      _offset = target;
+      _bounceVelocity = Offset.zero;
+      _bouncing = false;
+      _ticker.stop();
+      _publishCamera();
+      _trackVisible();
+      _gestureActive = false;
+      _flushPendingPage();
+      _endMotionSoon();
+      return;
+    }
+    final Offset accel =
+        -disp * _bounceStiffness - _bounceVelocity * _bounceDamping;
+    _bounceVelocity += accel * dt;
+    _offset += _bounceVelocity * dt;
+    _publishCamera();
+    _trackVisible();
   }
 
   void _recomputeBitmapWidth() {
@@ -477,7 +548,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     );
     final Offset offset = details.localFocalPoint - _focalContent * scale;
     _scale = scale;
-    _offset = _clampOffset(offset, scale);
+    // 拖动允许越界（橡皮筋），松手在 _onScaleEnd 里回弹。
+    _offset = _clampOffset(offset, scale, allowOverscroll: true);
     // 丝滑关键：**不 setState**。矩阵层自己重建 Transform（一个 renderObject），
     // 页面列表纹丝不动。
     _publishCamera();
@@ -497,6 +569,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _scheduleQualityUpgrade();
 
     final Offset velocity = details.velocity.pixelsPerSecond;
+    // 已经越界（拖到了边界外）：立刻回弹，不甩动 —— 手感与 iOS 一致。
+    final bool outOfBounds =
+        (_clampOffset(_offset, _scale) - _offset).distance > 0.5;
+    if (outOfBounds) {
+      _startBounce(velocity * 0.6);
+      _trackVisible();
+      return;
+    }
     if (velocity.distance > _flingMinVelocity) {
       _velocity = velocity;
       _lastTick = Duration.zero;
@@ -544,15 +624,29 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (dt <= 0) {
       return;
     }
+    // 回弹用自己的弹簧积分（见 _tickBounce）；甩动走下面的衰减。
+    if (_bouncing) {
+      _tickBounce(dt);
+      return;
+    }
     final Offset next = _offset + _velocity * dt;
     _velocity = _velocity * math.pow(_flingFriction, dt).toDouble();
     final Offset clamped = _clampOffset(next, _scale);
     final bool hitEdge =
         (clamped.dx - next.dx).abs() > 0.5 || (clamped.dy - next.dy).abs() > 0.5;
+    if (hitEdge) {
+      // **不硬停**（2026-10-23）：撞到边界时把速度交给回弹弹簧，
+      // 让它先越出一点点再弹回来 —— 原来这里直接 ticker.stop()，手感是"撞墙"。
+      _offset = _clampOffset(next, _scale, allowOverscroll: true);
+      _publishCamera();
+      _trackVisible();
+      _startBounce(_velocity * 0.5);
+      return;
+    }
     _offset = clamped;
     _publishCamera();
     _trackVisible();
-    if (_velocity.distance < _flingStopVelocity || hitEdge) {
+    if (_velocity.distance < _flingStopVelocity) {
       _velocity = Offset.zero;
       _ticker.stop();
       _gestureActive = false;
