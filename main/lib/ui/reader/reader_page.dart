@@ -1,14 +1,16 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/reader/reader_prefs_store.dart';
-import 'package:shuaqi/domain/ink/ink_tool.dart';
+import 'package:shuaqi/domain/ink/ink_brush.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/reader_providers.dart';
+import 'package:shuaqi/ui/reader/debug_hud.dart';
 import 'package:shuaqi/ui/reader/ink_toolbar.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/paged_view.dart';
@@ -60,8 +62,20 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   PaperStyle get _style => _prefs?.style ?? PaperStyle.original;
   int get _intensity => _prefs?.intensity ?? ReaderPrefs.defaultIntensity;
 
+  /// 性能 HUD 的帧耗时采集（T2.5）。release 构建不创建，不产生任何开销。
+  FrameStatsCollector? _frameStats;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kReleaseMode) {
+      _frameStats = FrameStatsCollector();
+    }
+  }
+
   @override
   void dispose() {
+    _frameStats?.dispose();
     _progress?.cancel();
     _prefsSaveTimer?.cancel();
     // 退出前若还有未落盘的偏好，立刻写一次（store/db 都比页面活得久，安全）
@@ -160,8 +174,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    // 当前笔刷（全局唯一一份，只影响之后画的新笔）
-    final InkTool brush = ref.watch(inkToolProvider);
+    // 当前笔（工具 + 颜色 + 粗细，全局唯一一份，只影响之后画的新笔）
+    final InkBrush brush = ref.watch(inkToolProvider);
+    // 笔的颜色预览要跟"纸的明暗"配对（夜读纸上用提亮版）
+    final bool darkPaper = _style.isDarkPaper;
+    if (brush.darkPaper != darkPaper) {
+      // 只影响色块预览：放到帧后改，避免在 build 里写 provider。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ref.read(inkToolProvider.notifier).setDarkPaper(darkPaper);
+        }
+      });
+    }
     final AsyncValue<ReaderHandle> async = ref.watch(
       readerHandleProvider(widget.workbookId),
     );
@@ -197,6 +221,17 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _prefs = loadedPrefs;
     }
 
+    // 撤销/重做看的是**当前页**的历史（滚到第 3 页撤的是第 3 页的笔）。
+    final InkPageKey pageKey = InkPageKey(
+      ready?.session.id ?? '',
+      _current,
+    );
+    final bool pinnedToolbar = ref.watch(inkToolbarPinnedProvider);
+    final bool canUndo = ready != null &&
+        ref.watch(inkEditProvider(pageKey).select((InkEditState s) => s.canUndo));
+    final bool canRedo = ready != null &&
+        ref.watch(inkEditProvider(pageKey).select((InkEditState s) => s.canRedo));
+
     return Scaffold(
       key: _scaffoldKey,
       appBar: AppBar(
@@ -205,7 +240,26 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
+        // 固定形态：工具带贴在顶栏下方（用户可在设置里切换形态）。
+        bottom: pinnedToolbar && ready != null
+            ? InkToolStrip(darkPaper: darkPaper)
+            : null,
         actions: <Widget>[
+          // 撤销/重做放在顶栏：高频动作，必须一次点击可达，不藏进工具面板。
+          IconButton(
+            tooltip: '撤销',
+            onPressed: canUndo
+                ? () => ref.read(inkEditProvider(pageKey).notifier).undo()
+                : null,
+            icon: const Icon(Icons.undo),
+          ),
+          IconButton(
+            tooltip: '重做',
+            onPressed: canRedo
+                ? () => ref.read(inkEditProvider(pageKey).notifier).redo()
+                : null,
+            icon: const Icon(Icons.redo),
+          ),
           IconButton(
             tooltip: _mode == ViewMode.paged ? '切换到连续滚动' : '切换到分页',
             onPressed: ready == null ? null : _switchMode,
@@ -265,7 +319,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
               currentPage: _current,
               onSelected: _jumpTo,
             ),
-      body: _buildBody(theme, async, ready, brush),
+      body: _buildBody(theme, async, ready, brush, darkPaper),
     );
   }
 
@@ -273,7 +327,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     ThemeData theme,
     AsyncValue<ReaderHandle> async,
     ReaderHandle? ready,
-    InkTool brush,
+    InkBrush brush,
+    bool darkPaper,
   ) {
     if (async.hasError) {
       return Center(
@@ -316,7 +371,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         style: _style,
                         intensity: _intensity,
                         sessionId: sessionId,
-                        inkTool: brush,
+                        inkTool: brush.tool,
+                        inkColorIndex: brush.colorIndex,
+                        inkWidthLevel: brush.widthLevel,
                       )
                     : ScrollReaderView(
                         key: _scrollKey,
@@ -327,7 +384,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         style: _style,
                         intensity: _intensity,
                         sessionId: sessionId,
-                        inkTool: brush,
+                        inkTool: brush.tool,
+                        inkColorIndex: brush.colorIndex,
+                        inkWidthLevel: brush.widthLevel,
                         // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
                         onPenMissed: _showPenMissed,
                         // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
@@ -336,19 +395,32 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         }),
                       ),
               ),
-              // 笔刷工具栏浮在阅读区右下角：不进 AppBar（书写时手指要够得着），
-              // 也不遮正文（只占右下角一小块）。按钮吃掉指针，笔尖点它不会落墨。
-              // 传当前页 key：撤销/重做是**按页**的（滚到第 3 页撤的是第 3 页）。
-              Positioned(
-                right: ShqSpace.md,
-                bottom: ShqSpace.sm,
-                child: SafeArea(
-                  top: false,
-                  child: InkToolbar(
-                    pageKey: InkPageKey(sessionId, _current),
+              // 浮钮形态（默认）：收起时只有一个圆，展开才是完整笔刷面板。
+              // 固定形态时工具带在 AppBar.bottom，这里就不画了。
+              if (!ref.watch(inkToolbarPinnedProvider))
+                Positioned(
+                  right: ShqSpace.md,
+                  bottom: ShqSpace.sm,
+                  child: SafeArea(
+                    top: false,
+                    child: InkFab(darkPaper: darkPaper),
                   ),
                 ),
-              ),
+              // 开发期性能仪表盘（T2.5）：默认关，设置页可开；release 构建里不存在。
+              if (ref.watch(debugHudProvider) && _frameStats != null)
+                Positioned(
+                  left: ShqSpace.sm,
+                  top: ShqSpace.sm,
+                  child: SafeArea(
+                    child: DebugHud(
+                      collector: _frameStats!,
+                      doc: ref.watch(
+                        inkDocProvider(InkPageKey(sessionId, _current)),
+                      ),
+                      cache: _cache!,
+                    ),
+                  ),
+                ),
             ],
           ),
         ),

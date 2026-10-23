@@ -10,6 +10,7 @@ import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/ink/ink_width.dart';
 import 'package:shuaqi/domain/util/ulid.dart';
 import 'package:shuaqi/state/ink_providers.dart';
+import 'package:shuaqi/ui/reader/ink_brush_spec.dart';
 import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/reader/ink_ribbon.dart';
 
@@ -51,8 +52,10 @@ class InkLayer extends ConsumerStatefulWidget {
     required this.inkKey,
     required this.pageWidthPt,
     required this.width,
-    required this.inkColor,
+    required this.darkPaper,
     this.tool = InkTool.pen,
+    this.colorIndex = 0,
+    this.widthLevel = 1,
     this.enabled = true,
     this.onPenDown,
   });
@@ -64,12 +67,16 @@ class InkLayer extends ConsumerStatefulWidget {
   final double pageWidthPt;
   final double width;
 
-  /// 墨色。由纸样式决定（[inkColorFor]）：暗纸用暖白墨，其余用深墨。
+  /// 这张纸是不是暗的（夜读）。决定墨色取色表与荧光笔合成方式。
   /// **不由 App 主题决定**——笔迹要与它下面的那张纸配对，不是与界面配色配对。
-  final Color inkColor;
+  final bool darkPaper;
 
   /// 当前工具（钢笔 / 圆珠笔 / 荧光笔 / 橡皮）。只影响**之后**落下的笔。
   final InkTool tool;
+
+  /// 当前颜色（调色板索引）与粗细档。只影响**之后**落下的笔。
+  final int colorIndex;
+  final int widthLevel;
 
   /// false 时这一页不接受落笔（例如非当前页）。
   final bool enabled;
@@ -89,14 +96,17 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   final ValueNotifier<int> _activeTick = ValueNotifier<int>(0);
   final CommittedInkCache _cache = CommittedInkCache();
 
-  /// 正在写的这一笔的几何。笔刷变了就换一条（笔刷变化不可能发生在笔中途）。
+  /// 正在写的这一笔的几何。spec 变了就换一条。
   InkRibbon? _ribbon;
 
   InkCompressor? _compressor;
 
-  /// 当前这笔用的笔刷样式。**与 `widget.tool` 分开存**：
-  /// 写到一半切工具（比如点了一下工具栏）不能让这一笔半路换笔刷/变没。
-  InkStrokeStyle _activeStyle = InkStrokeStyle.pen;
+  /// 当前这笔的绘制规格（笔刷 + 颜色 + 粗细 + 混合）。
+  ///
+  /// **落笔那一刻就定死**：写到一半切工具/换颜色（比如手指点了工具栏）
+  /// 不能让这一笔半路变色、变粗，也不能让它消失。
+  /// 默认值只是占位，真正赋值在 [_onPointerDown]。
+  InkBrushSpec? _activeSpec;
 
   /// 当前这笔最近一次**有效**压力。DOWN / UP 的 0 读数用它兜底。
   double _lastPressure = InkWidth.neutralPressure;
@@ -169,11 +179,18 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     return raw;
   }
 
-  InkRibbon _ribbonFor(InkStrokeStyle style, Color color) {
+  /// 取（或换）当前位置的绘制规格。**唯一解析入口** —— 与已提交层同源。
+  InkBrushSpec _specFor(InkStrokeStyle style) => InkBrushSpec.of(
+    style: style,
+    colorIndex: widget.colorIndex,
+    widthLevel: widget.widthLevel,
+    darkPaper: widget.darkPaper,
+  );
+
+  InkRibbon _ribbonFor(InkBrushSpec spec) {
     final InkRibbon? current = _ribbon;
-    if (current == null || current.style != style) {
-      final InkRibbon next = InkRibbon(style: style, color: color)
-        ..beginStroke();
+    if (current == null || current.spec != spec) {
+      final InkRibbon next = InkRibbon(spec)..beginStroke();
       _ribbon = next;
       return next;
     }
@@ -208,11 +225,11 @@ class _InkLayerState extends ConsumerState<InkLayer> {
 
     _erasing = false;
     _lastEraseAt = null;
-    _activeStyle = widget.tool.strokeStyle ?? InkStrokeStyle.pen;
+    _activeSpec = _specFor(widget.tool.strokeStyle ?? InkStrokeStyle.pen);
     _compressor = InkCompressor();
     // 落笔：压力基线重置为中性，避免上一笔的重压"传染"到这一笔的起笔。
     _lastPressure = InkWidth.neutralPressure;
-    final InkRibbon ribbon = _ribbonFor(_activeStyle, widget.inkColor)..clear();
+    final InkRibbon ribbon = _ribbonFor(_activeSpec!)..clear();
     ribbon.beginStroke();
 
     final InkPoint first = _pointOf(event, pressure: _pressureOf(event));
@@ -329,11 +346,11 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   void _commit(InkPoint endPoint) {
     final InkCompressor? compressor = _compressor;
     final InkRibbon? ribbon = _ribbon;
-    final InkStrokeStyle style = _activeStyle;
+    final InkBrushSpec? spec = _activeSpec;
     _activePointer = -1;
     _compressor = null;
     _lastActiveEventMs = 0;
-    if (compressor == null) {
+    if (compressor == null || spec == null) {
       _resetActive();
       return;
     }
@@ -350,7 +367,16 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     unawaited(
       ref
           .read(inkEditProvider(widget.inkKey).notifier)
-          .commit(InkStroke(uid: Ulid.next(), points: points, style: style)),
+          .commit(
+            InkStroke(
+              uid: Ulid.next(),
+              points: points,
+              style: spec.style,
+              // 颜色/粗细跟着这一笔落纸时的选择走（之后换色不重绘旧笔）。
+              colorIndex: spec.colorIndex,
+              widthLevel: spec.widthLevel,
+            ),
+          ),
     );
   }
 
@@ -359,41 +385,42 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   @override
   Widget build(BuildContext context) {
     final InkDoc doc = ref.watch(inkDocProvider(widget.inkKey));
-    final Color inkColor = widget.inkColor;
     final double scale = _scale;
 
     // 新笔画到了才同步缓存（InkDoc 不可变，append 产生新实例）
-    _cache.sync(doc, inkColor: inkColor, highlighterColor: highlighterColorOf);
+    _cache.sync(doc, darkPaper: widget.darkPaper);
 
-    // 正在写的那一笔用**它自己的**笔刷（切工具不影响已落下的这一笔）；
-    // 没在写时用当前工具（橡皮时画布上没有活跃笔，回落到钢笔只为复用同一条 ribbon）。
-    final InkStrokeStyle drawStyle = _activePointer >= 0 && !_erasing
-        ? _activeStyle
-        : (widget.tool.strokeStyle ?? InkStrokeStyle.pen);
-    final InkRibbon active = _ribbonFor(drawStyle, inkColor);
-    active.color = inkColor;
+    // 正在写的那一笔用**它自己的** spec（切工具/换色不影响已落下的这一笔）；
+    // 没在写时用当前设置（橡皮时画布上没有活跃笔，回落到钢笔只为复用同一条 ribbon）。
+    final InkBrushSpec spec = _activePointer >= 0 && !_erasing && _activeSpec != null
+        ? _activeSpec!
+        : _specFor(widget.tool.strokeStyle ?? InkStrokeStyle.pen);
+    final InkRibbon active = _ribbonFor(spec);
 
     return ClipRect(
       child: Stack(
         children: <Widget>[
+          // 两层各自一个 RepaintBoundary：写字的每一帧只需要重画"正在写的那一笔"，
+          // 已提交层直接复用缓存图层（写满一页时这不是小事）。
           Positioned.fill(
-            child: CustomPaint(
-              painter: CommittedInkPainter(
-                cache: _cache,
-                doc: doc,
-                scale: scale,
-                inkColor: inkColor,
-                highlighterColor: highlighterColorOf,
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: CommittedInkPainter(
+                  cache: _cache,
+                  doc: doc,
+                  scale: scale,
+                ),
               ),
             ),
           ),
           Positioned.fill(
-            child: CustomPaint(
-              painter: ActiveStrokePainter(
-                ribbon: active,
-                scale: scale,
-                color: inkColor,
-                repaint: _activeTick,
+            child: RepaintBoundary(
+              child: CustomPaint(
+                painter: ActiveStrokePainter(
+                  ribbon: active,
+                  scale: scale,
+                  repaint: _activeTick,
+                ),
               ),
             ),
           ),

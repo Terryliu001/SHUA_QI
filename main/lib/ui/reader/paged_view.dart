@@ -35,6 +35,8 @@ class PagedReaderView extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkTool = InkTool.pen,
+    this.inkColorIndex = 0,
+    this.inkWidthLevel = 1,
   });
 
   final List<WbPage> pages;
@@ -46,6 +48,10 @@ class PagedReaderView extends StatefulWidget {
 
   /// 当前 draft 会话 id。null = 不挂墨迹层。
   final String? sessionId;
+
+  /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
+  final int inkColorIndex;
+  final int inkWidthLevel;
 
   /// 当前笔刷（工具栏选中项）。
   final InkTool inkTool;
@@ -252,6 +258,8 @@ class PagedReaderViewState extends State<PagedReaderView> {
                       // touch 仍走 IV 的平移/缩放（笔写、指滚，§6.9.1）。
                       inkEnabled: widget.sessionId != null && index == _current,
                       inkTool: widget.inkTool,
+                      inkColorIndex: widget.inkColorIndex,
+                      inkWidthLevel: widget.inkWidthLevel,
                     ),
                   ),
                 ),

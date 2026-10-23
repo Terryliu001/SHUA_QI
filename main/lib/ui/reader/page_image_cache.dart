@@ -14,11 +14,16 @@ import 'package:shuaqi/infra/pdf/pdfrx_source.dart';
 /// 交付约定（很重要）：[obtain] 返回的是 **clone**，调用方负责 `dispose()`。
 /// 这样即使原图被淘汰释放，正在显示的 widget 手里的那份仍然有效。
 class PageImageCache {
-  PageImageCache({required this.source, this.maxBytes = 200 * 1024 * 1024});
+  PageImageCache({required this.source, this.maxBytes = 320 * 1024 * 1024});
 
   final PdfrxSource source;
 
-  /// 缓存上限（字节）。滚动模式实测增量要求 ≤260MB，这里给 200MB 留余量。
+  /// 缓存上限（字节）。
+  ///
+  /// 200MB → 320MB（2026-10-23 实测调整）：这一代平板一页 A4 在 3000px 宽下是
+  /// 51MB，"视口 2 页 + 预热 1 页 + 刚离开还没丢的 1 页"正好 204MB —— 卡在 200MB
+  /// 上限上就是**每一帧都在淘汰与上传纹理**，HUD 抓到单帧 30ms 的顿挫。
+  /// 320MB 能把常用工作集（约 5–6 页）完整装下，整机峰值仍远低于 600MB 预算。
   final int maxBytes;
 
   final LinkedHashMap<String, _CachedImage> _entries =
@@ -26,6 +31,15 @@ class PageImageCache {
   final Map<String, Future<ui.Image?>> _inflight = <String, Future<ui.Image?>>{};
 
   int _bytes = 0;
+
+  /// 运动期间**暂停淘汰**（2026-10-23 加）。
+  ///
+  /// 为什么：一页 A4 在 3000px 宽下是 51MB，200MB 缓存只装得下 3–4 页。
+  /// 滑动时新页不断进来，边进边淘汰 → 每一页都要 `dispose()` 旧的纹理 +
+  /// 上传新的 51MB 纹理，实测出现单帧 30ms 的顿挫（HUD 数据见日志 025）。
+  /// 运动期间不淘汰，等停手再一次性 trim：中间多占几十 MB，
+  /// 换来的是一整段滑动里零纹理churn。
+  bool deferEviction = false;
 
   int get usedBytes => _bytes;
 
@@ -74,6 +88,19 @@ class PageImageCache {
   }
 
   void _evictIfNeeded() {
+    if (deferEviction) {
+      // 运动期间先攒着，停手后由 [trim] 统一收敛。
+      return;
+    }
+    _trim();
+  }
+
+  /// 立刻按上限收敛（停手 / 落笔 / 退出时调用）。
+  void trim() {
+    _trim();
+  }
+
+  void _trim() {
     // 至少保留 1 份，否则"正在看的那页"会被自己挤掉
     while (_bytes > maxBytes && _entries.length > 1) {
       final String oldestKey = _entries.keys.first;

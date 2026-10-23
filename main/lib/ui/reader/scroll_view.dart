@@ -58,6 +58,8 @@ class ScrollReaderView extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkTool = InkTool.pen,
+    this.inkColorIndex = 0,
+    this.inkWidthLevel = 1,
     this.onPenMissed,
   });
 
@@ -74,6 +76,10 @@ class ScrollReaderView extends StatefulWidget {
 
   /// 当前笔刷（工具栏选中项）。
   final InkTool inkTool;
+
+  /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
+  final int inkColorIndex;
+  final int inkWidthLevel;
 
   /// 这一笔没落在纸上（落在纸外 / 纸还没就绪）时回调一次。
   ///
@@ -325,7 +331,29 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   void _stopMotion() {
     _ticker.stop();
     _velocity = Offset.zero;
+    _endMotionSoon();
   }
+
+  /// 运动结束：恢复淘汰并立刻收敛一次（见 [PageImageCache.deferEviction]）。
+  ///
+  /// 放在下一帧而不是当前帧：停手那一帧往往还有一张纹理正在上传，
+  /// 这时 dispose 别的页会让"刚进来的页"白闪一下。
+  void _endMotionSoon() {
+    if (_trimScheduled) {
+      return;
+    }
+    _trimScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _trimScheduled = false;
+      if (!mounted) {
+        return;
+      }
+      widget.cache.deferEviction = false;
+      widget.cache.trim();
+    });
+  }
+
+  bool _trimScheduled = false;
 
   /// 纸面接住了这一笔：停运动 + 计数（与 [_observePointer] 的视口计数配对）。
   void _onPenDownOnPaper() {
@@ -333,20 +361,25 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _stopMotion();
   }
 
-  // ── 笔优先（规格 T2.1：stylus 出现后 800ms 内忽略单指 touch）────────
+  // ── 笔优先（规格 T2.1：笔在写的时候忽略单指 touch）──────────────
   //
   // 为什么必须有：写字时手掌/手指搭在屏上是常态，touch 事件会照常进
   // 缩放手势——表现是"一落笔页面就跟着跑"。100% 时横向被夹紧看不出来，
   // 放大后横向有余量，现象最明显（用户报的"放大后无法书写"）。
-  // 实现：用时间戳门槛，**不 setState、不重建**——被挡住的手势直接在
-  // 回调里 return，页面不动，墨迹层照常写。
   //
-  // **双指捏合永远放行**（规格 T2.1「双指缩放除外」）。注意：判断"是不是
-  // 双指"只能在 `_onScaleUpdate` 里做——`ScaleStartDetails.pointerCount` 恒为 1
-  //（第一根手指落下那一刻还没有第二根），在 start 阶段用它判断会把
-  // "刚碰过笔之后的双指捏合"整个冻住（用户反馈"放大后行为异常"的来源之一）。
-  static const int _penGraceMs = 800;
+  // ## 2026-10-23 收紧（"滑动不跟手"的真凶）
+  // 原来用"笔最近 800ms 内出现过"当门槛，副作用是：**写完抬笔后 0.8 秒内
+  // 用手指滑，页面一点反应都没有**，紧接着又突然能滑——主观就是"不跟手"。
+  // 现在改成两条更贴事实的规则：
+  //  1. **笔在纸上（`_penDown`）时一律冻结**：这才是"手掌搭屏"的真实场景；
+  //  2. 只有 **200ms** 的尾巴（笔尖刚离开时落下的手掌算 palm）。
+  // 另外手势在**开始那一刻**就被冻结的，整段都不动（防止"手指在动、页面没动"
+  // 之后突然窜一段），也不甩动。
+  static const int _penGraceMs = 200;
   int _lastPenSeenMs = -1000000;
+
+  /// 笔尖此刻是否压在屏幕上。由观察哨在 DOWN / UP / CANCEL 里维护。
+  bool _penDown = false;
 
   /// 落笔计数：视口看见的笔落屏次数 vs 纸面（InkLayer）真正接住的次数。
   ///
@@ -364,6 +397,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         event.kind == PointerDeviceKind.invertedStylus) {
       _lastPenSeenMs = DateTime.now().millisecondsSinceEpoch;
       if (event is PointerDownEvent) {
+        _penDown = true;
         _viewportPenDowns++;
         if (_viewportPenDowns > _inkPenDowns) {
           // 这一笔没被任何一页接住。派发顺序是"深的先"（InkLayer 在观察哨
@@ -371,27 +405,35 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           _viewportPenDowns = _inkPenDowns;
           widget.onPenMissed?.call();
         }
+      } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+        _penDown = false;
       }
     }
   }
 
-  bool _penRecentlyActive() =>
+  /// 笔是否"正在用"：压着屏幕，或刚离开不到 [_penGraceMs]。
+  bool _penActiveNow() =>
+      _penDown ||
       DateTime.now().millisecondsSinceEpoch - _lastPenSeenMs < _penGraceMs;
 
   void _onScaleStart(ScaleStartDetails details) {
-    // 这里**不**因笔而阻塞（见上面关于 pointerCount 的说明）。
-    _gestureFrozen = false;
+    // 这里**不**因笔而阻塞整段手势（见上面关于 pointerCount 的说明）。
+    // 但"手势从手掌开始"这件事要记住：那一眼就是 palm，整段都不许动页面。
+    _gestureFrozen = _penActiveNow();
     _ticker.stop();
     _velocity = Offset.zero;
     _qualityTimer?.cancel();
+    // 手势一开始就暂停位图淘汰：滑动中淘汰 = 每页重新渲染 + 重新上传 51MB 纹理。
+    widget.cache.deferEviction = true;
     _startScale = _scale;
     // 焦点换算到内容坐标后，整段手势都让这个内容点钉在原来的屏幕位置
     _focalContent = (details.localFocalPoint - _offset) / _scale;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // 单指手势 + 笔刚动过 → 冻结（手掌搭屏不拖页面）；双指捏合放行。
-    if (details.pointerCount < 2 && _penRecentlyActive()) {
+    // 双指捏合永远放行（规格 T2.1「双指缩放除外」）。
+    // 单指：手势一开始就被判成 palm，或者此刻笔正压在屏幕上 → 冻结。
+    if (details.pointerCount < 2 && (_gestureFrozen || _penActiveNow())) {
       _gestureFrozen = true;
       return;
     }
@@ -423,8 +465,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _velocity = velocity;
       _lastTick = Duration.zero;
       _ticker.start();
+      // 甩动期间继续暂停淘汰；停下来的那一帧由 _endMotionSoon 收敛。
     } else {
       _velocity = Offset.zero;
+      _endMotionSoon();
     }
     _trackVisible();
   }
@@ -471,6 +515,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (_velocity.distance < _flingStopVelocity || hitEdge) {
       _velocity = Offset.zero;
       _ticker.stop();
+      _endMotionSoon();
     }
   }
 
@@ -607,6 +652,13 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         _firstVisible = first;
         _lastVisible = last;
 
+        // **打开就预热**（2026-10-23 实测补的一处）：
+        // 之前预热只在手势回调里跑，于是"打开文档 → 立刻滑"这一段永远是现渲染
+        // （51MB 位图 + 首次纹理上传），HUD 抓到单帧 30.7ms 的顿挫。
+        // 这里在 build 末尾预热一次，用户还没碰屏幕时下一页就烘好了。
+        // 纯缓存调用，不 setState、不改状态（token 去重，重复调用是空操作）。
+        _maybePrefetch();
+
         // 重排后补一次页码上报（上面说的 _pendingReport）。
         // 除这一次外，build 不做任何副作用。
         if (_pendingReport) {
@@ -636,6 +688,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 sessionId: widget.sessionId,
                 inkEnabled: widget.sessionId != null,
                 inkTool: widget.inkTool,
+                inkColorIndex: widget.inkColorIndex,
+                inkWidthLevel: widget.inkWidthLevel,
                 // 落笔即停：笔一碰屏，惯性滚动立刻停（否则字画在"还在飘的纸"上）。
                 onPenDown: _onPenDownOnPaper,
               ),

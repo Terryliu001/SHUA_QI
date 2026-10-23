@@ -7,7 +7,6 @@ import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_layer.dart';
-import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/paper_effect.dart';
@@ -34,6 +33,8 @@ class PageLayer extends StatefulWidget {
     this.sessionId,
     this.inkEnabled = false,
     this.inkTool = InkTool.pen,
+    this.inkColorIndex = 0,
+    this.inkWidthLevel = 1,
     this.onPenDown,
   });
 
@@ -66,6 +67,10 @@ class PageLayer extends StatefulWidget {
 
   /// 当前笔刷。只影响之后画的笔。
   final InkTool inkTool;
+
+  /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
+  final int inkColorIndex;
+  final int inkWidthLevel;
 
   /// 笔落屏时通知外层（滚动模式用来停惯性滚动）。见 [InkLayer.onPenDown]。
   final VoidCallback? onPenDown;
@@ -207,14 +212,23 @@ class _PageLayerState extends State<PageLayer> {
         children: <Widget>[
           Positioned.fill(child: paper),
           Positioned.fill(
-            child: InkLayer(
-              inkKey: InkPageKey(sessionId, widget.page.index),
-              pageWidthPt: widget.page.width,
-              width: widget.width,
-              // 墨色跟纸配对（不是跟界面主题配对）：夜读纸 → 暖白墨。
-              inkColor: inkColorFor(widget.style),
-              tool: widget.inkTool,
-              onPenDown: widget.onPenDown,
+            // **墨迹层必须自己是一个合成层**（2026-10-23 实测）：
+            // 相机矩阵每帧都在变，`RenderTransform` 换矩阵时会把整棵非边界子树
+            // 重新 paint —— 墨迹层的 CustomPaint 不是 RepaintBoundary，
+            // 于是"每一帧滚动都把这一页所有笔画重画一遍"（写满的页就是几百次
+            // drawPath/帧）。包一层 boundary 后，滚动时墨迹层直接复用缓存图层。
+            child: RepaintBoundary(
+              child: InkLayer(
+                inkKey: InkPageKey(sessionId, widget.page.index),
+                pageWidthPt: widget.page.width,
+                width: widget.width,
+                // 墨色跟纸配对（不是跟界面主题配对）：夜读纸 → 提亮的取色表。
+                darkPaper: widget.style.isDarkPaper,
+                tool: widget.inkTool,
+                colorIndex: widget.inkColorIndex,
+                widthLevel: widget.inkWidthLevel,
+                onPenDown: widget.onPenDown,
+              ),
             ),
           ),
         ],

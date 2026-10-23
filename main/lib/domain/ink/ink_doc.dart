@@ -98,13 +98,28 @@ class InkStroke {
     required this.uid,
     required this.points,
     this.style = InkStrokeStyle.pen,
+    this.colorIndex = 0,
+    this.widthLevel = defaultWidthLevel,
   });
+
+  /// 粗细档数（每支笔 3 档：细 / 中 / 粗）。
+  static const int widthLevels = 3;
+
+  /// 默认档 = 中。老数据（T2.2 时代没有这个字段）落到这里，行为与当时一致。
+  static const int defaultWidthLevel = 1;
 
   /// ULID（§5.3）。由调用方生成——domain 不持有 id 生成器，避免隐式随机源。
   final String uid;
 
   final List<InkPoint> points;
   final InkStrokeStyle style;
+
+  /// 调色板索引（见 `InkPalette`）：**进数据契约**，SIF 里占 1 字节。
+  /// 0 = 墨黑，与 T2.2 的行为一致，所以老数据不用迁移。
+  final int colorIndex;
+
+  /// 粗细档 0..2（[widthLevels]）。同样进契约，1 字节。
+  final int widthLevel;
 
   /// 荧光笔永不进入识别（§6.2 规则 6）。
   ///

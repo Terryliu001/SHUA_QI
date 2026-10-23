@@ -1,12 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/app_info.dart';
 import 'package:shuaqi/domain/reader/paper_tint.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/theme_mode_provider.dart';
+import 'package:shuaqi/ui/reader/debug_hud.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 设置页（T6.1 的先行子集：外观 + 阅读默认先做真功能，AI/存储留置灰说明）。
@@ -123,6 +126,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               const _Note('只影响之后新打开的卷；正在读的卷以阅读器内「显示」浮层为准'),
             ],
           ),
+          _Section(
+            title: '书写',
+            children: <Widget>[
+              SwitchListTile(
+                value: ref.watch(inkToolbarPinnedProvider),
+                onChanged: (bool pinned) => unawaited(
+                  ref.read(inkToolbarPinnedProvider.notifier).set(pinned),
+                ),
+                secondary: const Icon(Icons.draw_outlined),
+                title: const Text('工具条固定在顶栏'),
+                subtitle: const Text(
+                  '关闭 = 右下角圆形浮钮（点开才是面板，阅读区最干净）',
+                ),
+              ),
+              const _Note('笔的颜色与粗细在阅读器里的工具面板中选；每支笔分别记住'),
+            ],
+          ),
           const _Section(
             title: 'AI 分析',
             children: <Widget>[
@@ -133,6 +153,21 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ],
           ),
+          // 只有 debug / profile 构建才会出现（release 里连入口都没有）。
+          if (!kReleaseMode)
+            _Section(
+              title: '开发',
+              children: <Widget>[
+                SwitchListTile(
+                  value: ref.watch(debugHudProvider),
+                  onChanged: (bool _) =>
+                      ref.read(debugHudProvider.notifier).toggle(),
+                  secondary: const Icon(Icons.speed_outlined),
+                  title: const Text('性能 HUD'),
+                  subtitle: const Text('阅读器左上角显示帧耗时 / 笔画数 / 位图占用'),
+                ),
+              ],
+            ),
           const _Section(
             title: '存储与备份',
             children: <Widget>[
