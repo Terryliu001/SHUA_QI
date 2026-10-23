@@ -3,9 +3,10 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 空态占位（书架 / 记录 / 错题共用）。
 ///
-/// 设计取向（设计哲学：iOS 的优雅简练 + 低干扰）：
-/// 大号**线性**图标 + 一句标题 + 一句解释 + 一个主动作；
-/// 不堆插画、不用红色警告色——空态是"还没开始"，不是"出错了"。
+/// 设计取向（2026-10-23 设计升级 v2）：**软圆底 + 线性图标**，
+/// 图标落在一层极淡的圆形色块上（ColorOS / M3 都在用），
+/// 让"空"看起来是有意的留白，而不是渲染失败。
+/// 仍然是：一句标题 + 一句解释 + 一个主动作；不堆插画、不用警告色。
 class EmptyState extends StatelessWidget {
   const EmptyState({
     super.key,
@@ -27,29 +28,35 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(ShqSpace.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            Icon(
-              icon,
-              size: 56,
-              color: theme.colorScheme.onSurfaceVariant,
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: scheme.surfaceContainerHigh,
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Icon(icon, size: 40, color: scheme.onSurfaceVariant),
             ),
-            const SizedBox(height: ShqSpace.md),
+            const SizedBox(height: ShqSpace.lg),
             Text(
               title,
               style: theme.textTheme.titleLarge,
               textAlign: TextAlign.center,
             ),
             if (message != null) ...<Widget>[
-              const SizedBox(height: ShqSpace.sm),
+              const SizedBox(height: ShqSpace.xs),
               Text(
                 message!,
                 style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
+                  color: scheme.onSurfaceVariant,
                 ),
                 textAlign: TextAlign.center,
               ),

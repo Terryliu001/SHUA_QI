@@ -229,9 +229,18 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: '搜索卷子',
-                  border: InputBorder.none,
+                style: Theme.of(context).textTheme.bodyLarge,
+                decoration: InputDecoration(
+                  hintText: '搜索标题 / 标签 / 文件夹',
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search, size: 20),
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ShqRadius.pill),
+                    borderSide: BorderSide.none,
+                  ),
                 ),
                 onChanged: (String value) => setState(() => _query = value),
               )

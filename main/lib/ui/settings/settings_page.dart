@@ -195,6 +195,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 }
 
 /// 设置分组：标题 + 一张圆角卡片。分隔靠卡片内发丝线，不靠阴影。
+///
+/// 2026-10-23 设计升级 v2：
+/// - 标题与卡片**左对齐同一竖线**（原来标题 32dp、卡片 16dp，看着别扭）；
+/// - 标题改成"小号 + 字重 600 + 字距"，颜色降为 onSurfaceVariant
+///   （分组名是导航信息，不该比内容更抢眼——这是 iOS 设置页的做法）；
+/// - 卡片圆角 20 + 发丝描边（由主题统一给）。
 class _Section extends StatelessWidget {
   const _Section({required this.title, required this.children});
 
@@ -209,20 +215,22 @@ class _Section extends StatelessWidget {
       children: <Widget>[
         Padding(
           padding: const EdgeInsets.fromLTRB(
-            ShqSpace.xl,
             ShqSpace.lg,
-            ShqSpace.xl,
+            ShqSpace.lg,
+            ShqSpace.lg,
             ShqSpace.sm,
           ),
           child: Text(
             title,
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: theme.colorScheme.primary,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.6,
             ),
           ),
         ),
         Card(
-          margin: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
+          margin: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: children,

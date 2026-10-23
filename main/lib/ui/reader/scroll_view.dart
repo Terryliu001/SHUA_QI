@@ -202,6 +202,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   // ── 手势中间量 ───────────────────────────────────────────────────
   double _startScale = 1;
   Offset _focalContent = Offset.zero;
+
+  /// 手势开始时的平移量 / 焦点（轴向锁定要用"起点 + 投影位移"重算）。
+  Offset _startOffset = Offset.zero;
+  Offset _startFocal = Offset.zero;
+
+  /// 本次手势锁定的轴：true = 竖轴，false = 横轴，null = 还没判定。
+  bool? _lockVertical;
+
   Offset _velocity = Offset.zero;
   Duration _lastTick = Duration.zero;
 
@@ -315,6 +323,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     Offset offset,
     double scale, {
     bool allowOverscroll = false,
+    bool overscrollVertical = true,
+    bool overscrollHorizontal = true,
   }) {
     final (double x, double y) = ScrollMath.clampOffset(
       offsetX: offset.dx,
@@ -329,8 +339,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       return Offset(x, y);
     }
     return Offset(
-      x + _rubberBand(offset.dx - x, _viewport.width),
-      y + _rubberBand(offset.dy - y, _viewport.height),
+      overscrollHorizontal
+          ? x + _rubberBand(offset.dx - x, _viewport.width)
+          : x,
+      overscrollVertical ? y + _rubberBand(offset.dy - y, _viewport.height) : y,
     );
   }
 
@@ -531,6 +543,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     // 手势一开始就暂停位图淘汰：滑动中淘汰 = 每页重新渲染 + 重新上传 51MB 纹理。
     widget.cache.deferEviction = true;
     _startScale = _scale;
+    _startOffset = _offset;
+    _startFocal = details.localFocalPoint;
+    // 轴向锁定：内容不够宽（横向推不动）时**直接锁竖轴**，连判定都不等；
+    // 否则等累计位移越过 6dp 再判（偏 35° 以内都算竖滑）。见 DragAxisLock。
+    final bool canPanX = _baseWidth * _scale > _viewport.width + 0.5;
+    _lockVertical = canPanX ? null : true;
     // 焦点换算到内容坐标后，整段手势都让这个内容点钉在原来的屏幕位置
     _focalContent = (details.localFocalPoint - _offset) / _scale;
   }
@@ -546,10 +564,44 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _minScale,
       _maxScale,
     );
-    final Offset offset = details.localFocalPoint - _focalContent * scale;
+
+    Offset offset = details.localFocalPoint - _focalContent * scale;
+
+    // ── 轴向锁定（单指平移）────────────────────────────────────────
+    //
+    // 为什么必须做：手指画不出直线，想竖滑时轨迹总有横向分量。
+    // 旧实现把两个分量都收下，横向那部分一到边界就被吃掉/被橡皮筋弹回，
+    // 主观感受就是"滑了很长距离，页面只走了一点、还有点钝"。
+    // 现在一次手势只认一个轴：竖滑时 dx 完全丢弃 → 竖向 1:1 跟手、不再左右晃。
+    if (details.pointerCount < 2) {
+      final Offset moved = details.localFocalPoint - _startFocal;
+      _lockVertical ??= DragAxisLock.decide(
+        moved.dx,
+        moved.dy,
+        allowHorizontal: _baseWidth * _scale > _viewport.width + 0.5,
+      );
+      final bool? lock = _lockVertical;
+      if (lock != null) {
+        // 用"起点 + 投影后的位移"重算，避免焦点式累加把丢弃的分量又带回来。
+        final (double dx, double dy) = DragAxisLock.project(
+          moved.dx,
+          moved.dy,
+          vertical: lock,
+        );
+        offset = _startOffset + Offset(dx, dy);
+      }
+    }
+
     _scale = scale;
     // 拖动允许越界（橡皮筋），松手在 _onScaleEnd 里回弹。
-    _offset = _clampOffset(offset, scale, allowOverscroll: true);
+    // 只给**锁定轴**橡皮筋：另一轴硬夹紧，斜滑时页面不会左右晃。
+    _offset = _clampOffset(
+      offset,
+      scale,
+      allowOverscroll: true,
+      overscrollVertical: _lockVertical ?? true,
+      overscrollHorizontal: _lockVertical == false,
+    );
     // 丝滑关键：**不 setState**。矩阵层自己重建 Transform（一个 renderObject），
     // 页面列表纹丝不动。
     _publishCamera();
@@ -568,7 +620,16 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     widget.onZoomChanged?.call(_scale);
     _scheduleQualityUpgrade();
 
-    final Offset velocity = details.velocity.pixelsPerSecond;
+    // 甩动速度也**投影到锁定轴**：斜着甩一把时，不能让它横着飘。
+    Offset velocity = details.velocity.pixelsPerSecond;
+    if (details.pointerCount < 2 && _lockVertical != null) {
+      final (double vx, double vy) = DragAxisLock.project(
+        velocity.dx,
+        velocity.dy,
+        vertical: _lockVertical!,
+      );
+      velocity = Offset(vx, vy);
+    }
     // 已经越界（拖到了边界外）：立刻回弹，不甩动 —— 手感与 iOS 一致。
     final bool outOfBounds =
         (_clampOffset(_offset, _scale) - _offset).distance > 0.5;
