@@ -76,7 +76,10 @@ class PagedReaderViewState extends State<PagedReaderView> {
   @override
   void initState() {
     super.initState();
-    _current = widget.initialPage.clamp(0, math.max(0, widget.pages.length - 1));
+    _current = widget.initialPage.clamp(
+      0,
+      math.max(0, widget.pages.length - 1),
+    );
     _pageController = PageController(initialPage: _current);
   }
 
@@ -102,8 +105,7 @@ class PagedReaderViewState extends State<PagedReaderView> {
     if (index != _current) {
       return;
     }
-    final bool zoomed =
-        _controllerFor(index).value.getMaxScaleOnAxis() > 1.05;
+    final bool zoomed = _controllerFor(index).value.getMaxScaleOnAxis() > 1.05;
     if (zoomed != _zoomed) {
       setState(() {
         _zoomed = zoomed;
@@ -197,9 +199,7 @@ class PagedReaderViewState extends State<PagedReaderView> {
             setState(() {
               _current = index;
               _zoomed = scale > 1.05;
-              _renderScale = scale <= 1.05
-                  ? 1
-                  : scale.round().clamp(1, 4);
+              _renderScale = scale <= 1.05 ? 1 : scale.round().clamp(1, 4);
             });
             widget.onPageChanged(index);
           },
@@ -343,15 +343,43 @@ class PageIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
     return TextButton(
       onPressed: onTap,
       style: TextButton.styleFrom(
-        minimumSize: const Size(0, 36),
+        minimumSize: const Size(0, 38),
         padding: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
+        foregroundColor: scheme.onSurfaceVariant,
+        backgroundColor: scheme.surfaceContainerHigh,
+        shape: StadiumBorder(side: BorderSide(color: scheme.outlineVariant)),
+        visualDensity: VisualDensity.compact,
       ),
-      child: Text(
-        '${current + 1} / $total',
-        style: theme.textTheme.labelLarge,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            Icons.grid_view_rounded,
+            size: 16,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: ShqSpace.sm),
+          AnimatedSwitcher(
+            duration: ShqMotion.fast,
+            switchInCurve: ShqMotion.curveStandard,
+            switchOutCurve: ShqMotion.curveExit,
+            transitionBuilder: (Widget child, Animation<double> animation) =>
+                FadeTransition(opacity: animation, child: child),
+            child: Text(
+              '${current + 1} / $total',
+              // 页码变时做一次淡入淡出，避免数字硬跳（尤其是快速翻页）。
+              key: ValueKey<String>('$current/$total'),
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: scheme.onSurfaceVariant,
+                fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -380,18 +408,19 @@ class StylusGestureGuard extends StatelessWidget {
     return RawGestureDetector(
       // translucent：只加入命中结果，不拦 touch 的命中链。
       behavior: HitTestBehavior.translucent,
-      gestures: <Type, GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>>{
-        _StylusGuardRecognizer:
-            GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>(
-          () => _StylusGuardRecognizer(
-            supportedDevices: const <PointerDeviceKind>{
-              PointerDeviceKind.stylus,
-              PointerDeviceKind.invertedStylus,
-            },
-          ),
-          (_StylusGuardRecognizer instance) {},
-        ),
-      },
+      gestures:
+          <Type, GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>>{
+            _StylusGuardRecognizer:
+                GestureRecognizerFactoryWithHandlers<_StylusGuardRecognizer>(
+                  () => _StylusGuardRecognizer(
+                    supportedDevices: const <PointerDeviceKind>{
+                      PointerDeviceKind.stylus,
+                      PointerDeviceKind.invertedStylus,
+                    },
+                  ),
+                  (_StylusGuardRecognizer instance) {},
+                ),
+          },
       child: child,
     );
   }

@@ -32,17 +32,6 @@ class ReaderPage extends ConsumerStatefulWidget {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
-  /// 档位菜单（2026-10-23 重定）：**看得见整页 → 贴满宽 → 放大**。
-  /// 100% = fit-width（页宽正好等于屏宽），默认 86%（两侧留白，与翻页模式一致）。
-  static const List<double> _scrollZoomSteps = <double>[
-    0.6,
-    0.86,
-    1,
-    1.5,
-    2,
-    3,
-  ];
-
   final GlobalKey<PagedReaderViewState> _pagedKey =
       GlobalKey<PagedReaderViewState>();
   final GlobalKey<ScrollReaderViewState> _scrollKey =
@@ -131,8 +120,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   }
 
   void _switchMode() {
-    final ReaderPrefs next = (_prefs ?? ReaderPrefs.defaults)
-        .copyWith(mode: _mode == ViewMode.paged ? ViewMode.scroll : ViewMode.paged);
+    final ReaderPrefs next = (_prefs ?? ReaderPrefs.defaults).copyWith(
+      mode: _mode == ViewMode.paged ? ViewMode.scroll : ViewMode.paged,
+    );
     setState(() {
       _initialPage = _current;
     });
@@ -209,10 +199,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
       _handle = ready;
       _cache ??= PageImageCache(source: ready.source);
       if (_initialPage == null) {
-        _initialPage = ready.session.lastPage.clamp(
-          0,
-          ready.pages.length - 1,
-        );
+        _initialPage = ready.session.lastPage.clamp(0, ready.pages.length - 1);
         _current = _initialPage!;
       }
     }
@@ -231,15 +218,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
     }
 
     // 撤销/重做看的是**当前页**的历史（滚到第 3 页撤的是第 3 页的笔）。
-    final InkPageKey pageKey = InkPageKey(
-      ready?.session.id ?? '',
-      _current,
-    );
+    final InkPageKey pageKey = InkPageKey(ready?.session.id ?? '', _current);
     final bool pinnedToolbar = ref.watch(inkToolbarPinnedProvider);
-    final bool canUndo = ready != null &&
-        ref.watch(inkEditProvider(pageKey).select((InkEditState s) => s.canUndo));
-    final bool canRedo = ready != null &&
-        ref.watch(inkEditProvider(pageKey).select((InkEditState s) => s.canRedo));
+    final bool canUndo =
+        ready != null &&
+        ref.watch(
+          inkEditProvider(pageKey).select((InkEditState s) => s.canUndo),
+        );
+    final bool canRedo =
+        ready != null &&
+        ref.watch(
+          inkEditProvider(pageKey).select((InkEditState s) => s.canRedo),
+        );
 
     return Scaffold(
       key: _scaffoldKey,
@@ -269,54 +259,54 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                 : null,
             icon: const Icon(Icons.redo),
           ),
-          IconButton(
-            tooltip: _mode == ViewMode.paged ? '切换到连续滚动' : '切换到分页',
-            onPressed: ready == null ? null : _switchMode,
-            icon: Icon(
-              _mode == ViewMode.paged
-                  ? Icons.view_day_outlined
-                  : Icons.auto_stories_outlined,
-            ),
-          ),
+          const _ActionDivider(),
           if (_mode == ViewMode.scroll && ready != null)
-            PopupMenuButton<double>(
-              tooltip: '缩放',
-              initialValue: _scrollZoom,
-              // 只调 setScale，标签由 onZoomChanged 回调更新 —— 单一数据源，
-              // 避免"菜单显示 200% 但画面已经是 100%"这种不同步。
+            _ZoomPill(
+              value: _scrollZoom,
               onSelected: (double value) =>
                   _scrollKey.currentState?.setScale(value),
-              itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
-                for (final double zoom in _scrollZoomSteps)
-                  PopupMenuItem<double>(
-                    value: zoom,
-                    child: Text('${(zoom * 100).round()}%'),
-                  ),
-              ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: ShqSpace.sm),
-                child: Row(
-                  children: <Widget>[
-                    const Icon(Icons.zoom_in, size: 20),
-                    Text(
-                      '${(_scrollZoom * 100).round()}%',
-                      style: theme.textTheme.labelLarge,
-                    ),
-                  ],
-                ),
-              ),
             ),
           IconButton(
             tooltip: '显示设置',
             onPressed: ready == null ? null : _openDisplaySheet,
             icon: const Icon(Icons.palette_outlined),
           ),
-          IconButton(
-            tooltip: '缩略图',
-            onPressed: _cache == null
-                ? null
-                : () => _scaffoldKey.currentState?.openEndDrawer(),
-            icon: const Icon(Icons.grid_view_outlined),
+          // 低频动作（切模式 / 缩略图）收进一个菜单：顶栏只留高频动作，
+          // 也避免窄屏上六个图标把标题挤没。
+          PopupMenuButton<String>(
+            tooltip: '更多',
+            icon: const Icon(Icons.more_horiz),
+            onSelected: (String value) {
+              switch (value) {
+                case 'mode':
+                  _switchMode();
+                  break;
+                case 'thumbnails':
+                  _scaffoldKey.currentState?.openEndDrawer();
+                  break;
+              }
+            },
+            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
+              PopupMenuItem<String>(
+                value: 'mode',
+                enabled: ready != null,
+                child: _MenuItem(
+                  icon: _mode == ViewMode.paged
+                      ? Icons.view_day_outlined
+                      : Icons.auto_stories_outlined,
+                  label: _mode == ViewMode.paged ? '切换到连续滚动' : '切换到分页',
+                ),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'thumbnails',
+                enabled: _cache != null,
+                child: const _MenuItem(
+                  icon: Icons.grid_view_outlined,
+                  label: '缩略图',
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -446,6 +436,115 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
             ],
           ),
         ),
+      ],
+    );
+  }
+}
+
+/// 顶栏里的分组细线：把"文档动作（撤销/重做）"与"视图动作"分开。
+class _ActionDivider extends StatelessWidget {
+  const _ActionDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: ShqSpace.xs),
+      child: Center(
+        child: Container(
+          width: 1,
+          height: 22,
+          color: Theme.of(context).colorScheme.outlineVariant,
+        ),
+      ),
+    );
+  }
+}
+
+/// 连续滚动模式的缩放胶囊：**当前倍率本身就是按钮**。
+///
+/// 之前是"图标 + 文字"直接塞在 actions 里，宽度大、和图标不成一组。
+/// 现在做成一颗有底色的胶囊，倍率一眼可见，点开是档位菜单。
+class _ZoomPill extends StatelessWidget {
+  const _ZoomPill({required this.value, required this.onSelected});
+
+  final double value;
+  final ValueChanged<double> onSelected;
+
+  static const List<double> _steps = <double>[0.6, 0.86, 1, 1.5, 2, 3];
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    // 窄屏（手机竖屏）只露图标：4 个顶栏动作 + 百分比会把标题挤没。
+    final bool compact = MediaQuery.sizeOf(context).width < 600;
+    return PopupMenuButton<double>(
+      tooltip: '缩放 ${(value * 100).round()}%',
+      initialValue: value,
+      onSelected: onSelected,
+      itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
+        for (final double zoom in _steps)
+          PopupMenuItem<double>(
+            value: zoom,
+            child: Row(
+              children: <Widget>[
+                SizedBox(
+                  width: 22,
+                  child: (zoom - value).abs() < 0.01
+                      ? Icon(Icons.check, size: 16, color: scheme.primary)
+                      : null,
+                ),
+                Text('${(zoom * 100).round()}%'),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: ShqSpace.xxs),
+        padding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.sm,
+          vertical: 5,
+        ),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(ShqRadius.pill),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(Icons.zoom_in, size: 15, color: scheme.onSurfaceVariant),
+            if (!compact) ...<Widget>[
+              const SizedBox(width: 4),
+              Text(
+                '${(value * 100).round()}%',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MenuItem extends StatelessWidget {
+  const _MenuItem({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: <Widget>[
+        Icon(icon, size: 19, color: scheme.onSurfaceVariant),
+        const SizedBox(width: ShqSpace.md),
+        Text(label),
       ],
     );
   }

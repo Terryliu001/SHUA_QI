@@ -14,6 +14,7 @@ import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/empty_state.dart';
 import 'package:shuaqi/ui/widgets/pressable.dart';
+import 'package:shuaqi/ui/widgets/soft_icon.dart';
 
 /// 书架（T1.4 完成态）：导入 / 列表 / 最近打开 / 长按菜单 / 搜索 /
 /// 下拉刷新 / 文件损坏态。
@@ -201,6 +202,34 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     setState(() => _folder = folder);
   }
 
+  /// 重命名文件夹（批量改它下面所有卷的归属）。
+  ///
+  /// 之前 DAO 里有 `renameFolder` 但没有入口（027 的遗留项）。入口放在
+  /// 文件夹 chip 的长按上：用户已经在看这个文件夹，改名是这里最自然的动作。
+  Future<void> _renameFolder(String name) async {
+    final String? next = await showRenameDialog(
+      context,
+      initialTitle: name,
+      dialogTitle: '重命名文件夹',
+      fieldLabel: '文件夹名',
+    );
+    final String trimmed = next?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == name || !mounted) {
+      return;
+    }
+    await ref.read(workbookDaoProvider).renameFolder(name, trimmed);
+    ref.invalidate(bookshelfProvider);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (_folder == name) {
+        _folder = trimmed;
+      }
+    });
+    _toast('文件夹已重命名为「$trimmed」');
+  }
+
   // ── 搜索 ─────────────────────────────────────────────────────────
 
   void _toggleSearch() {
@@ -229,17 +258,40 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
             ? TextField(
                 controller: _searchController,
                 autofocus: true,
-                style: Theme.of(context).textTheme.bodyLarge,
+                style: Theme.of(context).textTheme.bodyMedium,
+                textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
                   hintText: '搜索标题 / 标签 / 文件夹',
                   isDense: true,
                   prefixIcon: const Icon(Icons.search, size: 20),
+                  // 有内容才出现清除钮：空搜索框上多一个叉是噪音。
+                  suffixIcon: _query.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清除',
+                          icon: const Icon(Icons.close, size: 18),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _query = '');
+                          },
+                        ),
                   filled: true,
                   fillColor: Theme.of(context).colorScheme.surfaceContainerHigh,
                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(ShqRadius.pill),
                     borderSide: BorderSide.none,
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ShqRadius.pill),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(ShqRadius.pill),
+                    borderSide: BorderSide(
+                      color: Theme.of(context).colorScheme.primary
+                          .withValues(alpha: 0.45),
+                    ),
                   ),
                 ),
                 onChanged: (String value) => setState(() => _query = value),
@@ -281,14 +333,26 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   folders: folders,
                   selected: _folder,
                   onSelected: _selectFolder,
+                  onRenameFolder: (String name) =>
+                      unawaited(_renameFolder(name)),
                   unfiledCount: items.where((Workbook w) => w.isUnfiled).length,
+                  total: items.length,
                 ),
               Expanded(
                 child: visible.isEmpty
-                    ? const EmptyState(
+                    ? EmptyState(
                         icon: Icons.search_off_outlined,
                         title: '这里没有卷子',
-                        message: '换个关键词，或切回「全部」看看',
+                        message: _query.isNotEmpty
+                            ? '没有匹配「$_query」的卷子，换个词试试'
+                            : '这个文件夹还是空的，切回「全部」看看',
+                        actionLabel: '清除筛选',
+                        actionIcon: Icons.filter_alt_off_outlined,
+                        onAction: () => setState(() {
+                          _query = '';
+                          _searchController.clear();
+                          _folder = null;
+                        }),
                       )
                     : RefreshIndicator(
                         onRefresh: _refresh,
@@ -403,7 +467,12 @@ class _WorkbookTile extends ConsumerWidget {
         child: Card(
           clipBehavior: Clip.antiAlias,
           child: Padding(
-            padding: const EdgeInsets.all(ShqSpace.md),
+            padding: const EdgeInsets.fromLTRB(
+              ShqSpace.md,
+              ShqSpace.md,
+              ShqSpace.sm,
+              ShqSpace.md,
+            ),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
@@ -436,20 +505,52 @@ class _WorkbookTile extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
-                      Text(
-                        workbook.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Expanded(
+                            child: Padding(
+                              padding: const EdgeInsets.only(top: 2),
+                              child: Text(
+                                workbook.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.titleMedium,
+                              ),
+                            ),
+                          ),
+                          // 以前这里只是一个**没人接的** more_vert 图标。
+                          // 点它没反应 = 假入口；现在它就是长按菜单的入口。
+                          IconButton(
+                            tooltip: '更多操作',
+                            onPressed: onLongPress,
+                            visualDensity: VisualDensity.compact,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                              minWidth: 36,
+                              minHeight: 36,
+                            ),
+                            icon: const Icon(Icons.more_horiz, size: 20),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: ShqSpace.xs),
-                      Text(
-                        '${workbook.pageCount} 页 · ${formatRelativeTime(workbook.sortTime)}',
-                        style: theme.textTheme.bodySmall,
+                      const SizedBox(height: 2),
+                      Row(
+                        children: <Widget>[
+                          _Meta(
+                            icon: Icons.description_outlined,
+                            text: '${workbook.pageCount} 页',
+                          ),
+                          const SizedBox(width: ShqSpace.md),
+                          _Meta(
+                            icon: Icons.schedule,
+                            text: formatRelativeTime(workbook.sortTime),
+                          ),
+                        ],
                       ),
                       // 文件夹 + 标签：一行小 chip，看一眼知道这卷归在哪
                       if (!workbook.isUnfiled || workbook.tags.isNotEmpty) ...[
-                        const SizedBox(height: ShqSpace.xs),
+                        const SizedBox(height: ShqSpace.sm),
                         Wrap(
                           spacing: ShqSpace.xs,
                           runSpacing: ShqSpace.xxs,
@@ -468,15 +569,36 @@ class _WorkbookTile extends ConsumerWidget {
                     ],
                   ),
                 ),
-                Icon(
-                  Icons.more_vert,
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 卡片元信息（图标 + 一行小字）。
+class _Meta extends StatelessWidget {
+  const _Meta({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        Icon(icon, size: 14, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 4),
+        Text(
+          text,
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
     );
   }
 }
@@ -496,8 +618,9 @@ class _Chip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: (emphasized ? scheme.primary : scheme.outlineVariant)
-            .withValues(alpha: 0.12),
+        color: (emphasized ? scheme.primary : scheme.outlineVariant).withValues(
+          alpha: 0.12,
+        ),
         borderRadius: BorderRadius.circular(ShqRadius.sm),
       ),
       child: Row(
@@ -526,7 +649,9 @@ class _FolderBar extends StatelessWidget {
     required this.folders,
     required this.selected,
     required this.onSelected,
+    required this.onRenameFolder,
     required this.unfiledCount,
+    required this.total,
   });
 
   final List<String> folders;
@@ -534,13 +659,19 @@ class _FolderBar extends StatelessWidget {
   /// null = 全部；'' = 未分类。
   final String? selected;
   final ValueChanged<String?> onSelected;
+
+  /// 长按文件夹 chip 触发重命名（批量改归属）。
+  final ValueChanged<String> onRenameFolder;
   final int unfiledCount;
+
+  /// 书架总卷数（用于右侧的轻量说明，替代原来的"长按卷子…"提示）。
+  final int total;
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
     return SizedBox(
-      height: 48,
+      height: 52,
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
@@ -564,15 +695,18 @@ class _FolderBar extends StatelessWidget {
               icon: Icons.folder_outlined,
               selected: selected == folder,
               onTap: () => onSelected(folder),
+              onLongPress: () => onRenameFolder(folder),
             ),
           Padding(
-            padding: const EdgeInsets.only(left: ShqSpace.sm, right: ShqSpace.md),
+            padding: const EdgeInsets.only(
+              left: ShqSpace.xs,
+              right: ShqSpace.md,
+            ),
             child: Center(
               child: Text(
-                '长按卷子可移动 / 打标签',
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: scheme.outline,
-                ),
+                folders.isEmpty ? '$total 卷' : '$total 卷 · 长按文件夹改名',
+                style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: scheme.outline),
               ),
             ),
           ),
@@ -588,12 +722,14 @@ class _FolderChip extends StatelessWidget {
     required this.icon,
     required this.selected,
     required this.onTap,
+    this.onLongPress,
   });
 
   final String label;
   final IconData icon;
   final bool selected;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -603,6 +739,7 @@ class _FolderChip extends StatelessWidget {
       child: Center(
         child: Pressable(
           onTap: onTap,
+          onLongPress: onLongPress,
           scale: 0.94,
           haptic: true,
           child: AnimatedContainer(
@@ -657,26 +794,40 @@ class _Thumb extends StatelessWidget {
 
   final File file;
 
-
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(ShqRadius.sm),
-      child: SizedBox(
-        width: 60,
-        height: 80,
+    final ColorScheme scheme = theme.colorScheme;
+    return Container(
+      width: 64,
+      height: 88,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(ShqRadius.sm),
+        border: Border.all(color: scheme.outlineVariant),
+        // 极浅的投影：只让缩略图从卡片上"浮"起一点点，不抢标题。
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: Colors.black.withValues(
+              alpha: scheme.brightness == Brightness.dark ? 0.35 : 0.06,
+            ),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(ShqRadius.sm - 1),
         child: Image.file(
           file,
           fit: BoxFit.cover,
           errorBuilder:
               (BuildContext context, Object error, StackTrace? stackTrace) {
                 return ColoredBox(
-                  color: theme.colorScheme.surfaceContainerHighest,
+                  color: scheme.surfaceContainerHighest,
                   child: Icon(
                     Icons.description_outlined,
                     size: 24,
-                    color: theme.colorScheme.onSurfaceVariant,
+                    color: scheme.onSurfaceVariant,
                   ),
                 );
               },
@@ -712,18 +863,43 @@ class _ErrorView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(ShqSpace.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Text('书架读取失败', style: theme.textTheme.titleLarge),
-            const SizedBox(height: ShqSpace.sm),
-            Text(message, style: theme.textTheme.bodySmall),
-            const SizedBox(height: ShqSpace.lg),
-            OutlinedButton(onPressed: onRetry, child: const Text('重试')),
-          ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: ShqLayout.maxNarrativeWidth,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(ShqSpace.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              SoftIcon(
+                icon: Icons.cloud_off_outlined,
+                size: 88,
+                iconSize: 36,
+                circle: true,
+                background: scheme.errorContainer.withValues(alpha: 0.45),
+                color: scheme.onErrorContainer,
+              ),
+              const SizedBox(height: ShqSpace.lg),
+              Text('书架读取失败', style: theme.textTheme.titleLarge),
+              const SizedBox(height: ShqSpace.xs),
+              Text(
+                message,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: ShqSpace.lg),
+              FilledButton.tonalIcon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
         ),
       ),
     );

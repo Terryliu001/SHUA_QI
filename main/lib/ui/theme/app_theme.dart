@@ -10,15 +10,41 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 ///
 /// `ColorScheme.fromSeed(brightness: dark)` 派生的暗色偏紫灰，与产品要的
 /// "冷灰骨架 + 暖纸"不搭。所以暗色改为：seed 只做底，表面阶梯 / 描边 /
-/// 主色 / 错误色全部用手调值覆盖（值在 [ShqDark]）。浅色保持 seed 派生
-/// （已验证可用，不动）。
+/// 主色 / 错误色全部用手调值覆盖（值在 [ShqDark]）。
+///
+/// ## 浅色为什么也手调（2026-10-23 设计收尾）
+///
+/// 同理：seed 派生的浅色表面带冷紫，与"暖白纸感"相冲。表面阶梯换成
+/// 中性偏暖的灰白（[ShqLight]），主色仍由 seed 派生（蓝只负责可点/选中）。
+///
+/// ## 2026-10-23 设计 v3：组件主题一次收口
+///
+/// 这一版不再逐页写样式，而是把 **输入框 / 对话框 / 浮层 / 菜单 / 列表行 /
+/// 分段按钮 / 滑块 / 进度 / 滚动条 / FAB / Tooltip** 全部在 ThemeData 里定一次。
+/// 页面上只允许写"布局"，不允许写"皮肤"。
 abstract final class ShqTheme {
   static ThemeData light() => _build(_lightScheme());
 
   static ThemeData dark() => _build(_darkScheme());
 
-  static ColorScheme _lightScheme() =>
-      ColorScheme.fromSeed(seedColor: ShqPalette.seed, brightness: Brightness.light);
+  static ColorScheme _lightScheme() {
+    final ColorScheme base = ColorScheme.fromSeed(
+      seedColor: ShqPalette.seed,
+      brightness: Brightness.light,
+    );
+    return base.copyWith(
+      surface: ShqLight.surface,
+      surfaceContainerLowest: ShqLight.surfaceContainerLowest,
+      surfaceContainerLow: ShqLight.surfaceContainerLow,
+      surfaceContainer: ShqLight.surfaceContainer,
+      surfaceContainerHigh: ShqLight.surfaceContainerHigh,
+      surfaceContainerHighest: ShqLight.surfaceContainerHighest,
+      onSurface: ShqLight.onSurface,
+      onSurfaceVariant: ShqLight.onSurfaceVariant,
+      outline: ShqLight.outline,
+      outlineVariant: ShqLight.outlineVariant,
+    );
+  }
 
   static ColorScheme _darkScheme() {
     final ColorScheme base = ColorScheme.fromSeed(
@@ -48,6 +74,7 @@ abstract final class ShqTheme {
   }
 
   static ThemeData _build(ColorScheme scheme) {
+    final bool dark = scheme.brightness == Brightness.dark;
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
@@ -80,11 +107,14 @@ abstract final class ShqTheme {
         surfaceTintColor: Colors.transparent,
         backgroundColor: scheme.surface,
         foregroundColor: scheme.onSurface,
+        iconTheme: IconThemeData(color: scheme.onSurfaceVariant, size: 22),
         titleTextStyle: TextStyle(
           fontSize: ShqType.title,
           fontWeight: FontWeight.w600,
           color: scheme.onSurface,
-          letterSpacing: 0.2,
+          letterSpacing: ShqType.letterSpacingTitle,
+          height: ShqType.lineHeightTitle,
+          leadingDistribution: TextLeadingDistribution.even,
         ),
       ),
       dividerTheme: DividerThemeData(
@@ -92,7 +122,7 @@ abstract final class ShqTheme {
         thickness: 1,
         color: scheme.outlineVariant,
       ),
-      // 卡片：两套主题统一"浅一档的表面 + 发丝描边 + 极浅阴影"，
+      // 卡片：两套主题统一"浅一档的表面 + 发丝描边 + 零投影"，
       // 不再"暗色无阴影、浅色有阴影"两套逻辑（那种差异会让暗色显得更平）。
       cardTheme: CardThemeData(
         elevation: 0,
@@ -105,11 +135,17 @@ abstract final class ShqTheme {
         ),
       ),
       chipTheme: ChipThemeData(
-        shape: StadiumBorder(side: BorderSide(color: scheme.outlineVariant)),
+        shape: const StadiumBorder(),
         backgroundColor: scheme.surfaceContainerHigh,
         selectedColor: scheme.secondaryContainer,
-        labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+        labelStyle: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontSize: ShqType.caption,
+          height: 1.2,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
         side: BorderSide.none,
+        padding: const EdgeInsets.symmetric(horizontal: ShqSpace.sm),
       ),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: scheme.surface,
@@ -121,10 +157,12 @@ abstract final class ShqTheme {
           color: scheme.onSurface,
           fontWeight: FontWeight.w600,
           fontSize: ShqType.caption,
+          letterSpacing: 0.2,
         ),
         unselectedLabelTextStyle: TextStyle(
           color: scheme.onSurfaceVariant,
           fontSize: ShqType.caption,
+          letterSpacing: 0.2,
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
@@ -136,6 +174,7 @@ abstract final class ShqTheme {
         labelTextStyle: WidgetStateProperty.resolveWith<TextStyle>(
           (Set<WidgetState> states) => TextStyle(
             fontSize: ShqType.caption,
+            letterSpacing: 0.2,
             fontWeight: states.contains(WidgetState.selected)
                 ? FontWeight.w600
                 : FontWeight.w400,
@@ -145,10 +184,155 @@ abstract final class ShqTheme {
           ),
         ),
       ),
+      // 列表行：图标降为主色不抢眼的 onSurfaceVariant，标题/说明的字号与行高
+      // 跟字阶一致（之前 ListTile 在不同页面长得不一样，就是没定这里）。
+      listTileTheme: ListTileThemeData(
+        iconColor: scheme.onSurfaceVariant,
+        textColor: scheme.onSurface,
+        titleTextStyle: TextStyle(
+          fontSize: ShqType.body,
+          height: 1.35,
+          color: scheme.onSurface,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
+        subtitleTextStyle: TextStyle(
+          fontSize: ShqType.caption,
+          height: 1.45,
+          color: scheme.onSurfaceVariant,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
+        horizontalTitleGap: ShqSpace.md,
+        minLeadingWidth: 24,
+        minVerticalPadding: ShqSpace.md,
+        titleAlignment: ListTileTitleAlignment.center,
+      ),
+      // 输入框：胶囊/圆角的填充式。搜索框、重命名、标签都用同一套。
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: scheme.surfaceContainerHigh,
+        isDense: true,
+        hintStyle: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontSize: ShqType.bodySmall,
+        ),
+        labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+        helperStyle: TextStyle(
+          color: scheme.onSurfaceVariant,
+          fontSize: ShqType.caption,
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.lg,
+          vertical: ShqSpace.md,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.md),
+          borderSide: BorderSide.none,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.md),
+          borderSide: BorderSide(color: scheme.outlineVariant),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.md),
+          borderSide: BorderSide(color: scheme.primary, width: 1.4),
+        ),
+      ),
+      // 对话框：比卡片再圆一档，背景用 High 而不是 Low —— 浮在内容之上。
+      dialogTheme: DialogThemeData(
+        backgroundColor: scheme.surfaceContainerHigh,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.xl),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        titleTextStyle: TextStyle(
+          fontSize: ShqType.title,
+          fontWeight: FontWeight.w600,
+          color: scheme.onSurface,
+          height: ShqType.lineHeightTitle,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
+        contentTextStyle: TextStyle(
+          fontSize: ShqType.bodySmall,
+          height: ShqType.lineHeightBody,
+          color: scheme.onSurfaceVariant,
+          leadingDistribution: TextLeadingDistribution.even,
+        ),
+      ),
+      // 浮层：背景透明，由页面自己的容器画圆角与把手（两处浮层都这么干）。
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.transparent,
+        modalBackgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(ShqRadius.xl),
+          ),
+        ),
+      ),
+      // 菜单：高对比表面 + 16 圆角 + 很浅的阴影；禁用项自然变灰。
+      popupMenuTheme: PopupMenuThemeData(
+        color: scheme.surfaceContainerHigh,
+        surfaceTintColor: Colors.transparent,
+        elevation: 3,
+        shadowColor: Colors.black.withValues(alpha: dark ? 0.45 : 0.12),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.md),
+          side: BorderSide(color: scheme.outlineVariant),
+        ),
+        textStyle: TextStyle(
+          fontSize: ShqType.bodySmall,
+          color: scheme.onSurface,
+          height: 1.35,
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith<TextStyle?>(
+          (Set<WidgetState> states) => TextStyle(
+            fontSize: ShqType.bodySmall,
+            color: states.contains(WidgetState.disabled)
+                ? scheme.outline
+                : scheme.onSurface,
+          ),
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          visualDensity: VisualDensity.standard,
+          textStyle: const WidgetStatePropertyAll<TextStyle>(
+            TextStyle(
+              fontSize: ShqType.bodySmall,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+          shape: const WidgetStatePropertyAll<OutlinedBorder>(StadiumBorder()),
+          side: WidgetStatePropertyAll<BorderSide>(
+            BorderSide(color: scheme.outlineVariant),
+          ),
+          backgroundColor: WidgetStateProperty.resolveWith<Color>(
+            (Set<WidgetState> states) => states.contains(WidgetState.selected)
+                ? scheme.secondaryContainer
+                : Colors.transparent,
+          ),
+          foregroundColor: WidgetStateProperty.resolveWith<Color>(
+            (Set<WidgetState> states) => states.contains(WidgetState.selected)
+                ? scheme.onSecondaryContainer
+                : scheme.onSurfaceVariant,
+          ),
+        ),
+      ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
           minimumSize: const Size(0, ShqLayout.minTouchTarget),
           padding: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
+          elevation: 0,
+          textStyle: const TextStyle(
+            fontSize: ShqType.bodySmall,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(ShqRadius.md),
           ),
@@ -158,41 +342,231 @@ abstract final class ShqTheme {
         style: OutlinedButton.styleFrom(
           minimumSize: const Size(0, ShqLayout.minTouchTarget),
           padding: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
+          side: BorderSide(color: scheme.outlineVariant),
+          textStyle: const TextStyle(
+            fontSize: ShqType.bodySmall,
+            fontWeight: FontWeight.w600,
+          ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(ShqRadius.md),
           ),
         ),
       ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          textStyle: const TextStyle(
+            fontSize: ShqType.bodySmall,
+            fontWeight: FontWeight.w600,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(ShqRadius.sm),
+          ),
+        ),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: ButtonStyle(
+          iconSize: const WidgetStatePropertyAll<double>(22),
+          foregroundColor: WidgetStateProperty.resolveWith<Color>(
+            (Set<WidgetState> states) => states.contains(WidgetState.disabled)
+                ? scheme.outlineVariant
+                : scheme.onSurfaceVariant,
+          ),
+          shape: const WidgetStatePropertyAll<OutlinedBorder>(CircleBorder()),
+        ),
+      ),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        elevation: 1,
+        focusElevation: 1,
+        hoverElevation: 1,
+        highlightElevation: 2,
+        backgroundColor: scheme.primaryContainer,
+        foregroundColor: scheme.onPrimaryContainer,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(ShqRadius.lg),
+        ),
+        extendedTextStyle: const TextStyle(
+          fontSize: ShqType.bodySmall,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.2,
+        ),
+      ),
+      sliderTheme: SliderThemeData(
+        trackHeight: 3,
+        activeTrackColor: scheme.primary,
+        inactiveTrackColor: scheme.surfaceContainerHighest,
+        thumbColor: scheme.primary,
+        overlayColor: scheme.primary.withValues(alpha: 0.12),
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
+        valueIndicatorColor: scheme.inverseSurface,
+        showValueIndicator: ShowValueIndicator.never,
+      ),
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 500),
+        decoration: BoxDecoration(
+          color: scheme.inverseSurface,
+          borderRadius: BorderRadius.circular(ShqRadius.sm),
+        ),
+        textStyle: TextStyle(
+          color: scheme.onInverseSurface,
+          fontSize: ShqType.caption,
+          height: 1.3,
+        ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.md,
+          vertical: ShqSpace.sm,
+        ),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: scheme.primary,
+        linearTrackColor: scheme.surfaceContainerHighest,
+        circularTrackColor: Colors.transparent,
+      ),
+      scrollbarTheme: ScrollbarThemeData(
+        thickness: const WidgetStatePropertyAll<double>(4),
+        radius: const Radius.circular(ShqRadius.pill),
+        thumbColor: WidgetStatePropertyAll<Color>(
+          scheme.onSurfaceVariant.withValues(alpha: 0.35),
+        ),
+        trackColor: const WidgetStatePropertyAll<Color>(Colors.transparent),
+        trackVisibility: const WidgetStatePropertyAll<bool>(false),
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: scheme.primary,
+        selectionColor: scheme.primary.withValues(alpha: 0.24),
+        selectionHandleColor: scheme.primary,
+      ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
+        backgroundColor: scheme.inverseSurface,
+        contentTextStyle: TextStyle(
+          color: scheme.onInverseSurface,
+          fontSize: ShqType.bodySmall,
+          height: 1.4,
+        ),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(ShqRadius.md),
+        ),
+      ),
+      // Switch 的统一尺寸：默认轨道偏小，平板手指点起来不够明确。
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith<Color>(
+          (Set<WidgetState> states) => states.contains(WidgetState.selected)
+              ? scheme.onPrimary
+              : scheme.outline,
+        ),
+        trackColor: WidgetStateProperty.resolveWith<Color>(
+          (Set<WidgetState> states) => states.contains(WidgetState.selected)
+              ? scheme.primary
+              : scheme.surfaceContainerHighest,
+        ),
+        trackOutlineColor: WidgetStateProperty.resolveWith<Color>(
+          (Set<WidgetState> states) => states.contains(WidgetState.selected)
+              ? Colors.transparent
+              : scheme.outlineVariant,
         ),
       ),
     );
   }
 
   /// 字阶在这里落地成 TextTheme。行高对中文比字号更影响可读性，所以逐级写死。
+  ///
+  /// 2026-10-23 补齐 15 级：之前只定义了 9 级，`titleSmall` / `labelMedium`
+  /// 落到 Material 默认值（Roboto 的字面大小与字重），中英混排时明显"不是一套字"。
   static TextTheme _textTheme(ColorScheme scheme) {
-    TextStyle base(double size, {FontWeight weight = FontWeight.w400}) {
+    final List<String> fallback = <String>[
+      'Noto Sans CJK SC',
+      'Noto Sans SC',
+      'Source Han Sans SC',
+      'PingFang SC',
+      'Microsoft YaHei',
+    ];
+
+    TextStyle base(
+      double size, {
+      FontWeight weight = FontWeight.w400,
+      double height = ShqType.lineHeightBody,
+      double letterSpacing = 0,
+    }) {
       return TextStyle(
         fontSize: size,
         fontWeight: weight,
-        height: ShqType.lineHeightBody,
+        height: height,
+        letterSpacing: letterSpacing,
         color: scheme.onSurface,
+        fontFamilyFallback: fallback,
+        // 中英混排：让行盒按字形平均分布，数字/英文不会比汉字飘高半行。
+        leadingDistribution: TextLeadingDistribution.even,
       );
     }
 
     return TextTheme(
-      displaySmall: base(ShqType.display, weight: FontWeight.w600),
-      headlineSmall: base(ShqType.headline, weight: FontWeight.w600),
-      titleLarge: base(ShqType.title, weight: FontWeight.w600),
-      titleMedium: base(ShqType.body, weight: FontWeight.w600),
+      displayLarge: base(
+        48,
+        weight: FontWeight.w700,
+        height: 1.12,
+        letterSpacing: -0.5,
+      ),
+      displayMedium: base(
+        40,
+        weight: FontWeight.w700,
+        height: 1.15,
+        letterSpacing: -0.3,
+      ),
+      displaySmall: base(
+        ShqType.display,
+        weight: FontWeight.w600,
+        height: 1.18,
+        letterSpacing: -0.2,
+      ),
+      headlineLarge: base(
+        30,
+        weight: FontWeight.w600,
+        height: ShqType.lineHeightTitle,
+      ),
+      headlineMedium: base(
+        ShqType.headline,
+        weight: FontWeight.w600,
+        height: ShqType.lineHeightTitle,
+      ),
+      headlineSmall: base(
+        22,
+        weight: FontWeight.w600,
+        height: ShqType.lineHeightTitle,
+      ),
+      titleLarge: base(
+        ShqType.title,
+        weight: FontWeight.w600,
+        height: ShqType.lineHeightTitle,
+        letterSpacing: ShqType.letterSpacingTitle,
+      ),
+      titleMedium: base(ShqType.body, weight: FontWeight.w600, height: 1.4),
+      titleSmall: base(
+        ShqType.titleSmall,
+        weight: FontWeight.w600,
+        height: 1.4,
+      ),
       bodyLarge: base(ShqType.body),
       bodyMedium: base(ShqType.bodySmall),
-      bodySmall: base(ShqType.caption),
-      labelLarge: base(ShqType.bodySmall, weight: FontWeight.w600),
-      labelSmall: base(ShqType.caption),
+      bodySmall: base(ShqType.caption, height: 1.55),
+      labelLarge: base(
+        ShqType.bodySmall,
+        weight: FontWeight.w600,
+        height: 1.3,
+        letterSpacing: ShqType.letterSpacingTitle,
+      ),
+      labelMedium: base(
+        ShqType.caption,
+        weight: FontWeight.w500,
+        height: 1.3,
+        letterSpacing: ShqType.letterSpacingLabel,
+      ),
+      labelSmall: base(
+        11,
+        weight: FontWeight.w500,
+        height: 1.3,
+        letterSpacing: ShqType.letterSpacingTitle,
+      ),
     );
   }
 }

@@ -59,16 +59,27 @@ abstract final class ShqMotion {
 }
 
 /// 字阶。中文正文从 16 起，12 只用于 HUD / 角标这类非阅读文本。
+///
+/// 2026-10-23 设计收尾：补齐到 15 级，且**每一级都写死行高**。
+/// 中文的行高比字号更影响可读性：正文 1.65、标题 1.3、标签 1.3；
+/// 行高一律 `even` 分布（`TextLeadingDistribution.even`），
+/// 中英混排时数字/英文的基线不会比汉字飘高半行。
 abstract final class ShqType {
   static const double caption = 12;
   static const double bodySmall = 14;
   static const double body = 16;
+  static const double titleSmall = 15;
   static const double title = 20;
   static const double headline = 26;
   static const double display = 34;
 
   static const double lineHeightTight = 1.25;
-  static const double lineHeightBody = 1.6;
+  static const double lineHeightTitle = 1.3;
+  static const double lineHeightBody = 1.65;
+
+  /// 标题的轻微字距：中文大字距过大会散，0.2 只是让字面透气。
+  static const double letterSpacingTitle = 0.2;
+  static const double letterSpacingLabel = 0.4;
 }
 
 /// 品牌与语义色。
@@ -137,6 +148,27 @@ abstract final class ShqNight {
   static const Color pageEdge = Color(0x0FFFFFFF);
 }
 
+/// 浅色表面阶梯（app 骨架）。
+///
+/// 2026-10-23 设计收尾：不再直接用 seed 派生的表面色。派生色带一层冷紫，
+/// 与产品"纸感 / 暖白"的基因相冲。这里改成一组**中性偏暖的灰白**：
+/// 白纸是暖的、界面是安静的，卷子浮在上面才不会像贴在一块冷色玻璃上。
+/// 主色仍由 seed 派生（蓝色只负责"可点"与"选中"，不参与大面积铺底）。
+abstract final class ShqLight {
+  static const Color surface = Color(0xFFFAF9F7);
+  static const Color surfaceContainerLowest = Color(0xFFFFFFFF);
+  static const Color surfaceContainerLow = Color(0xFFF6F4F1);
+  static const Color surfaceContainer = Color(0xFFF1EEEB);
+  static const Color surfaceContainerHigh = Color(0xFFEBE7E3);
+  static const Color surfaceContainerHighest = Color(0xFFE4DFDA);
+
+  static const Color onSurface = Color(0xFF1A1C1E);
+  static const Color onSurfaceVariant = Color(0xFF5C6066);
+
+  static const Color outline = Color(0xFF8A8F95);
+  static const Color outlineVariant = Color(0xFFD9D4CE);
+}
+
 /// 暗色表面阶梯（app 骨架：书架 / AppBar / 抽屉 / 浮层）。
 ///
 /// 手调而非 seed 派生：seed 蓝派生的暗色偏紫灰，与"冷灰骨架 + 暖纸"不搭。
@@ -173,5 +205,15 @@ abstract final class ShqDark {
 /// 版心。平板竖屏阅读区最大宽度，超过就留白居中，避免长行难读。
 abstract final class ShqLayout {
   static const double maxReadingWidth = 880;
+
+  /// 设置 / 详情类页面：比阅读区窄一档，单列扫读更稳。
+  static const double maxFormWidth = 720;
+
+  /// 空态 / 介绍类页面的正文宽度。
+  static const double maxNarrativeWidth = 560;
+
   static const double minTouchTarget = 48;
+
+  /// 设置分组卡片的横向内边距（与分组标题共用同一条竖线）。
+  static const double gutter = 16;
 }

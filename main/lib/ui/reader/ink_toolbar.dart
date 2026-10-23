@@ -284,49 +284,52 @@ class InkToolStrip extends ConsumerWidget implements PreferredSizeWidget {
       padding: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
       child: Row(
         children: <Widget>[
-          for (final InkTool tool in InkTool.values)
-            _ToolButton(
-              tool: tool,
-              selected: brush.tool == tool,
-              onTap: () => controller.selectTool(tool),
-            ),
-          _Divider(color: scheme.outlineVariant),
-          if (!brush.isEraser) ...<Widget>[
-            for (int i = 0; i < InkPalette.countFor(brush.strokeStyle); i++)
-              _ColorDot(
-                color: previewColorOf(
-                  style: brush.strokeStyle,
-                  colorIndex: i,
-                  darkPaper: darkPaper,
-                ),
-                size: 22,
-                selected: brush.colorIndex == i,
-                onTap: () => controller.selectColor(i),
+          // 工具/颜色/粗细三段在窄屏（手机竖屏）放不下：让它们横向滚动，
+          // 而不是把右侧的"改为浮窗"挤出屏幕（RenderFlex overflow）。
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: <Widget>[
+                  for (final InkTool tool in InkTool.values)
+                    _ToolButton(
+                      tool: tool,
+                      selected: brush.tool == tool,
+                      onTap: () => controller.selectTool(tool),
+                    ),
+                  _Divider(color: scheme.outlineVariant),
+                  if (!brush.isEraser) ...<Widget>[
+                    for (
+                      int i = 0;
+                      i < InkPalette.countFor(brush.strokeStyle);
+                      i++
+                    )
+                      _ColorDot(
+                        color: previewColorOf(
+                          style: brush.strokeStyle,
+                          colorIndex: i,
+                          darkPaper: darkPaper,
+                        ),
+                        size: 22,
+                        selected: brush.colorIndex == i,
+                        onTap: () => controller.selectColor(i),
+                      ),
+                    _Divider(color: scheme.outlineVariant),
+                  ],
+                  // 粗细/橡皮大小：一条紧凑滑条（多级可调），右边带当前值的参考圈。
+                  SizedBox(
+                    width: 168,
+                    child: _BrushWidthSlider(
+                      brush: brush,
+                      darkPaper: darkPaper,
+                      compact: true,
+                      onChanged: controller.selectWidth,
+                    ),
+                  ),
+                ],
               ),
-            _Divider(color: scheme.outlineVariant),
-            // 粗细/橡皮大小：一条紧凑滑条（多级可调），右边带当前值的参考圈。
-            SizedBox(
-              width: 168,
-              child: _BrushWidthSlider(
-                brush: brush,
-                darkPaper: darkPaper,
-                compact: true,
-                onChanged: controller.selectWidth,
-              ),
             ),
-          ] else ...<Widget>[
-            // 橡皮：同一位置改成"大小"滑条。
-            SizedBox(
-              width: 168,
-              child: _BrushWidthSlider(
-                brush: brush,
-                darkPaper: darkPaper,
-                compact: true,
-                onChanged: controller.selectWidth,
-              ),
-            ),
-          ],
-          const Spacer(),
+          ),
           // 反向切换：从顶栏变回右下角浮钮（同一个 provider，双向可达）。
           IconButton(
             tooltip: '改为浮窗',

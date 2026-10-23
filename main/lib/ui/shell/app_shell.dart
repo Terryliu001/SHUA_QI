@@ -81,14 +81,27 @@ class _AppShellState extends State<AppShell> {
               selectedIndex: _index,
               onDestinationSelected: _select,
               labelType: NavigationRailLabelType.all,
-              // 顶栏放产品名： rail 不需要 FAB（导入 FAB 在书架内容区），
-              // 一个小字名牌比空着更"这是一个产品"。
+              // 顶部是产品徽标：一个"刷"字方块。比纯文字名更像产品，
+              // 也不占导航的视觉重量（放大字号会跟 tab 抢注意力）。
               leading: Padding(
                 padding: const EdgeInsets.only(top: ShqSpace.lg),
-                child: Text(
-                  '刷起',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
+                child: Tooltip(
+                  message: '刷起 SHUAQI',
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(ShqRadius.md),
+                    ),
+                    child: Text(
+                      '刷',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: theme.colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -101,8 +114,14 @@ class _AppShellState extends State<AppShell> {
                   ),
               ],
             ),
-            const VerticalDivider(width: 1),
-            Expanded(child: IndexedStack(index: _index, children: _pages)),
+            VerticalDivider(
+              width: 1,
+              thickness: 1,
+              color: theme.colorScheme.outlineVariant,
+            ),
+            Expanded(
+              child: IndexedStack(index: _index, children: _pages),
+            ),
           ],
         ),
       );
@@ -110,17 +129,25 @@ class _AppShellState extends State<AppShell> {
 
     return Scaffold(
       body: IndexedStack(index: _index, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: _select,
-        destinations: <Widget>[
-          for (final _ShellDestination d in destinations)
-            NavigationDestination(
-              icon: Icon(d.icon),
-              selectedIcon: Icon(d.selectedIcon),
-              label: d.label,
-            ),
-        ],
+      // 底部导航加一根发丝线：它不是"浮"在内容上的，而是与内容的分界。
+      bottomNavigationBar: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: theme.colorScheme.outlineVariant),
+          ),
+        ),
+        child: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: _select,
+          destinations: <Widget>[
+            for (final _ShellDestination d in destinations)
+              NavigationDestination(
+                icon: Icon(d.icon),
+                selectedIcon: Icon(d.selectedIcon),
+                label: d.label,
+              ),
+          ],
+        ),
       ),
     );
   }

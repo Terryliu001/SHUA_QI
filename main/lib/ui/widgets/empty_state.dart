@@ -14,6 +14,7 @@ class EmptyState extends StatelessWidget {
     required this.title,
     this.message,
     this.actionLabel,
+    this.actionIcon = Icons.auto_stories_outlined,
     this.onAction,
   });
 
@@ -23,6 +24,9 @@ class EmptyState extends StatelessWidget {
 
   /// 主动作（如"去书架"）。null 表示这个空态没有下一步，只告知。
   final String? actionLabel;
+
+  /// 动作图标跟着动作走（"去书架"用书，"清除筛选"用筛子）。
+  final IconData actionIcon;
   final VoidCallback? onAction;
 
   @override
@@ -30,46 +34,51 @@ class EmptyState extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(ShqSpace.xl),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Container(
-              width: 96,
-              height: 96,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: scheme.surfaceContainerHigh,
-                border: Border.all(color: scheme.outlineVariant),
-              ),
-              child: Icon(icon, size: 40, color: scheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: ShqSpace.lg),
-            Text(
-              title,
-              style: theme.textTheme.titleLarge,
-              textAlign: TextAlign.center,
-            ),
-            if (message != null) ...<Widget>[
-              const SizedBox(height: ShqSpace.xs),
-              Text(
-                message!,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(
+          maxWidth: ShqLayout.maxNarrativeWidth,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(ShqSpace.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Container(
+                width: 96,
+                height: 96,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: scheme.surfaceContainerHigh,
+                  border: Border.all(color: scheme.outlineVariant),
                 ),
+                child: Icon(icon, size: 40, color: scheme.onSurfaceVariant),
+              ),
+              const SizedBox(height: ShqSpace.lg),
+              Text(
+                title,
+                style: theme.textTheme.titleLarge,
                 textAlign: TextAlign.center,
               ),
+              if (message != null) ...<Widget>[
+                const SizedBox(height: ShqSpace.xs),
+                Text(
+                  message!,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if (actionLabel != null && onAction != null) ...<Widget>[
+                const SizedBox(height: ShqSpace.lg),
+                FilledButton.icon(
+                  onPressed: onAction,
+                  icon: Icon(actionIcon, size: 18),
+                  label: Text(actionLabel!),
+                ),
+              ],
             ],
-            if (actionLabel != null && onAction != null) ...<Widget>[
-              const SizedBox(height: ShqSpace.lg),
-              FilledButton.icon(
-                onPressed: onAction,
-                icon: const Icon(Icons.auto_stories_outlined),
-                label: Text(actionLabel!),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
