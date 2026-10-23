@@ -63,11 +63,11 @@ class InkToolController extends Notifier<InkBrush> {
   }
 
   /// 选粗细（0..2）。
-  void selectWidth(int widthLevel) {
-    if (state.widthLevel == widthLevel) {
+  void selectWidth(int brushWidth) {
+    if (state.brushWidth == brushWidth) {
       return;
     }
-    state = state.copyWith(widthLevel: widthLevel);
+    state = state.copyWith(brushWidth: brushWidth);
     _memory[state.tool] = state;
     unawaited(_persist());
   }

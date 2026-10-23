@@ -28,6 +28,8 @@ class Workbook {
     this.openedAt,
     this.lastSessionId,
     this.layoutStatus = LayoutStatus.none,
+    this.folder = '',
+    this.tags = const <String>[],
   });
 
   factory Workbook.fromRow(Map<String, Object?> row) {
@@ -42,6 +44,8 @@ class Workbook {
       openedAt: (row['opened_at'] as num?)?.toInt(),
       lastSessionId: row['last_session_id'] as String?,
       layoutStatus: (row['layout_status'] as String?) ?? LayoutStatus.none,
+      folder: (row['folder'] as String?) ?? '',
+      tags: WorkbookTags.decode(row['tags'] as String?),
     );
   }
 
@@ -68,6 +72,18 @@ class Workbook {
 
   final String layoutStatus;
 
+  /// 文件夹名。``''`` = 未分类（老数据全部落到这里）。
+  ///
+  /// 为什么用"文件夹名字符串"而不是单独一张表：卷子数量是几十级的，
+  /// 单层文件夹足够；名字本身就是标识，改名 = 批量 UPDATE 同一个名字，
+  /// 不需要维护 id↔name 的映射，也不会出现"空文件夹"这种要单独保存的状态。
+  final String folder;
+
+  /// 标签（多对多，但用逗号串存）。不建关联表的原因同上：量级小、只做筛选。
+  final List<String> tags;
+
+  bool get isUnfiled => folder.isEmpty;
+
   Map<String, Object?> toRow() => <String, Object?>{
     'id': id,
     'title': title,
@@ -79,6 +95,8 @@ class Workbook {
     'opened_at': openedAt,
     'last_session_id': lastSessionId,
     'layout_status': layoutStatus,
+    'folder': folder,
+    'tags': WorkbookTags.encode(tags),
   };
 
   /// 书架排序用的时间：打开过就按打开时间，否则按导入时间。
@@ -89,6 +107,8 @@ class Workbook {
     int? openedAt,
     String? lastSessionId,
     String? layoutStatus,
+    String? folder,
+    List<String>? tags,
   }) {
     return Workbook(
       id: id,
@@ -101,9 +121,56 @@ class Workbook {
       openedAt: openedAt ?? this.openedAt,
       lastSessionId: lastSessionId ?? this.lastSessionId,
       layoutStatus: layoutStatus ?? this.layoutStatus,
+      folder: folder ?? this.folder,
+      tags: tags ?? this.tags,
     );
   }
 
   @override
   String toString() => 'Workbook($id, "$title", $pageCount 页)';
+}
+
+/// 标签的规范化与编解码（纯 Dart，可单测）。
+///
+/// 规则（写死在这里，UI 与 DAO 都只用这一份）：
+/// - 逗号分隔（中英文逗号都接受），忽略首尾空白与空项；
+/// - **去重**、保持输入顺序；
+/// - 单个标签最长 12 字、最多 8 个 —— 书架是"筛选器"，不是知识库。
+abstract final class WorkbookTags {
+  static const String separator = ',';
+
+  static const int maxCount = 8;
+  static const int maxLength = 12;
+
+  /// 把用户输入（可能是 "期中,数学 ， 计算"）拆成规范标签列表。
+  static List<String> parse(String raw) {
+    final List<String> out = <String>[];
+    for (final String chunk in raw.split(RegExp(r'[,，、;；]'))) {
+      final String t = chunk.trim();
+      if (t.isEmpty || out.contains(t)) {
+        continue;
+      }
+      out.add(t.length > maxLength ? t.substring(0, maxLength) : t);
+      if (out.length >= maxCount) {
+        break;
+      }
+    }
+    return out;
+  }
+
+  static List<String> decode(String? raw) {
+    if (raw == null || raw.isEmpty) {
+      return const <String>[];
+    }
+    return raw
+        .split(separator)
+        .map((String s) => s.trim())
+        .where((String s) => s.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static String encode(List<String> tags) => tags.join(separator);
+
+  /// 用户可见的编辑串（"期中, 数学"）。
+  static String toEditable(List<String> tags) => tags.join('，');
 }

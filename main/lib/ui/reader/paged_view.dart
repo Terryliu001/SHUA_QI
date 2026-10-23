@@ -36,7 +36,7 @@ class PagedReaderView extends StatefulWidget {
     this.sessionId,
     this.inkTool = InkTool.pen,
     this.inkColorIndex = 0,
-    this.inkWidthLevel = 1,
+    this.inkbrushWidth = 1,
   });
 
   final List<WbPage> pages;
@@ -51,7 +51,7 @@ class PagedReaderView extends StatefulWidget {
 
   /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
   final int inkColorIndex;
-  final int inkWidthLevel;
+  final int inkbrushWidth;
 
   /// 当前笔刷（工具栏选中项）。
   final InkTool inkTool;
@@ -259,7 +259,7 @@ class PagedReaderViewState extends State<PagedReaderView> {
                       inkEnabled: widget.sessionId != null && index == _current,
                       inkTool: widget.inkTool,
                       inkColorIndex: widget.inkColorIndex,
-                      inkWidthLevel: widget.inkWidthLevel,
+                      inkbrushWidth: widget.inkbrushWidth,
                     ),
                   ),
                 ),

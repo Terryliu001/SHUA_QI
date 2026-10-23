@@ -75,6 +75,46 @@ class WorkbookDao {
     );
   }
 
+  /// 移动到文件夹。`''` = 未分类。
+  Future<void> setFolder(String id, String folder) async {
+    await _db.update(
+      'workbook',
+      <String, Object?>{'folder': folder},
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+    );
+  }
+
+  /// 批量改文件夹（改文件夹名时用：把旧名字下的卷全部搬到新名字）。
+  Future<int> renameFolder(String from, String to) async {
+    return _db.update(
+      'workbook',
+      <String, Object?>{'folder': to},
+      where: 'folder = ?',
+      whereArgs: <Object?>[from],
+    );
+  }
+
+  /// 覆盖标签（逗号串由 [WorkbookTags.encode] 生成）。
+  Future<void> setTags(String id, String tags) async {
+    await _db.update(
+      'workbook',
+      <String, Object?>{'tags': tags},
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+    );
+  }
+
+  /// 书架上有卷的文件夹名（去重、排序）。未分类（空串）不返回。
+  Future<List<String>> folders() async {
+    final List<Map<String, Object?>> rows = await _db.rawQuery(
+      "SELECT DISTINCT folder FROM workbook WHERE folder <> '' ORDER BY folder",
+    );
+    return rows
+        .map((Map<String, Object?> row) => row['folder'] as String)
+        .toList(growable: false);
+  }
+
   Future<void> setLayoutStatus(String id, String status) async {
     await _db.update(
       'workbook',

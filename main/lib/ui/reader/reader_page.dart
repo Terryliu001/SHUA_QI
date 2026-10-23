@@ -32,7 +32,16 @@ class ReaderPage extends ConsumerStatefulWidget {
 }
 
 class _ReaderPageState extends ConsumerState<ReaderPage> {
-  static const List<double> _scrollZoomSteps = <double>[1, 1.25, 1.5, 2];
+  /// 档位菜单（2026-10-23 重定）：**看得见整页 → 贴满宽 → 放大**。
+  /// 100% = fit-width（页宽正好等于屏宽），默认 86%（两侧留白，与翻页模式一致）。
+  static const List<double> _scrollZoomSteps = <double>[
+    0.6,
+    0.86,
+    1,
+    1.5,
+    2,
+    3,
+  ];
 
   final GlobalKey<PagedReaderViewState> _pagedKey =
       GlobalKey<PagedReaderViewState>();
@@ -52,7 +61,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
   bool _prefsDirty = false;
 
   /// 滚动模式的档位缩放（分页模式用双指捏合，不使用它）
-  double _scrollZoom = 1;
+  double _scrollZoom = ScrollReaderView.defaultScale;
 
   /// 切模式时的落点。null 表示还没定（首帧从会话进度恢复）。
   int? _initialPage;
@@ -373,7 +382,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         sessionId: sessionId,
                         inkTool: brush.tool,
                         inkColorIndex: brush.colorIndex,
-                        inkWidthLevel: brush.widthLevel,
+                        inkbrushWidth: brush.brushWidth,
                       )
                     : ScrollReaderView(
                         key: _scrollKey,
@@ -386,7 +395,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage> {
                         sessionId: sessionId,
                         inkTool: brush.tool,
                         inkColorIndex: brush.colorIndex,
-                        inkWidthLevel: brush.widthLevel,
+                        inkbrushWidth: brush.brushWidth,
                         // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
                         onPenMissed: _showPenMissed,
                         // 双指缩放改了倍率后，把 AppBar 的百分比同步过来

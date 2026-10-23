@@ -13,6 +13,8 @@ Future<void> showWorkbookMenu(
   BuildContext context, {
   required Workbook workbook,
   required VoidCallback onRename,
+  required VoidCallback onEditTags,
+  required VoidCallback onMoveToFolder,
   required VoidCallback onDelete,
 }) {
   return showModalBottomSheet<void>(
@@ -21,6 +23,8 @@ Future<void> showWorkbookMenu(
     builder: (BuildContext context) => _WorkbookMenuSheet(
       workbook: workbook,
       onRename: onRename,
+      onEditTags: onEditTags,
+      onMoveToFolder: onMoveToFolder,
       onDelete: onDelete,
     ),
   );
@@ -30,11 +34,15 @@ class _WorkbookMenuSheet extends StatelessWidget {
   const _WorkbookMenuSheet({
     required this.workbook,
     required this.onRename,
+    required this.onEditTags,
+    required this.onMoveToFolder,
     required this.onDelete,
   });
 
   final Workbook workbook;
   final VoidCallback onRename;
+  final VoidCallback onEditTags;
+  final VoidCallback onMoveToFolder;
   final VoidCallback onDelete;
 
   @override
@@ -82,12 +90,33 @@ class _WorkbookMenuSheet extends StatelessWidget {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
+            const SizedBox(height: ShqSpace.xs),
+            // 当前归属：让"移动/打标签"有上下文，不用猜现在在哪儿
+            Text(
+              '${workbook.isUnfiled ? '未分类' : workbook.folder}'
+              '${workbook.tags.isEmpty ? '' : ' · ${workbook.tags.join(' / ')}'}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
             const SizedBox(height: ShqSpace.sm),
             ListTile(
               contentPadding: EdgeInsets.zero,
               leading: const Icon(Icons.drive_file_rename_outline),
               title: const Text('重命名'),
               onTap: () => closeAndRun(onRename),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.sell_outlined),
+              title: const Text('编辑标签'),
+              onTap: () => closeAndRun(onEditTags),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('移动到文件夹'),
+              onTap: () => closeAndRun(onMoveToFolder),
             ),
             const Divider(),
             ListTile(
@@ -133,9 +162,14 @@ class _WorkbookMenuSheet extends StatelessWidget {
 ///
 /// 空标题不算"保存"：库里 `title TEXT NOT NULL`，存空串等于给用户一个
 /// 没有名字的卷——宁可当作取消。
+///
+/// [dialogTitle] / [fieldLabel] 让"新建文件夹"复用它（同一个交互，不同文案），
+/// 避免为了两个词复制一整个对话框。
 Future<String?> showRenameDialog(
   BuildContext context, {
   required String initialTitle,
+  String dialogTitle = '重命名',
+  String fieldLabel = '标题',
 }) {
   final TextEditingController controller = TextEditingController(
     text: initialTitle,
@@ -144,11 +178,11 @@ Future<String?> showRenameDialog(
     context: context,
     builder: (BuildContext context) {
       return AlertDialog(
-        title: const Text('重命名'),
+        title: Text(dialogTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: '标题'),
+          decoration: InputDecoration(labelText: fieldLabel),
           onSubmitted: (String value) {
             final String trimmed = value.trim();
             if (trimmed.isNotEmpty) {
@@ -209,4 +243,112 @@ Future<bool> showDeleteConfirmDialog(
     ),
   );
   return result ?? false;
+}
+
+/// 编辑标签。返回规范化后的标签列表；取消返回 null。
+///
+/// 输入一行、逗号分隔（中英文都接受）。规范化规则在 [WorkbookTags.parse]，
+/// 这里只负责把用户输入原样带走 —— 上限与去重都由那一处决定。
+Future<List<String>?> showTagsDialog(
+  BuildContext context, {
+  required List<String> initial,
+}) {
+  final TextEditingController controller = TextEditingController(
+    text: WorkbookTags.toEditable(initial),
+  );
+  return showDialog<List<String>>(
+    context: context,
+    builder: (BuildContext context) => AlertDialog(
+      title: const Text('标签'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(
+          labelText: '用逗号分隔',
+          helperText:
+              '最多 ${WorkbookTags.maxCount} 个，每个 ≤${WorkbookTags.maxLength} 字',
+        ),
+        onSubmitted: (String value) =>
+            Navigator.of(context).pop(WorkbookTags.parse(value)),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () =>
+              Navigator.of(context).pop(WorkbookTags.parse(controller.text)),
+          child: const Text('保存'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// 选择文件夹。返回选中的名字（'' = 未分类）；取消返回 null。
+///
+/// 「新建文件夹」也在这里：不单独做一个"文件夹管理"页面 ——
+/// 书架上的文件夹是**卷的归属**，不应该存在空文件夹，所以入口放在"移动"里最自然。
+Future<String?> showFolderPicker(
+  BuildContext context, {
+  required List<String> folders,
+  required String current,
+}) {
+  return showDialog<String>(
+    context: context,
+    builder: (BuildContext context) => SimpleDialog(
+      title: const Text('移动到文件夹'),
+      children: <Widget>[
+        SimpleDialogOption(
+          onPressed: () => Navigator.of(context).pop(''),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                current.isEmpty ? Icons.check : Icons.folder_off_outlined,
+                size: 18,
+              ),
+              const SizedBox(width: ShqSpace.sm),
+              const Text('未分类'),
+            ],
+          ),
+        ),
+        for (final String folder in folders)
+          SimpleDialogOption(
+            onPressed: () => Navigator.of(context).pop(folder),
+            child: Row(
+              children: <Widget>[
+                Icon(
+                  current == folder ? Icons.check : Icons.folder_outlined,
+                  size: 18,
+                ),
+                const SizedBox(width: ShqSpace.sm),
+                Text(folder),
+              ],
+            ),
+          ),
+        const Divider(),
+        SimpleDialogOption(
+          onPressed: () async {
+            final String? name = await showRenameDialog(
+              context,
+              initialTitle: '',
+              dialogTitle: '新建文件夹',
+              fieldLabel: '文件夹名',
+            );
+            if (name != null && name.isNotEmpty && context.mounted) {
+              Navigator.of(context).pop(name);
+            }
+          },
+          child: const Row(
+            children: <Widget>[
+              Icon(Icons.create_new_folder_outlined, size: 18),
+              SizedBox(width: ShqSpace.sm),
+              Text('新建文件夹…'),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }

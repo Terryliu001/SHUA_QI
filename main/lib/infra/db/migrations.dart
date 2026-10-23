@@ -82,6 +82,16 @@ CREATE TABLE ink_state(
       'CREATE TABLE setting(k TEXT PRIMARY KEY, v TEXT NOT NULL)',
     ],
   ),
+  Migration(
+    version: 3,
+    note: '书架管理（2026-10-23）：workbook 加 folder（文件夹）与 tags（逗号分隔标签）。'
+        "两者都是 TEXT NOT NULL DEFAULT ''，老数据自动落到「未分类 / 无标签」，无需回填。",
+    statements: <String>[
+      "ALTER TABLE workbook ADD COLUMN folder TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE workbook ADD COLUMN tags TEXT NOT NULL DEFAULT ''",
+      'CREATE INDEX idx_workbook_folder ON workbook(folder)',
+    ],
+  ),
 ];
 
 /// 数据库最终版本号。

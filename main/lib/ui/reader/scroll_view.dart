@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart'
-    show PointerDeviceKind, PointerEvent;
+    show DragStartBehavior, PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
@@ -59,9 +59,21 @@ class ScrollReaderView extends StatefulWidget {
     this.sessionId,
     this.inkTool = InkTool.pen,
     this.inkColorIndex = 0,
-    this.inkWidthLevel = 1,
+    this.inkbrushWidth = 1,
     this.onPenMissed,
   });
+
+  /// 默认缩放：0.86 = 页宽占屏幕 86%，两侧留白（和翻页模式的观感一致）。
+  ///
+  /// 2026-10-23 之前是 1.0（fit-width，页宽正好贴满屏幕），用户反馈
+  /// "不顺滑"且"最小就是全屏不合适"——1.0 时横向被夹死、任何抖动都直接可见。
+  /// 现在 1.0 仍是 fit-width（语义不变），但**默认从 0.86 起步**，
+  /// 最小可到 0.45（整页浏览），最大 4.0。
+  static const double defaultScale = 0.86;
+
+  /// 缩放区间（给 AppBar 档位菜单做合法性判断）。
+  static const double minScale = 0.45;
+  static const double maxScale = 4;
 
   final List<WbPage> pages;
   final PageImageCache cache;
@@ -79,7 +91,7 @@ class ScrollReaderView extends StatefulWidget {
 
   /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
   final int inkColorIndex;
-  final int inkWidthLevel;
+  final int inkbrushWidth;
 
   /// 这一笔没落在纸上（落在纸外 / 纸还没就绪）时回调一次。
   ///
@@ -96,21 +108,42 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   /// 页间距。规格 §6.9.1：连续滚动页间距 8dp。
   static const double _pageGap = ShqSpace.sm;
 
-  static const double _minScale = 1;
+  // ── 缩放区间（2026-10-23 重定，用户要求"不要默认占满屏"）───────────
+  //
+  // 旧规则：最小 = 1.0 = fit-width（页宽正好等于屏宽），只能放大。
+  // 用户在真机上觉得"不顺滑"，而且明确说"最小就是全屏不合适"。
+  //
+  // 根因有两层：
+  // 1. 1.0 时横向被**夹死**（内容宽 == 视口宽），任何横向位移都被 clamp 掉，
+  //    手指的斜向拖动一半被吃掉；纵向到顶/到底也是硬停。
+  // 2. 没有"留白"，页面永远顶着两侧边缘，任何抖动都被看成画面在抖。
+  //
+  // 新规则：1.0 仍然是 fit-width（保持与旧数据的语义一致），但
+  // - **默认 0.86**：页宽只占屏幕 86%，两侧留白（和翻页模式的观感一致）；
+  // - **最小 0.45**：可以缩到很小，整页浏览；横向自动居中（见 ScrollMath.clampOffset）；
+  // - **最大 4.0**：放大到全屏以上。
+  // 这样"任何大小"都有明确落点，且没有一个尺寸是"贴死在边缘"的。
+  static const double _minScale = 0.45;
   static const double _maxScale = 4;
+  static const double _defaultScale = ScrollReaderView.defaultScale;
 
   /// 单页位图像素宽上限。再往上就该走分块渲染（T1.5.1，未做）。
   ///
   /// 3200 而不是 4096（2026-10-22 调整）：A4 在 3200 宽时一页位图 ≈ 52MB，
   /// 视口 ±1 三页同屏 ≈ 156MB，留在 200MB 缓存与 650MB 峰值预算内。
-  /// 4096 时一页 95MB，三页 285MB —— 一捏合就触发淘汰与 GC，
-  /// 表现正是"多次双指放缩后滑动卡顿、页面发糊/空白"。
   /// 代价：200% 以上放大的清晰度从 1:1 降到 0.75:1（真无损要等分块渲染）。
   static const int _maxBitmapWidthPx = 3200;
 
   /// 清晰度档位：捏合停手后取 `>= scale` 的最小档，避免每次微小变化都重渲染。
   /// 相邻档比值 ≤1.25，肉眼看不出差别。
+  ///
+  /// 2026-10-23 向下扩展：允许缩小以后，位图按缩小后的实际像素出图
+  /// （0.45 档一页只要 1350px 宽 ≈ 11MB），省下来的内存正好给预热用。
   static const List<double> _qualityBuckets = <double>[
+    0.45,
+    0.6,
+    0.75,
+    0.86,
     1,
     1.25,
     1.5,
@@ -150,8 +183,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   double _dpr = 2;
 
   // ── 屏幕坐标系（唯一可变的两个量）────────────────────────────────
-  double _scale = 1;
-  double _qualityScale = 1;
+  double _scale = _defaultScale;
+  double _qualityScale = _defaultScale;
   int _bitmapWidthPx = 0;
   Offset _offset = Offset.zero;
 
@@ -201,10 +234,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _anchored = false;
       _prefetched = '';
       _current = 0;
-      _scale = 1;
-      _qualityScale = 1;
+      _scale = _defaultScale;
+      _qualityScale = _defaultScale;
       _offset = Offset.zero;
-      _cam.value = const Camera(Offset.zero, 1);
+      _cam.value = const Camera(Offset.zero, _defaultScale);
     }
   }
 
@@ -420,6 +453,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     // 这里**不**因笔而阻塞整段手势（见上面关于 pointerCount 的说明）。
     // 但"手势从手掌开始"这件事要记住：那一眼就是 palm，整段都不许动页面。
     _gestureFrozen = _penActiveNow();
+    _gestureActive = true;
     _ticker.stop();
     _velocity = Offset.zero;
     _qualityTimer?.cancel();
@@ -455,6 +489,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _gestureFrozen = false;
     if (frozen) {
       // 被笔优先冻掉的手势：不甩动（手指在动而页面没动，甩出去会突然窜一段）。
+      _gestureActive = false;
+      _flushPendingPage();
       return;
     }
     widget.onZoomChanged?.call(_scale);
@@ -464,10 +500,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (velocity.distance > _flingMinVelocity) {
       _velocity = velocity;
       _lastTick = Duration.zero;
+      // 甩动期间同样延后页码上报（-frame 里 setState 会打断合成）。
+      _gestureActive = true;
       _ticker.start();
       // 甩动期间继续暂停淘汰；停下来的那一帧由 _endMotionSoon 收敛。
     } else {
       _velocity = Offset.zero;
+      _gestureActive = false;
+      _flushPendingPage();
       _endMotionSoon();
     }
     _trackVisible();
@@ -515,6 +555,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     if (_velocity.distance < _flingStopVelocity || hitEdge) {
       _velocity = Offset.zero;
       _ticker.stop();
+      _gestureActive = false;
+      _flushPendingPage();
       _endMotionSoon();
     }
   }
@@ -545,6 +587,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   }
 
   /// 主可见页 = 与视口**重叠高度最大**的那一页（规格 §6.9.2，A4/A3 混排安全）。
+  ///
+  /// 手势期间**不回调父级**：`onPageChanged` 会让 ReaderPage `setState`，
+  /// 整页（含顶栏、工具条、两个视图）在拖动过程中重建一次，容易掉帧。
+  /// 拖动中只更新内部 `_current`，抬手指后补发一次（[_flushPendingPage]）。
   void _updateCurrentPage() {
     if (_tops.isEmpty || _viewport.isEmpty) {
       return;
@@ -559,8 +605,27 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     );
     if (best != _current) {
       _current = best;
-      widget.onPageChanged(best);
+      if (_gestureActive) {
+        _pendingPage = best;
+      } else {
+        widget.onPageChanged(best);
+      }
     }
+  }
+
+  /// 手势是否进行中（拖动/捏合）。用来把"重建整页"的操作推迟到抬手之后。
+  bool _gestureActive = false;
+
+  /// 手势期间攒下的页码上报。
+  int? _pendingPage;
+
+  void _flushPendingPage() {
+    final int? pending = _pendingPage;
+    if (pending == null) {
+      return;
+    }
+    _pendingPage = null;
+    widget.onPageChanged(pending);
   }
 
   /// 滚动中预热：向"正在去的方向"预热**即将进入视口的那一页**。
@@ -667,7 +732,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         }
 
         final List<Widget> pageWidgets = <Widget>[];
-        for (int i = first; i <= last && i < _tops.length; i++) {
+        // 构建范围比"可见集"左右各多一页（2026-10-23）：
+        // 页面列表只在可见集变化时重建（`setState`）。如果恰好贴着视口边界，
+        // 拖动中会频繁跨页触发重建；多烘一页后，跨页只在"真的又走远一页"时发生，
+        // 拖动过程中的重建次数从"每页几次"降到"每页最多一次"。
+        // 代价是离屏多一张位图——缓存 320MB、且淘汰已被手势暂停，可以接受。
+        final int buildFirst = first > 0 ? first - 1 : first;
+        final int buildLast = last + 1 < _tops.length ? last + 1 : last;
+        for (int i = buildFirst; i <= buildLast && i < _tops.length; i++) {
           pageWidgets.add(
             Positioned(
               left: 0,
@@ -689,7 +761,7 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 inkEnabled: widget.sessionId != null,
                 inkTool: widget.inkTool,
                 inkColorIndex: widget.inkColorIndex,
-                inkWidthLevel: widget.inkWidthLevel,
+                inkbrushWidth: widget.inkbrushWidth,
                 // 落笔即停：笔一碰屏，惯性滚动立刻停（否则字画在"还在飘的纸"上）。
                 onPenDown: _onPenDownOnPaper,
               ),
@@ -714,6 +786,13 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           // 绝不能同时被这个缩放手势当成平移——否则边写边跑画面。
           // 规格 §6.9.1「笔写、指滚」在滚动模式的落地方式。
           supportedDevices: const <PointerDeviceKind>{PointerDeviceKind.touch},
+          // **跟手的关键**（2026-10-23）：默认的 `DragStartBehavior.start`
+          // 会让"手指按下 → 越过 18dp 触摸阈值"这一段位移**被丢掉**
+          // （onScaleStart 的 focalPoint 取的是阈值判定那一刻的位置），
+          // 于是内容永远落后手指 18dp，起手还有一小段死区 —— 主观就是"不顺滑/不跟手"。
+          // 改成 `.down` 后，焦点基准取按下点，越过阈值的那一帧内容会一次补上，
+          // 之后 1:1 跟随（标准滚动手感）。
+          dragStartBehavior: DragStartBehavior.down,
           onScaleStart: _onScaleStart,
           onScaleUpdate: _onScaleUpdate,
           onScaleEnd: _onScaleEnd,

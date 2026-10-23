@@ -35,6 +35,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   // 不做成 provider——它是这一页的私有临时状态（state/ 目录的约定）。
   bool _searching = false;
   String _query = '';
+
+  /// 当前文件夹筛选：null = 全部；'' = 未分类；其它 = 指定文件夹。
+  String? _folder;
+
   final TextEditingController _searchController = TextEditingController();
 
   @override
@@ -148,9 +152,52 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         context,
         workbook: workbook,
         onRename: () => unawaited(_rename(workbook)),
+        onEditTags: () => unawaited(_editTags(workbook)),
+        onMoveToFolder: () => unawaited(_moveToFolder(workbook)),
         onDelete: () => unawaited(_delete(workbook)),
       ),
     );
+  }
+
+  // ── 文件夹与标签（2026-10-23 书架管理）───────────────────────────────
+
+  Future<void> _editTags(Workbook workbook) async {
+    final List<String>? tags = await showTagsDialog(
+      context,
+      initial: workbook.tags,
+    );
+    if (tags == null || !mounted) {
+      return;
+    }
+    await ref
+        .read(workbookDaoProvider)
+        .setTags(workbook.id, WorkbookTags.encode(tags));
+    ref.invalidate(bookshelfProvider);
+    if (mounted) {
+      _toast(tags.isEmpty ? '已清除标签' : '标签：${tags.join(' / ')}');
+    }
+  }
+
+  Future<void> _moveToFolder(Workbook workbook) async {
+    final List<Workbook> items =
+        ref.read(bookshelfProvider).value ?? const <Workbook>[];
+    final String? folder = await showFolderPicker(
+      context,
+      folders: foldersOf(items),
+      current: workbook.folder,
+    );
+    if (folder == null || !mounted || folder == workbook.folder) {
+      return;
+    }
+    await ref.read(workbookDaoProvider).setFolder(workbook.id, folder);
+    ref.invalidate(bookshelfProvider);
+    if (mounted) {
+      _toast(folder.isEmpty ? '已移到未分类' : '已移到「$folder」');
+    }
+  }
+
+  void _selectFolder(String? folder) {
+    setState(() => _folder = folder);
   }
 
   // ── 搜索 ─────────────────────────────────────────────────────────
@@ -208,21 +255,37 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           onRetry: () => ref.invalidate(bookshelfProvider),
         ),
         data: (List<Workbook> items) {
-          final List<Workbook> visible = filterByQuery(items, _query);
+          final List<String> folders = foldersOf(items);
+          final List<Workbook> inFolder = filterByFolder(items, _folder);
+          final List<Workbook> visible = filterByQuery(inFolder, _query);
           if (items.isEmpty) {
             return _EmptyView(onImport: _pickAndImport);
           }
-          if (visible.isEmpty) {
-            // 有卷但搜索无果：单独的空态，别把"导入第一份"的引导露出来
-            return const EmptyState(
-              icon: Icons.search_off_outlined,
-              title: '没有匹配的卷子',
-              message: '换个标题关键词试试',
-            );
-          }
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: _list(visible),
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              // 文件夹筛选条：全部 / 未分类 / 各文件夹。
+              // 只要书架上有卷就显示 —— 没有它，用户不知道"移动/标签"这套功能存在。
+              if (items.isNotEmpty)
+                _FolderBar(
+                  folders: folders,
+                  selected: _folder,
+                  onSelected: _selectFolder,
+                  unfiledCount: items.where((Workbook w) => w.isUnfiled).length,
+                ),
+              Expanded(
+                child: visible.isEmpty
+                    ? const EmptyState(
+                        icon: Icons.search_off_outlined,
+                        title: '这里没有卷子',
+                        message: '换个关键词，或切回「全部」看看',
+                      )
+                    : RefreshIndicator(
+                        onRefresh: _refresh,
+                        child: _list(visible),
+                      ),
+              ),
+            ],
           );
         },
       ),
@@ -373,6 +436,24 @@ class _WorkbookTile extends ConsumerWidget {
                         '${workbook.pageCount} 页 · ${formatRelativeTime(workbook.sortTime)}',
                         style: theme.textTheme.bodySmall,
                       ),
+                      // 文件夹 + 标签：一行小 chip，看一眼知道这卷归在哪
+                      if (!workbook.isUnfiled || workbook.tags.isNotEmpty) ...[
+                        const SizedBox(height: ShqSpace.xs),
+                        Wrap(
+                          spacing: ShqSpace.xs,
+                          runSpacing: ShqSpace.xxs,
+                          children: <Widget>[
+                            if (!workbook.isUnfiled)
+                              _Chip(
+                                icon: Icons.folder_outlined,
+                                label: workbook.folder,
+                                emphasized: true,
+                              ),
+                            for (final String tag in workbook.tags)
+                              _Chip(label: '#$tag'),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -389,10 +470,174 @@ class _WorkbookTile extends ConsumerWidget {
   }
 }
 
+/// 书架卡片上的小 chip（文件夹 / 标签）。
+class _Chip extends StatelessWidget {
+  const _Chip({required this.label, this.icon, this.emphasized = false});
+
+  final String label;
+  final IconData? icon;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Color fg = emphasized ? scheme.primary : scheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: (emphasized ? scheme.primary : scheme.outlineVariant)
+            .withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(ShqRadius.sm),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (icon != null) ...<Widget>[
+            Icon(icon, size: 12, color: fg),
+            const SizedBox(width: 3),
+          ],
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(color: fg),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 文件夹筛选条：一条可横向滚动的小 chip 行。
+///
+/// 设计取舍：不做"左侧文件夹树"——书架是平铺列表，几十卷的场景下
+/// 一条横条比一棵树更省地方，也不会把有限的横向空间吃掉一半。
+class _FolderBar extends StatelessWidget {
+  const _FolderBar({
+    required this.folders,
+    required this.selected,
+    required this.onSelected,
+    required this.unfiledCount,
+  });
+
+  final List<String> folders;
+
+  /// null = 全部；'' = 未分类。
+  final String? selected;
+  final ValueChanged<String?> onSelected;
+  final int unfiledCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: 48,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
+        children: <Widget>[
+          _FolderChip(
+            label: '全部',
+            icon: Icons.apps,
+            selected: selected == null,
+            onTap: () => onSelected(null),
+          ),
+          if (unfiledCount > 0)
+            _FolderChip(
+              label: '未分类',
+              icon: Icons.inbox_outlined,
+              selected: selected == '',
+              onTap: () => onSelected(''),
+            ),
+          for (final String folder in folders)
+            _FolderChip(
+              label: folder,
+              icon: Icons.folder_outlined,
+              selected: selected == folder,
+              onTap: () => onSelected(folder),
+            ),
+          Padding(
+            padding: const EdgeInsets.only(left: ShqSpace.sm, right: ShqSpace.md),
+            child: Center(
+              child: Text(
+                '长按卷子可移动 / 打标签',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: scheme.outline,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FolderChip extends StatelessWidget {
+  const _FolderChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(right: ShqSpace.sm),
+      child: Center(
+        child: Material(
+          color: selected
+              ? scheme.secondaryContainer
+              : scheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(ShqRadius.pill),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: ShqSpace.md,
+                vertical: 6,
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Icon(
+                    icon,
+                    size: 15,
+                    color: selected
+                        ? scheme.onSecondaryContainer
+                        : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    label,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: selected
+                          ? scheme.onSecondaryContainer
+                          : scheme.onSurfaceVariant,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Thumb extends StatelessWidget {
   const _Thumb({required this.file});
 
   final File file;
+
 
   @override
   Widget build(BuildContext context) {

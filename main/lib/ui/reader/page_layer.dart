@@ -34,7 +34,7 @@ class PageLayer extends StatefulWidget {
     this.inkEnabled = false,
     this.inkTool = InkTool.pen,
     this.inkColorIndex = 0,
-    this.inkWidthLevel = 1,
+    this.inkbrushWidth = 1,
     this.onPenDown,
   });
 
@@ -70,7 +70,7 @@ class PageLayer extends StatefulWidget {
 
   /// 当前颜色（调色板索引）与粗细档。只影响之后落下的笔。
   final int inkColorIndex;
-  final int inkWidthLevel;
+  final int inkbrushWidth;
 
   /// 笔落屏时通知外层（滚动模式用来停惯性滚动）。见 [InkLayer.onPenDown]。
   final VoidCallback? onPenDown;
@@ -226,7 +226,7 @@ class _PageLayerState extends State<PageLayer> {
                 darkPaper: widget.style.isDarkPaper,
                 tool: widget.inkTool,
                 colorIndex: widget.inkColorIndex,
-                widthLevel: widget.inkWidthLevel,
+                brushWidth: widget.inkbrushWidth,
                 onPenDown: widget.onPenDown,
               ),
             ),

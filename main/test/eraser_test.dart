@@ -109,7 +109,7 @@ void main() {
         points: horizontal().points,
         style: InkStrokeStyle.highlighter,
         colorIndex: 2,
-        widthLevel: 2,
+        brushWidth: 2,
       );
       final List<InkStroke>? result = Eraser.carve(
         stroke: source,
@@ -121,7 +121,7 @@ void main() {
       for (final InkStroke fragment in result!) {
         expect(fragment.style, InkStrokeStyle.highlighter);
         expect(fragment.colorIndex, 2);
-        expect(fragment.widthLevel, 2);
+        expect(fragment.brushWidth, 2);
         expect(fragment.uid, isNot('s'), reason: '碎片必须换新 uid');
       }
     });
@@ -213,30 +213,39 @@ void main() {
     });
   });
 
-  group('大小档位', () {
-    test('三档半径递增、越界收敛、中档与规格一致', () {
-      expect(Eraser.radiusPt.length, Eraser.sizeLevels);
-      expect(Eraser.radiusOf(0), lessThan(Eraser.radiusOf(1)));
-      expect(Eraser.radiusOf(1), lessThan(Eraser.radiusOf(2)));
-      expect(Eraser.radiusOf(9), Eraser.radiusOf(2));
-      expect(Eraser.radiusOf(-3), Eraser.radiusOf(0));
-      expect(Eraser.radiusOf(1), 12);
+  group('橡皮大小（0..100 多级）', () {
+    test('半径随粗细单调、越界夹紧、中间档接近规格 12pt', () {
+      expect(Eraser.radiusOfWidth(0), Eraser.minRadius);
+      expect(Eraser.radiusOfWidth(100), Eraser.maxRadius);
+      expect(
+        Eraser.radiusOfWidth(0),
+        lessThan(Eraser.radiusOfWidth(50)),
+      );
+      expect(
+        Eraser.radiusOfWidth(50),
+        lessThan(Eraser.radiusOfWidth(100)),
+      );
+      // 越界不抛，夹到两端
+      expect(Eraser.radiusOfWidth(-40), Eraser.minRadius);
+      expect(Eraser.radiusOfWidth(400), Eraser.maxRadius);
+      // 中档（50）落在 16pt 左右，与旧"三档"的中档 12–22 同量级
+      expect(Eraser.radiusOfWidth(50), closeTo(16, 0.5));
     });
 
-    test('大档擦掉的缺口比小档宽', () {
-      double gapOf(int level) {
+    test('粗档擦掉的缺口比细档宽（大小真的生效）', () {
+      double gapOf(int width) {
         final List<InkStroke>? result = Eraser.carve(
           stroke: horizontal(),
           eraserPath: <InkPoint>[at(50, 0)],
-          radius: Eraser.radiusOf(level),
+          radius: Eraser.radiusOfWidth(width),
           newUid: newUid,
         );
         expect(result, isNotNull);
         return result![1].points.first.x - result[0].points.last.x;
       }
 
-      expect(gapOf(0), lessThan(gapOf(1)));
-      expect(gapOf(1), lessThan(gapOf(2)));
+      expect(gapOf(0), lessThan(gapOf(50)));
+      expect(gapOf(50), lessThan(gapOf(100)));
     });
   });
 

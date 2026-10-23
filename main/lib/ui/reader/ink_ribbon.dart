@@ -76,7 +76,7 @@ class InkRibbon {
   bool get hasGeometry => _hasGeometry;
 
   double get _midWidth =>
-      InkWidth.forStroke(style, InkWidth.neutralPressure, spec.widthLevel);
+      InkWidth.forStroke(style, InkWidth.neutralPressure, spec.brushWidth);
 
   /// 开一笔。**活笔与死笔都从这里开始**，这是抬笔不跳变的技术保证。
   void beginStroke() {
@@ -101,7 +101,7 @@ class InkRibbon {
       final double raw = InkWidth.forStroke(
         style,
         point.pressure,
-        spec.widthLevel,
+        spec.brushWidth,
       );
       _firstWidth = raw;
       _lastWidth = raw * InkWidth.taperIn;
@@ -114,7 +114,7 @@ class InkRibbon {
     final double raw = InkWidth.forStroke(
       style,
       point.pressure,
-      spec.widthLevel,
+      spec.brushWidth,
     );
     final double width =
         _lastWidth + (raw - _lastWidth) * InkWidth.pressureSmoothing;
@@ -122,7 +122,7 @@ class InkRibbon {
     final int level = InkWidth.levelOf(
       style,
       (_lastWidth + width) / 2,
-      spec.widthLevel,
+      spec.brushWidth,
     );
     final ui.Path path = _paths[level];
     if (level != _openLevel) {
@@ -161,11 +161,11 @@ class InkRibbon {
   }
 
   void _dot(InkPoint center, double width) {
-    final int level = InkWidth.levelOf(style, width, spec.widthLevel);
+    final int level = InkWidth.levelOf(style, width, spec.brushWidth);
     _paths[level].addOval(
       ui.Rect.fromCircle(
         center: ui.Offset(center.x, center.y),
-        radius: InkWidth.widthOfLevel(style, level, spec.widthLevel) / 2,
+        radius: InkWidth.widthOfLevel(style, level, spec.brushWidth) / 2,
       ),
     );
     _levelUsed[level] = true;
@@ -202,7 +202,7 @@ class InkRibbon {
         // 2026-10-23 重构时漏了这行，结果整层笔迹画成黑色（像素取样 (0,0,0) 抓到的）。
         ..color = spec.color
         ..blendMode = spec.blendMode
-        ..strokeWidth = InkWidth.widthOfLevel(style, level, spec.widthLevel),
+        ..strokeWidth = InkWidth.widthOfLevel(style, level, spec.brushWidth),
     );
   }
 

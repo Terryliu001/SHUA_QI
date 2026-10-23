@@ -28,21 +28,21 @@ void main() {
   InkBrushSpec specOf(
     InkStrokeStyle style, {
     int colorIndex = 0,
-    int widthLevel = 1,
+    int brushWidth = 1,
     bool darkPaper = false,
   }) => InkBrushSpec.of(
     style: style,
     colorIndex: colorIndex,
-    widthLevel: widthLevel,
+    brushWidth: brushWidth,
     darkPaper: darkPaper,
   );
 
   InkRibbon streamed(
     List<InkPoint> points, {
     InkStrokeStyle style = InkStrokeStyle.pen,
-    int widthLevel = 1,
+    int brushWidth = 1,
   }) {
-    final InkRibbon ribbon = InkRibbon(specOf(style, widthLevel: widthLevel));
+    final InkRibbon ribbon = InkRibbon(specOf(style, brushWidth: brushWidth));
     ribbon.beginStroke();
     for (final InkPoint point in points) {
       ribbon.addPoint(point);
@@ -54,15 +54,15 @@ void main() {
   InkRibbon batched(
     List<InkPoint> points, {
     InkStrokeStyle style = InkStrokeStyle.pen,
-    int widthLevel = 1,
+    int brushWidth = 1,
   }) {
-    final InkRibbon ribbon = InkRibbon(specOf(style, widthLevel: widthLevel));
+    final InkRibbon ribbon = InkRibbon(specOf(style, brushWidth: brushWidth));
     ribbon.addStroke(
       InkStroke(
         uid: 's1',
         points: points,
         style: style,
-        widthLevel: widthLevel,
+        brushWidth: brushWidth,
       ),
     );
     return ribbon;
@@ -92,16 +92,16 @@ void main() {
 
   test('三档粗细各自与流式一致（换粗细不会让抬笔跳变）', () {
     final List<InkPoint> points = samplePoints();
-    for (final int widthLevel in <int>[0, 1, 2]) {
-      final List<ui.Rect> a = streamed(points, widthLevel: widthLevel)
+    for (final int brushWidth in <int>[0, 1, 2]) {
+      final List<ui.Rect> a = streamed(points, brushWidth: brushWidth)
           .levelBounds();
-      final List<ui.Rect> b = batched(points, widthLevel: widthLevel)
+      final List<ui.Rect> b = batched(points, brushWidth: brushWidth)
           .levelBounds();
       for (int i = 0; i < a.length; i++) {
         expect(
           a[i].width,
           closeTo(b[i].width, 1e-9),
-          reason: '粗细档 $widthLevel 第 $i 档包围盒宽度不一致',
+          reason: '粗细档 $brushWidth 第 $i 档包围盒宽度不一致',
         );
       }
     }

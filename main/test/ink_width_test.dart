@@ -5,58 +5,84 @@ import 'package:shuaqi/domain/ink/ink_width.dart';
 
 /// `InkWidth` 单测（宿主机秒级）。
 ///
-/// 盯三条：三档粗细各自正确、压感区间随档位缩放、无压感输入不糊不细。
+/// 盯三条：
+/// 1. **粗细 0..100 单调**（多级可调的前提）；
+/// 2. 压感只调制"这一下按多重"，不改变"这支笔有多粗"的量级；
+/// 3. 宽度量化档位（活笔/死笔共用，抬笔不可能跳宽）。
 void main() {
-  test('钢笔：压感轻 → 细，重 → 粗，单调', () {
-    final double light = InkWidth.forStroke(InkStrokeStyle.pen, 0.1);
-    final double mid = InkWidth.forStroke(InkStrokeStyle.pen, 0.5);
-    final double heavy = InkWidth.forStroke(InkStrokeStyle.pen, 0.95);
-    // 中档区间 1.2–3.2
-    expect(light, closeTo(1.4, 1e-9));
-    expect(mid, closeTo(2.2, 1e-9));
-    expect(heavy, closeTo(3.1, 1e-9));
-    expect(light, lessThan(mid));
-    expect(mid, lessThan(heavy));
-  });
+  const int thin = 0;
+  const int mid = InkStroke.defaultBrushWidth; // 50
+  const int bold = 100;
 
-  test('三档粗细：细 < 中 < 粗，且都在合理区间', () {
+  test('粗细单调：0 < 50 < 100（三支笔都是）', () {
     for (final InkStrokeStyle style in InkStrokeStyle.values) {
-      final double fine = InkWidth.forStroke(style, 0.5, 0);
-      final double normal = InkWidth.forStroke(style, 0.5, 1);
-      final double bold = InkWidth.forStroke(style, 0.5, 2);
-      expect(fine, lessThan(normal), reason: '${style.name} 细档应小于中档');
-      expect(normal, lessThan(bold), reason: '${style.name} 中档应小于粗档');
+      final double a = InkWidth.baseOf(style, thin);
+      final double b = InkWidth.baseOf(style, mid);
+      final double c = InkWidth.baseOf(style, bold);
+      expect(a, lessThan(b), reason: '${style.name} 细 < 中');
+      expect(b, lessThan(c), reason: '${style.name} 中 < 粗');
+      expect(a, greaterThan(0));
     }
-    // 规格值：圆珠笔 1.6 / 2.4 / 3.2，荧光笔 12 / 18 / 24
-    expect(InkWidth.forStroke(InkStrokeStyle.ballpoint, 0.5, 0), 1.6);
-    expect(InkWidth.forStroke(InkStrokeStyle.ballpoint, 0.5, 1), 2.4);
-    expect(InkWidth.forStroke(InkStrokeStyle.ballpoint, 0.5, 2), 3.2);
-    expect(InkWidth.forStroke(InkStrokeStyle.highlighter, 0.5, 0), 12);
-    expect(InkWidth.forStroke(InkStrokeStyle.highlighter, 0.5, 1), 18);
-    expect(InkWidth.forStroke(InkStrokeStyle.highlighter, 0.5, 2), 24);
   });
 
-  test('粗细档越界被收敛（坏数据不崩、不画出巨笔）', () {
+  test('区间与规格同量级：钢笔 0.8–5.2 / 圆珠笔 1–4 / 荧光笔 6–36', () {
+    expect(InkWidth.baseOf(InkStrokeStyle.pen, thin), closeTo(0.8, 1e-9));
+    expect(InkWidth.baseOf(InkStrokeStyle.pen, bold), closeTo(5.2, 1e-9));
+    expect(InkWidth.baseOf(InkStrokeStyle.ballpoint, thin), closeTo(1.0, 1e-9));
+    expect(InkWidth.baseOf(InkStrokeStyle.ballpoint, bold), closeTo(4.0, 1e-9));
     expect(
-      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, 9),
-      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, 2),
+      InkWidth.baseOf(InkStrokeStyle.highlighter, thin),
+      closeTo(6, 1e-9),
     );
-    expect(InkWidth.forStroke(InkStrokeStyle.pen, 0.5, -3), InkWidth.forStroke(
-      InkStrokeStyle.pen,
-      0.5,
-      0,
-    ));
+    expect(
+      InkWidth.baseOf(InkStrokeStyle.highlighter, bold),
+      closeTo(36, 1e-9),
+    );
   });
 
-  test('无压感输入（恒 0 / 恒 1）取中值，不糊不细', () {
-    for (int level = 0; level < InkStroke.widthLevels; level++) {
-      final double mid = InkWidth.penMid(level);
-      expect(InkWidth.forStroke(InkStrokeStyle.pen, 0, level), mid);
-      expect(InkWidth.forStroke(InkStrokeStyle.pen, 1, level), mid);
+  test('钢笔：同一粗细下，压感重 → 更粗，压感轻 → 更细', () {
+    for (final int width in <int>[thin, mid, bold]) {
+      final double light = InkWidth.forStroke(InkStrokeStyle.pen, 0.1, width);
+      final double heavy = InkWidth.forStroke(InkStrokeStyle.pen, 0.95, width);
+      expect(light, lessThan(heavy));
+      // 压感只调制 ±，不能跨过相邻粗细档的量级
+      expect(heavy / light, lessThan(2.5));
     }
   });
 
-  test('三笔刷宽度互不相同（视觉可区分，REQ-03）', () {
+  test('等宽笔刷不响应压感', () {
+    for (final InkStrokeStyle style in <InkStrokeStyle>[
+      InkStrokeStyle.ballpoint,
+      InkStrokeStyle.highlighter,
+    ]) {
+      expect(
+        InkWidth.forStroke(style, 0.05, mid),
+        InkWidth.forStroke(style, 0.99, mid),
+      );
+    }
+  });
+
+  test('粗细越界被夹紧（坏数据不崩、不画出巨笔）', () {
+    expect(
+      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, 900),
+      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, bold),
+    );
+    expect(
+      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, -900),
+      InkWidth.forStroke(InkStrokeStyle.pen, 0.5, thin),
+    );
+    expect(InkWidth.clampBrushWidth(400), 100);
+  });
+
+  test('无压感输入（恒 0 / 恒 1）取中性压力对应的宽度', () {
+    for (final int width in <int>[thin, mid, bold]) {
+      final double expected = InkWidth.midWidth(InkStrokeStyle.pen, width);
+      expect(InkWidth.forStroke(InkStrokeStyle.pen, 0, width), expected);
+      expect(InkWidth.forStroke(InkStrokeStyle.pen, 1, width), expected);
+    }
+  });
+
+  test('三笔刷在同档下宽度互不相同（视觉可区分，REQ-03）', () {
     final double pen = InkWidth.forStroke(InkStrokeStyle.pen, 0.5);
     final double ball = InkWidth.forStroke(InkStrokeStyle.ballpoint, 0.5);
     final double hl = InkWidth.forStroke(InkStrokeStyle.highlighter, 0.5);
@@ -65,52 +91,38 @@ void main() {
     expect(pen, isNot(hl));
   });
 
-  // ── 量化档位（T2.2：活笔与死笔共用，抬笔因此不可能跳宽）────────────────
+  // ── 量化档位（活笔与死笔共用，抬笔因此不可能跳宽）────────────────
 
   test('等宽笔刷：任意宽度都归到第 0 档（整笔一条 Path）', () {
-    expect(InkWidth.levelOf(InkStrokeStyle.ballpoint, 2.4), 0);
-    expect(InkWidth.levelOf(InkStrokeStyle.highlighter, 18), 0);
-    expect(InkWidth.widthOfLevel(InkStrokeStyle.ballpoint, 0), 2.4);
-    expect(InkWidth.widthOfLevel(InkStrokeStyle.highlighter, 0), 18);
-  });
-
-  test('钢笔档位：两端精确落在该档的最小/最大宽度', () {
-    final (double min, double max) = InkWidth.rangeOf(InkStrokeStyle.pen, 1);
-    expect(
-      InkWidth.widthOfLevel(InkStrokeStyle.pen, 0),
-      closeTo(min, 1e-9),
-    );
-    expect(
-      InkWidth.widthOfLevel(InkStrokeStyle.pen, InkWidth.levels - 1),
-      closeTo(max, 1e-9),
-    );
-  });
-
-  test('相邻档宽度差 ≤0.15pt：肉眼与 400dpi 屏都看不出台阶', () {
-    for (final int widthLevel in <int>[0, 1, 2]) {
-      for (int level = 1; level < InkWidth.levels; level++) {
-        final double step =
-            InkWidth.widthOfLevel(InkStrokeStyle.pen, level, widthLevel) -
-            InkWidth.widthOfLevel(InkStrokeStyle.pen, level - 1, widthLevel);
-        expect(step, lessThanOrEqualTo(0.15));
-      }
+    for (final int width in <int>[thin, mid, bold]) {
+      final double w = InkWidth.baseOf(InkStrokeStyle.ballpoint, width);
+      expect(InkWidth.levelOf(InkStrokeStyle.ballpoint, w, width), 0);
+      expect(InkWidth.widthOfLevel(InkStrokeStyle.ballpoint, 0, width), w);
     }
   });
 
-  test('相邻档吸附：0.05pt 的宽度抖动最多跨一档（不会每帧换 Path）', () {
-    final (double min, double max) = InkWidth.rangeOf(InkStrokeStyle.pen, 1);
-    for (double w = min; w < max; w += 0.05) {
-      final int delta = InkWidth.levelOf(InkStrokeStyle.pen, w + 0.05) -
-          InkWidth.levelOf(InkStrokeStyle.pen, w);
-      expect(delta, inInclusiveRange(0, 1), reason: '宽度 $w → ${w + 0.05}');
+  test('钢笔档位：两端落在该粗细下的最小/最大宽度', () {
+    for (final int width in <int>[thin, mid, bold]) {
+      final (double min, double max) = InkWidth.rangeOf(
+        InkStrokeStyle.pen,
+        width,
+      );
+      expect(
+        InkWidth.widthOfLevel(InkStrokeStyle.pen, 0, width),
+        closeTo(min, 1e-9),
+      );
+      expect(
+        InkWidth.widthOfLevel(InkStrokeStyle.pen, InkWidth.levels - 1, width),
+        closeTo(max, 1e-9),
+      );
     }
   });
 
-  test('档位单调：宽度越大档位越高，且夹在 [0, levels)', () {
-    final (double min, double max) = InkWidth.rangeOf(InkStrokeStyle.pen, 1);
+  test('相邻档位单调且夹在 [0, levels)（宽度抖动最多跨一档）', () {
+    final (double min, double max) = InkWidth.rangeOf(InkStrokeStyle.pen, mid);
     int previous = -1;
-    for (double w = min - 1; w <= max + 1; w += 0.05) {
-      final int level = InkWidth.levelOf(InkStrokeStyle.pen, w);
+    for (double w = min - 1; w <= max + 1; w += 0.02) {
+      final int level = InkWidth.levelOf(InkStrokeStyle.pen, w, mid);
       expect(level, greaterThanOrEqualTo(0));
       expect(level, lessThan(InkWidth.levels));
       expect(
@@ -122,18 +134,12 @@ void main() {
     }
   });
 
-  test('中性压力 = 区间中值：落笔/抬笔的缺失读数不会让笔突然变粗或变细', () {
-    expect(
-      InkWidth.forStroke(InkStrokeStyle.pen, InkWidth.neutralPressure),
-      closeTo(InkWidth.penMid(), 1e-9),
-    );
-  });
+  // ── 调色板 ────────────────────────────────────────────────────────
 
   test('调色板：每支笔的颜色数量与索引收敛', () {
     expect(InkPalette.countFor(InkStrokeStyle.pen), 6);
     expect(InkPalette.countFor(InkStrokeStyle.ballpoint), 6);
     expect(InkPalette.countFor(InkStrokeStyle.highlighter), 4);
-    // 越界一律收敛到 0（回落墨黑），绝不抛
     expect(
       InkPalette.argb(
         style: InkStrokeStyle.pen,
@@ -145,7 +151,7 @@ void main() {
     expect(InkPalette.clampIndex(InkStrokeStyle.highlighter, 9), 3);
   });
 
-  test('调色板：0 号是墨黑（老数据默认值必须仍是墨黑）', () {
+  test('调色板：0 号是墨黑，夜读纸上变暖白（老数据默认值必须仍是墨黑）', () {
     expect(
       InkPalette.argb(
         style: InkStrokeStyle.pen,
@@ -154,13 +160,8 @@ void main() {
       ),
       0xFF14161A,
     );
-    // 夜读纸上 0 号是暖白（暗纸上墨黑不可见）
     expect(
-      InkPalette.argb(
-        style: InkStrokeStyle.pen,
-        index: 0,
-        darkPaper: true,
-      ),
+      InkPalette.argb(style: InkStrokeStyle.pen, index: 0, darkPaper: true),
       0xFFE9E3D5,
     );
   });

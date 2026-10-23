@@ -56,7 +56,7 @@ class InkLayer extends ConsumerStatefulWidget {
     required this.darkPaper,
     this.tool = InkTool.pen,
     this.colorIndex = 0,
-    this.widthLevel = 1,
+    this.brushWidth = 1,
     this.enabled = true,
     this.onPenDown,
   });
@@ -77,7 +77,7 @@ class InkLayer extends ConsumerStatefulWidget {
 
   /// 当前颜色（调色板索引）与粗细档。只影响**之后**落下的笔。
   final int colorIndex;
-  final int widthLevel;
+  final int brushWidth;
 
   /// false 时这一页不接受落笔（例如非当前页）。
   final bool enabled;
@@ -132,11 +132,64 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   /// （系统手势抢占、驱动层抖动），所以必须自愈。
   static const int _stalePointerMs = 1200;
 
+  // ── 大小参考圈（2026-10-23，用户要求"在最后一次落笔位置显示大小参考"）──
+  //
+  // 绘画软件的常见做法：改笔刷大小的时候，在画布上那个位置浮出一个圆圈，
+  // 大小就是真实笔触大小，松手后淡出。这里落在**最后一次落笔的位置**，
+  // 因为那是用户注意力所在的地方（工具面板在右下角，纸在这儿）。
+  //
+  // 实现上用 ValueNotifier<Offset?> 而不是 setState：
+  // 显示/隐藏只重建这一圈，不碰墨迹层与已提交的 Path 缓存。
+  final ValueNotifier<Offset?> _halo = ValueNotifier<Offset?>(null);
+
+  /// 最后一次落笔的位置（页面坐标 pt）。改粗细时用它定位参考圈。
+  Offset? _lastInkAt;
+
+  Timer? _haloTimer;
+
+  static const Duration _haloHold = Duration(milliseconds: 1400);
+
+  /// 在 [at]（页面坐标）处显示大小参考圈，[hold] 后自动淡出。
+  void _flashHalo(Offset at) {
+    _lastInkAt = at;
+    _halo.value = at;
+    _haloTimer?.cancel();
+    _haloTimer = Timer(_haloHold, () {
+      if (mounted) {
+        _halo.value = null;
+      }
+    });
+  }
+
+  /// 旋钮（粗细/大小/工具）变了：在最后一次落笔处亮一下参考圈。
+  @override
+  void didUpdateWidget(covariant InkLayer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final bool changed = oldWidget.brushWidth != widget.brushWidth ||
+        oldWidget.tool != widget.tool;
+    if (changed && _lastInkAt != null) {
+      _flashHalo(_lastInkAt!);
+    }
+  }
+
+  /// 当前笔刷的"半径"，单位 pt（参考圈画它）。
+  double get _brushRadiusPt {
+    if (widget.tool.isEraser) {
+      return Eraser.radiusOfWidth(widget.brushWidth);
+    }
+    // 笔迹的"大小"是线宽，圈画线宽半径更贴近"笔尖粗细"的直觉。
+    return InkWidth.baseOf(widget.tool.strokeStyle ?? InkStrokeStyle.pen,
+            widget.brushWidth) /
+        2;
+  }
+
   double get _scale =>
       widget.pageWidthPt > 0 ? widget.width / widget.pageWidthPt : 1;
 
   @override
   void dispose() {
+    _haloTimer?.cancel();
+    _halo.dispose();
     _activeTick.dispose();
     super.dispose();
   }
@@ -184,7 +237,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
   InkBrushSpec _specFor(InkStrokeStyle style) => InkBrushSpec.of(
     style: style,
     colorIndex: widget.colorIndex,
-    widthLevel: widget.widthLevel,
+    brushWidth: widget.brushWidth,
     darkPaper: widget.darkPaper,
   );
 
@@ -336,7 +389,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
       return;
     }
     // 橡皮大小复用"粗细档"：每支笔（含橡皮）分别记忆自己的设置。
-    final double radius = Eraser.radiusOf(widget.widthLevel);
+    final double radius = Eraser.radiusOfWidth(widget.brushWidth);
     final List<InkPoint> path = <InkPoint>[?from, to];
     final List<ErasePatch> patches = <ErasePatch>[];
     for (int i = 0; i < doc.strokes.length; i++) {
@@ -362,6 +415,8 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     ref
         .read(inkEditProvider(widget.inkKey).notifier)
         .applyErasePatches(patches);
+    // 擦除也更新"最后一次落笔位置"：改大小时参考圈出现在刚擦过的地方最合理。
+    _lastInkAt = Offset(to.x, to.y);
     _activeTick.value++;
   }
 
@@ -388,6 +443,9 @@ class _InkLayerState extends ConsumerState<InkLayer> {
     ribbon?.clear();
     _activeTick.value++;
     _lastPressure = InkWidth.neutralPressure;
+    // 记下"最后一次落笔位置"：改粗细/橡皮大小时参考圈就画在这儿
+    // （不主动闪，避免每写一笔就闪一次圈——只在改设置时出现）。
+    _lastInkAt = Offset(endPoint.x, endPoint.y);
     if (points.isEmpty) {
       return;
     }
@@ -401,7 +459,7 @@ class _InkLayerState extends ConsumerState<InkLayer> {
               style: spec.style,
               // 颜色/粗细跟着这一笔落纸时的选择走（之后换色不重绘旧笔）。
               colorIndex: spec.colorIndex,
-              widthLevel: spec.widthLevel,
+              brushWidth: spec.brushWidth,
             ),
           ),
     );
@@ -456,6 +514,36 @@ class _InkLayerState extends ConsumerState<InkLayer> {
               ),
             ),
           ),
+          // 大小参考圈：在最后一次落笔处浮一个真实大小的圆，1.4s 后淡出。
+          // 只在改粗细/换工具时出现，不干扰书写（IgnorePointer，不挡输入）。
+          Positioned.fill(
+            child: IgnorePointer(
+              child: ValueListenableBuilder<Offset?>(
+                valueListenable: _halo,
+                builder: (BuildContext context, Offset? at, Widget? child) {
+                  if (at == null) {
+                    return const SizedBox.shrink();
+                  }
+                  final double r = _brushRadiusPt * scale;
+                  // 直径按真实大小，但**不小于 14dp**：钢笔最细档只有 0.9pt，
+                  // 按原尺寸画出来是 3px 的小点，等于没提示。
+                  // 粗档（>14dp）时圈会跟着变大，所以"参考"依然成立。
+                  final double d = (r * 2).clamp(14.0, 480.0);
+                  return Stack(
+                    children: <Widget>[
+                      Positioned(
+                        left: at.dx * scale - d / 2,
+                        top: at.dy * scale - d / 2,
+                        width: d,
+                        height: d,
+                        child: const _BrushHalo(),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
           // 输入层铺满整页：translucent 让 touch 继续穿透到父层手势
           // （滚动平移/缩放、分页缩放），stylus 由本层消费。
           Positioned.fill(
@@ -468,6 +556,26 @@ class _InkLayerState extends ConsumerState<InkLayer> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 大小参考圈：一圈半透明描边 + 极淡填充（在纸上看得到，又不盖住内容）。
+class _BrushHalo extends StatelessWidget {
+  const _BrushHalo();
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: 0.10),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: scheme.primary.withValues(alpha: 0.75),
+          width: 1.6,
+        ),
       ),
     );
   }

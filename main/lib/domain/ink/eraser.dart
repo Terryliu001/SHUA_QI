@@ -23,20 +23,24 @@ import 'package:shuaqi/domain/ink/ink_doc.dart';
 /// 每个圆盘与线段的交集都有**精确解**（二次方程），比做胶囊-线段求交简单且准。
 /// 采样步长取 `min(radius, 4pt)`：既不会把路径切得过密，也保证不漏擦。
 abstract final class Eraser {
-  /// 三档橡皮半径（pt）。UI 上叫"小 / 中 / 大"。
+  /// 橡皮半径区间（pt）：粗细 0 → 4pt，100 → 28pt。
   ///
-  /// 12pt（中）是规格 T2.3 的值，也是"擦得动但不误伤"的折中：
-  /// A4 页宽 595pt，12pt ≈ 2% 页宽；小档适合抠单个字符，大档适合扫一片草稿。
-  static const List<double> radiusPt = <double>[6, 12, 22];
+  /// 12pt（≈ 33% 档）是规格 T2.3 的值，也是"擦得动但不误伤"的折中：
+  /// A4 页宽 595pt，12pt ≈ 2% 页宽。2026-10-23 用户要求"大小多级可调"，
+  /// 于是从 3 档枚举改成 0..100 连续档（UI 上是滑条 + 大小参考圈）。
+  static const double minRadius = 4;
+  static const double maxRadius = 28;
 
-  static const int sizeLevels = 3;
-
-  static int clampSize(int level) => level.clamp(0, sizeLevels - 1);
-
-  static double radiusOf(int sizeLevel) => radiusPt[clampSize(sizeLevel)];
-
-  /// 兼容旧调用（默认中档，= 规格 T2.3 的 12pt）。
+  /// 兼容旧调用（默认中档 ≈ 12pt）。
   static const double defaultRadius = 12;
+
+  /// 粗细 0..100 → 橡皮半径（pt）。
+  static double radiusOfWidth(int brushWidth) {
+    final double t =
+        brushWidth.clamp(InkStroke.brushWidthMin, InkStroke.brushWidthMax) /
+        InkStroke.brushWidthMax;
+    return minRadius + (maxRadius - minRadius) * t;
+  }
 
   // ── 局部擦除（主入口）──────────────────────────────────────────────
 
@@ -150,7 +154,7 @@ abstract final class Eraser {
           style: stroke.style,
           // 碎片继承原笔的笔刷/颜色/粗细：擦掉一半不该让另一半换色变粗。
           colorIndex: stroke.colorIndex,
-          widthLevel: stroke.widthLevel,
+          brushWidth: stroke.brushWidth,
         ),
     ];
   }

@@ -53,7 +53,7 @@ class CommittedInkCache {
       final InkBrushSpec spec = InkBrushSpec.of(
         style: stroke.style,
         colorIndex: stroke.colorIndex,
-        widthLevel: stroke.widthLevel,
+        brushWidth: stroke.brushWidth,
         darkPaper: _darkPaper,
       );
       _ribbons.putIfAbsent(spec, () => InkRibbon(spec)).addStroke(stroke);
@@ -160,7 +160,7 @@ Color previewColorOf({
   return InkBrushSpec.of(
     style: style,
     colorIndex: colorIndex,
-    widthLevel: InkStroke.defaultWidthLevel,
+    brushWidth: InkStroke.defaultBrushWidth,
     darkPaper: darkPaper,
   ).color;
 }

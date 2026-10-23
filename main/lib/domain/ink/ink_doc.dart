@@ -99,14 +99,19 @@ class InkStroke {
     required this.points,
     this.style = InkStrokeStyle.pen,
     this.colorIndex = 0,
-    this.widthLevel = defaultWidthLevel,
+    this.brushWidth = defaultBrushWidth,
   });
 
-  /// 粗细档数（每支笔 3 档：细 / 中 / 粗）。
-  static const int widthLevels = 3;
+  /// 粗细取值区间：0..100（0 = 最细、100 = 最粗）。
+  ///
+  /// 2026-10-23 从"三档枚举"改成 0..100：用户要求"多级可调"，
+  /// 而整数正好塞进 SIF 的 1 字节，代价与三档一样。
+  static const int brushWidthMin = 0;
+  static const int brushWidthMax = 100;
 
-  /// 默认档 = 中。老数据（T2.2 时代没有这个字段）落到这里，行为与当时一致。
-  static const int defaultWidthLevel = 1;
+  /// 默认粗细 = 50（中）。老数据（T2.2 时代没有这个字段）落到这里，
+  /// 与当时"中档"的手感一致。
+  static const int defaultBrushWidth = 50;
 
   /// ULID（§5.3）。由调用方生成——domain 不持有 id 生成器，避免隐式随机源。
   final String uid;
@@ -118,8 +123,8 @@ class InkStroke {
   /// 0 = 墨黑，与 T2.2 的行为一致，所以老数据不用迁移。
   final int colorIndex;
 
-  /// 粗细档 0..2（[widthLevels]）。同样进契约，1 字节。
-  final int widthLevel;
+  /// 粗细 0..100（[brushWidthMin]..[brushWidthMax]）。同样进契约，1 字节。
+  final int brushWidth;
 
   /// 荧光笔永不进入识别（§6.2 规则 6）。
   ///

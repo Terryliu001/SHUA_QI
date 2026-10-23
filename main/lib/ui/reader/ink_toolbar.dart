@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/domain/ink/eraser.dart';
 import 'package:shuaqi/domain/ink/ink_brush.dart';
-import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_palette.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
+import 'package:shuaqi/domain/ink/ink_width.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/ui/reader/ink_painters.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -154,6 +154,23 @@ class _ToolPanel extends ConsumerWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
+            // 面板头：一条"钉到顶栏"的动作 —— 两种形态在阅读器里**互相可切**，
+            // 不用绕去设置页（用户 2026-10-23 要求"自然一点"）。
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                const _SectionLabel('笔刷'),
+                const SizedBox(width: ShqSpace.sm),
+                _ModeSwitchButton(
+                  icon: Icons.vertical_align_top,
+                  label: '固定到顶栏',
+                  onTap: () => ref
+                      .read(inkToolbarPinnedProvider.notifier)
+                      .set(true),
+                ),
+              ],
+            ),
+            const SizedBox(height: ShqSpace.xs),
             const _SectionLabel('工具'),
             const SizedBox(height: ShqSpace.xs),
             Row(
@@ -200,39 +217,27 @@ class _ToolPanel extends ConsumerWidget {
               const SizedBox(height: ShqSpace.md),
               const _SectionLabel('粗细'),
               const SizedBox(height: ShqSpace.xs),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  for (int level = 0; level < InkStroke.widthLevels; level++)
-                    _WidthButton(
-                      level: level,
-                      selected: brush.widthLevel == level,
-                      onTap: () {
-                        controller.selectWidth(level);
-                        onPick(level);
-                      },
-                    ),
-                ],
+              _BrushWidthSlider(
+                brush: brush,
+                darkPaper: darkPaper,
+                onChanged: (int value) {
+                  controller.selectWidth(value);
+                  onPick(value);
+                },
               ),
             ],
             if (erased) ...<Widget>[
               const SizedBox(height: ShqSpace.md),
               const _SectionLabel('橡皮大小'),
               const SizedBox(height: ShqSpace.xs),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  for (int level = 0; level < Eraser.sizeLevels; level++)
-                    _EraserSizeButton(
-                      level: level,
-                      selected: brush.widthLevel == level,
-                      onTap: () {
-                        // 橡皮大小复用 widthLevel（每支笔分别记忆自己的设置）。
-                        controller.selectWidth(level);
-                        onPick(level);
-                      },
-                    ),
-                ],
+              _BrushWidthSlider(
+                brush: brush,
+                darkPaper: darkPaper,
+                onChanged: (int value) {
+                  // 橡皮大小复用 brushWidth（每支笔分别记忆自己的设置）。
+                  controller.selectWidth(value);
+                  onPick(value);
+                },
               ),
               const SizedBox(height: ShqSpace.xs),
               Text(
@@ -298,22 +303,36 @@ class InkToolStrip extends ConsumerWidget implements PreferredSizeWidget {
                 onTap: () => controller.selectColor(i),
               ),
             _Divider(color: scheme.outlineVariant),
-            for (int level = 0; level < InkStroke.widthLevels; level++)
-              _WidthButton(
-                level: level,
-                selected: brush.widthLevel == level,
-                onTap: () => controller.selectWidth(level),
+            // 粗细/橡皮大小：一条紧凑滑条（多级可调），右边带当前值的参考圈。
+            SizedBox(
+              width: 168,
+              child: _BrushWidthSlider(
+                brush: brush,
+                darkPaper: darkPaper,
+                compact: true,
+                onChanged: controller.selectWidth,
               ),
+            ),
           ] else ...<Widget>[
-            // 橡皮：一排"大小"而不是颜色/粗细。
-            for (int level = 0; level < Eraser.sizeLevels; level++)
-              _EraserSizeButton(
-                level: level,
-                selected: brush.widthLevel == level,
-                onTap: () => controller.selectWidth(level),
+            // 橡皮：同一位置改成"大小"滑条。
+            SizedBox(
+              width: 168,
+              child: _BrushWidthSlider(
+                brush: brush,
+                darkPaper: darkPaper,
+                compact: true,
+                onChanged: controller.selectWidth,
               ),
+            ),
           ],
           const Spacer(),
+          // 反向切换：从顶栏变回右下角浮钮（同一个 provider，双向可达）。
+          IconButton(
+            tooltip: '改为浮窗',
+            onPressed: () =>
+                ref.read(inkToolbarPinnedProvider.notifier).set(false),
+            icon: const Icon(Icons.picture_in_picture_alt_outlined, size: 20),
+          ),
         ],
       ),
     );
@@ -321,6 +340,123 @@ class InkToolStrip extends ConsumerWidget implements PreferredSizeWidget {
 }
 
 // ── 小组件 ───────────────────────────────────────────────────────────
+
+/// 粗细 / 橡皮大小：一条 0..100 的滑条 + 右侧"实际大小"参考圈。
+///
+/// 为什么是连续滑条而不是三个点：用户 2026-10-23 明确要"多级可调"。
+/// 参考圈直接画**真实尺寸**（钢笔按中性压力的线宽，橡皮按半径），
+/// 这样在面板里就能看出"这一档写出来有多粗"，不用落笔试。
+class _BrushWidthSlider extends StatelessWidget {
+  const _BrushWidthSlider({
+    required this.brush,
+    required this.darkPaper,
+    required this.onChanged,
+    this.compact = false,
+  });
+
+  final InkBrush brush;
+  final bool darkPaper;
+  final ValueChanged<int> onChanged;
+  final bool compact;
+
+  /// 参考圈直径（dp）：按真实宽度换算，但压在 4..22dp 之间保证看得见。
+  double get _dot {
+    final double pt = brush.isEraser
+        ? Eraser.radiusOfWidth(brush.brushWidth) * 2
+        : InkWidth.baseOf(brush.strokeStyle, brush.brushWidth);
+    // 1pt ≈ 1.9dp 的观感系数：面板很小，按物理尺寸画会细到看不见。
+    return (pt * 1.9).clamp(4.0, compact ? 18.0 : 26.0);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final Color color = brush.isEraser
+        ? scheme.onSurfaceVariant
+        : previewColorOf(
+            style: brush.strokeStyle,
+            colorIndex: brush.colorIndex,
+            darkPaper: darkPaper,
+          );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        SizedBox(
+          width: compact ? 116 : 150,
+          child: SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+            ),
+            child: Slider(
+              value: brush.brushWidth.toDouble(),
+              min: 0,
+              max: 100,
+              onChanged: (double v) => onChanged(v.round()),
+            ),
+          ),
+        ),
+        const SizedBox(width: ShqSpace.xs),
+        // 参考圈：真实大小的可视化
+        SizedBox(
+          width: (compact ? 18 : 26) + 4,
+          height: (compact ? 18 : 26) + 4,
+          child: Center(
+            child: Container(
+              width: _dot,
+              height: _dot,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.22),
+                shape: BoxShape.circle,
+                border: Border.all(color: color, width: 1.4),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// 面板里的小动作按钮（"固定到顶栏"这类形态切换）。
+class _ModeSwitchButton extends StatelessWidget {
+  const _ModeSwitchButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ColorScheme scheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(ShqRadius.pill),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, size: 14, color: scheme.primary),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: scheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.text);
@@ -466,111 +602,7 @@ class _ColorDot extends StatelessWidget {
   }
 }
 
-/// 粗细：用"三个越来越大的圆点"表示，比数字直观。
-class _WidthButton extends StatelessWidget {
-  const _WidthButton({
-    required this.level,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final int level;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    // 等比而不是等差：4 / 7 / 11dp，肉眼才对得上"细中粗"。
-    final double dot = 4 + level * 3.5;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '粗细${level + 1}',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          width: 32,
-          height: 32,
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: selected ? scheme.secondaryContainer : Colors.transparent,
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Container(
-              width: dot,
-              height: dot,
-              decoration: BoxDecoration(
-                color: selected
-                    ? scheme.onSecondaryContainer
-                    : scheme.onSurfaceVariant,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// 橡皮大小：三个"空心圆"表示擦除范围，选中那档填色。
 ///
 /// 为什么不用大小实心点（像粗细那样）：橡皮是"范围"而不是"笔宽"，
-/// 空心圆更像"擦掉一块区域"，也和粗细按钮在视觉上区分开。
-class _EraserSizeButton extends StatelessWidget {
-  const _EraserSizeButton({
-    required this.level,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final int level;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    // 与真实半径成比例（6/12/22pt），但压在 8–18dp 的可见范围内。
-    final double size = 8 + level * 5;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '橡皮大小${level + 1}',
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Container(
-          width: 36,
-          height: 36,
-          margin: const EdgeInsets.symmetric(horizontal: 2),
-          decoration: BoxDecoration(
-            color: selected ? scheme.secondaryContainer : Colors.transparent,
-            shape: BoxShape.circle,
-          ),
-          child: Center(
-            child: Container(
-              width: size,
-              height: size,
-              decoration: BoxDecoration(
-                color: selected
-                    ? scheme.onSecondaryContainer.withValues(alpha: 0.25)
-                    : Colors.transparent,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: selected
-                      ? scheme.onSecondaryContainer
-                      : scheme.onSurfaceVariant,
-                  width: 1.5,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

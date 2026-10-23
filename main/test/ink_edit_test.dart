@@ -102,7 +102,7 @@ void main() {
         points: original.points.sublist(1),
         style: original.style,
         colorIndex: original.colorIndex,
-        widthLevel: original.widthLevel,
+        brushWidth: original.brushWidth,
       ),
     ];
     ctrl.applyErasePatches(<ErasePatch>[

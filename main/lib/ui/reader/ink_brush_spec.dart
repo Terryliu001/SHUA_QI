@@ -19,7 +19,7 @@ class InkBrushSpec {
   const InkBrushSpec({
     required this.style,
     required this.colorIndex,
-    required this.widthLevel,
+    required this.brushWidth,
     required this.color,
     required this.blendMode,
   });
@@ -41,13 +41,16 @@ class InkBrushSpec {
   factory InkBrushSpec.of({
     required InkStrokeStyle style,
     required int colorIndex,
-    required int widthLevel,
+    required int brushWidth,
     required bool darkPaper,
   }) {
     return InkBrushSpec(
       style: style,
       colorIndex: InkPalette.clampIndex(style, colorIndex),
-      widthLevel: widthLevel.clamp(0, InkStroke.widthLevels - 1),
+      brushWidth: brushWidth.clamp(
+        InkStroke.brushWidthMin,
+        InkStroke.brushWidthMax,
+      ),
       color: Color(
         InkPalette.argb(
           style: style,
@@ -61,7 +64,7 @@ class InkBrushSpec {
 
   final InkStrokeStyle style;
   final int colorIndex;
-  final int widthLevel;
+  final int brushWidth;
   final Color color;
   final BlendMode blendMode;
 
@@ -81,7 +84,7 @@ class InkBrushSpec {
     if (byStyle != 0) {
       return byStyle;
     }
-    final int byWidth = a.widthLevel.compareTo(b.widthLevel);
+    final int byWidth = a.brushWidth.compareTo(b.brushWidth);
     if (byWidth != 0) {
       return byWidth;
     }
@@ -93,15 +96,15 @@ class InkBrushSpec {
       other is InkBrushSpec &&
       other.style == style &&
       other.colorIndex == colorIndex &&
-      other.widthLevel == widthLevel &&
+      other.brushWidth == brushWidth &&
       other.color == color &&
       other.blendMode == blendMode;
 
   @override
   int get hashCode =>
-      Object.hash(style, colorIndex, widthLevel, color, blendMode);
+      Object.hash(style, colorIndex, brushWidth, color, blendMode);
 
   @override
   String toString() =>
-      'InkBrushSpec(${style.name}#$colorIndex×$widthLevel $blendMode)';
+      'InkBrushSpec(${style.name}#$colorIndex×$brushWidth $blendMode)';
 }
