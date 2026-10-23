@@ -227,6 +227,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _qualityTimer?.cancel();
     _ticker.dispose();
     _cam.dispose();
+    // 退出时**必须把缓存的暂停淘汰恢复**：缓存比这个视图活得久
+    // （切模式 / 回书架再开一卷都可能复用同一份缓存），
+    // 不然一次"运动中退出"会让缓存永久不再淘汰，越滚越吃内存，
+    // 最终一页都渲染不出来。
+    widget.cache.deferEviction = false;
+    widget.cache.trim();
     super.dispose();
   }
 
@@ -246,6 +252,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       _qualityScale = _defaultScale;
       _offset = Offset.zero;
       _cam.value = const Camera(Offset.zero, _defaultScale);
+      _ticker.stop();
+      _bouncing = false;
+      _gestureActive = false;
+      _gestureFrozen = false;
+      _pendingPage = null;
+      // 换卷时旧卷的缓存在新卷不适用：立刻恢复淘汰并收敛一次。
+      widget.cache.deferEviction = false;
+      widget.cache.trim();
     }
   }
 
@@ -404,9 +418,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
 
   void _recomputeBitmapWidth() {
     final double bucket = _bucketOf(_qualityScale);
-    _bitmapWidthPx = (_baseWidth * _dpr * bucket)
-        .round()
-        .clamp(1, _maxBitmapWidthPx);
+    _bitmapWidthPx = (_baseWidth * _dpr * bucket).round().clamp(
+      1,
+      _maxBitmapWidthPx,
+    );
   }
 
   static double _bucketOf(double scale) {
@@ -615,6 +630,9 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       // 被笔优先冻掉的手势：不甩动（手指在动而页面没动，甩出去会突然窜一段）。
       _gestureActive = false;
       _flushPendingPage();
+      // 这个分支原来直接 return，漏掉了"恢复淘汰" —— 一次被冻结的手势
+      // 就会让缓存一直停在 deferEviction，长时间使用后内存只增不减。
+      _endMotionSoon();
       return;
     }
     widget.onZoomChanged?.call(_scale);
@@ -694,7 +712,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _velocity = _velocity * math.pow(_flingFriction, dt).toDouble();
     final Offset clamped = _clampOffset(next, _scale);
     final bool hitEdge =
-        (clamped.dx - next.dx).abs() > 0.5 || (clamped.dy - next.dy).abs() > 0.5;
+        (clamped.dx - next.dx).abs() > 0.5 ||
+        (clamped.dy - next.dy).abs() > 0.5;
     if (hitEdge) {
       // **不硬停**（2026-10-23）：撞到边界时把速度交给回弹弹簧，
       // 让它先越出一点点再弹回来 —— 原来这里直接 ticker.stop()，手感是"撞墙"。
@@ -737,7 +756,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   (int, int) _visibleRangeNow() {
     final double visibleTop = -_offset.dy / _scale;
     final double visibleBottom = visibleTop + _viewport.height / _scale;
-    return ScrollMath.visibleRange(_tops, _heights, visibleTop, visibleBottom) ??
+    return ScrollMath.visibleRange(
+          _tops,
+          _heights,
+          visibleTop,
+          visibleBottom,
+        ) ??
         (0, -1);
   }
 
@@ -849,7 +873,10 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     }
     setState(() {
       _current = index;
-      _offset = _clampOffset(Offset(_offset.dx, -_tops[index] * _scale), _scale);
+      _offset = _clampOffset(
+        Offset(_offset.dx, -_tops[index] * _scale),
+        _scale,
+      );
     });
     _publishCamera();
     _trackVisible();
@@ -880,10 +907,19 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         _maybePrefetch();
 
         // 重排后补一次页码上报（上面说的 _pendingReport）。
-        // 除这一次外，build 不做任何副作用。
+        // **必须放到帧后**：_updateCurrentPage 会回调父级 onPageChanged，
+        // 父级 ReaderPage 随即 setState —— 在 build 过程中动祖先会直接抛
+        // "setState() or markNeedsBuild() called during build"，
+        // 表现就是转屏 / 窗口尺寸变化后整页空白。
         if (_pendingReport) {
           _pendingReport = false;
-          _updateCurrentPage();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) {
+              return;
+            }
+            _updateCurrentPage();
+            _trackVisible();
+          });
         }
 
         final List<Widget> pageWidgets = <Widget>[];

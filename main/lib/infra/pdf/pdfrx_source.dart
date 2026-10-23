@@ -12,7 +12,7 @@ import 'package:shuaqi/infra/pdf/pdf_source.dart';
 ///    出本类前必须翻成"原点左上、y 向下"的页面坐标 pt。
 /// 2. **没有字号**：`PdfPageTextFragment` 只有 `bounds`，[TextRun.fontSize] 只能用
 ///    片段高度近似。单行片段近似成立，多行片段会偏大。
-class PdfrxSource implements PdfSource {
+class PdfrxSource implements PdfSource, PageBitmapSource {
   PdfrxSource._(this._doc);
 
   static Future<PdfrxSource> openFile(String path) async {
@@ -84,6 +84,7 @@ class PdfrxSource implements PdfSource {
   ///
   /// 这是 T0.4 的直接结论：渲染 3ms、PNG 编码 120ms。屏显要的是能被 GPU 直接贴图的
   /// `ui.Image`，不是一段 PNG 字节。契约里的 [renderPage] 留给导出与 OCR 裁图。
+  @override
   Future<ui.Image?> renderUiImage(int index, {required int widthPx}) async {
     final PdfPage page = _doc.pages[index];
     final double scale = widthPx / page.width;

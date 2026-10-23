@@ -83,6 +83,15 @@ class _PageLayerState extends State<PageLayer> {
   ui.Image? _image;
   int _request = 0;
 
+  /// 这张图彻底拿不到（渲染失败 / 返回 null）。**不能永远转圈**：
+  /// 用户看到的应该是"这一页没显示出来，点一下重试"，而不是一个转不完的菊花。
+  bool _failed = false;
+
+  /// 自动重试次数：只自动重试一次（瞬时失败很常见，比如一次内存抖动），
+  /// 再失败就交给用户点按，避免在 OOM 时反复点火。
+  int _attempt = 0;
+  Timer? _retryTimer;
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -96,35 +105,74 @@ class _PageLayerState extends State<PageLayer> {
         oldWidget.width != widget.width ||
         oldWidget.renderScale != widget.renderScale ||
         oldWidget.qualityWidth != widget.qualityWidth) {
+      _retryTimer?.cancel();
+      _attempt = 0;
+      _failed = false;
       unawaited(_load());
     }
   }
 
   Future<void> _load() async {
+    _retryTimer?.cancel();
     final double dpr = MediaQuery.devicePixelRatioOf(context);
     final int widthPx =
         widget.qualityWidth ??
         (widget.width * dpr * widget.renderScale).round();
     final int request = ++_request;
-    final ui.Image? image = await widget.cache.obtain(
-      widget.page.index,
-      widthPx,
-    );
+    if (_failed && mounted) {
+      setState(() => _failed = false); // 回到转圈态，表示"在重试"
+    }
+    ui.Image? image;
+    Object? error;
+    try {
+      image = await widget.cache.obtain(widget.page.index, widthPx);
+    } on Object catch (e) {
+      error = e;
+    }
     if (!mounted || request != _request) {
       // 过期结果：自己拿到的那份 clone 要还回去，否则泄漏
       image?.dispose();
       return;
     }
+    if (image == null) {
+      _onLoadFailed(request, error, widthPx);
+      return;
+    }
+    _attempt = 0;
     final ui.Image? previous = _image;
     setState(() {
       _image = image;
+      _failed = false;
     });
     previous?.dispose();
+  }
+
+  /// 取图失败：先自动重试一次，仍失败就显示可点按的重试态。
+  void _onLoadFailed(int request, Object? error, int widthPx) {
+    if (!mounted || request != _request) {
+      return;
+    }
+    if (_attempt < 1) {
+      _attempt++;
+      _retryTimer = Timer(const Duration(milliseconds: 450), () {
+        if (mounted && request == _request) {
+          unawaited(_load());
+        }
+      });
+      return;
+    }
+    setState(() => _failed = true);
+    // 只记录，不吞掉信息：真机上排查"某页空白"时需要这一行。
+    debugPrint(
+      'PageLayer 取图失败 page=${widget.page.index} '
+      'width=$widthPx error=${error ?? 'null image'}',
+    );
   }
 
   @override
   void dispose() {
     _request++; // 让在途请求的结果失效
+    _retryTimer?.cancel();
     _image?.dispose();
     super.dispose();
   }
@@ -173,16 +221,21 @@ class _PageLayerState extends State<PageLayer> {
             style: widget.style,
             intensity: widget.intensity,
             child: image == null
-                ? Center(
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  )
+                ? (_failed
+                      ? _PageLoadFailed(
+                          onRetry: () => unawaited(_load()),
+                          roomy: widget.width >= 220,
+                        )
+                      : Center(
+                          child: SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: theme.colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ))
                 : RawImage(
                     image: image,
                     fit: BoxFit.fill,
@@ -229,6 +282,63 @@ class _PageLayerState extends State<PageLayer> {
                 brushWidth: widget.inkbrushWidth,
                 onPenDown: widget.onPenDown,
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 一页取图失败时的占位：**明确告知 + 可重试**，而不是永远转圈。
+///
+/// 为什么要有：真机上渲染失败可能来自瞬时内存压力，"刷新了但没显示"
+/// 如果只留一个菊花，用户只能干等；一个可点按的刷新至少给了一条恢复路径。
+class _PageLoadFailed extends StatelessWidget {
+  const _PageLoadFailed({required this.onRetry, required this.roomy});
+
+  final VoidCallback onRetry;
+
+  /// 宽页（正文）显示完整文案；缩略图那种小格子只放一个刷新钮。
+  final bool roomy;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    if (!roomy) {
+      return Center(
+        child: IconButton(
+          onPressed: onRetry,
+          tooltip: '这一页没显示出来，点按重试',
+          icon: Icon(Icons.refresh, size: 22, color: scheme.onSurfaceVariant),
+        ),
+      );
+    }
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(
+            Icons.broken_image_outlined,
+            size: 28,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: ShqSpace.xs),
+          Text(
+            '这一页没显示出来',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: ShqSpace.xxs),
+          TextButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh, size: 16),
+            label: const Text('重试'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 36),
+              padding: const EdgeInsets.symmetric(horizontal: ShqSpace.md),
             ),
           ),
         ],
