@@ -30,8 +30,16 @@ lib/
 │  ├─ theme/theme_mode_codec.dart     主题模式 ↔ setting 字符串（纯函数）
 │  ├─ bookshelf/bookshelf_page.dart   书架主页：导入/搜索/长按菜单/下拉刷新/损坏态
 │  ├─ bookshelf/workbook_menu_sheet.dart  长按菜单 + 重命名/删除对话框
-│  ├─ records/records_page.dart       记录 tab（占位，T7.1）
-│  ├─ mistakes/mistakes_page.dart     错题本 tab（占位，T7.2）
+│  ├─ bookshelf/export_sheet.dart     导出 PDF 选项浮层（4 预设 + 3 开关）+ 进度弹窗
+│  ├─ bookshelf/workbook_export.dart  导出编排（渲染页 + 笔迹/答题卡合成 + 落盘）
+│  ├─ records/records_page.dart       记录 tab（阶段 9）：个人空间 + 热力图 + 词云 + 看板
+│  ├─ records/profile_header.dart     页首个人空间（封面/头像/昵称格言/⋯ 菜单）
+│  ├─ records/records_heatmap.dart    26 周热力图（自绘 + 坐标命中）
+│  ├─ records/records_word_cloud.dart 科目/题型词云（螺旋布局，无随机）
+│  ├─ records/records_stats_board.dart 近 7/30 天看板 + 判定分布 + 时间线入口
+│  ├─ records/timeline_page.dart      作答时间线（按试卷的判定色带卡 / 按题目逐题卡）
+│  ├─ records/records_streak_card.dart 连续打卡卡（火苗三档 + 分档文案 + 本周七点）
+│  ├─ favorites/favorites_page.dart   收藏夹 tab（T8.1 最小列表；卡片墙在 T8.2）
 │  ├─ settings/settings_page.dart     设置：主题/阅读默认（真实）+ AI/存储（置灰说明）
 │  ├─ reader/reader_page.dart         阅读器（T1.5 落地）
 │  ├─ reader/page_image_cache.dart    页位图缓存（独立 clone 交付契约，见 030）
@@ -41,7 +49,7 @@ lib/
 │  ├─ reader/thumb_drawer.dart        缩略图抽屉（当前页描边 + 页码）
 │  ├─ widgets/empty_state.dart        共享空态组件（动作图标可传参）
 │  ├─ widgets/soft_icon.dart          软底图标公共件
-│  ├─ widgets/feature_preview_page.dart 诚实的路线图预览页（记录/错题）
+│  ├─ widgets/feature_preview_page.dart 诚实的路线图预览页（记录页已实现，暂留作未开放入口）
 │  ├─ widgets/paper_effect.dart       纸感/夜读合成（只作用背景层）
 │  └─ widgets/math/math_view.dart     公式渲染契约（T6.7 落地）
 ├─ state/
@@ -67,12 +75,12 @@ lib/
    ├─ pdf/paper_renderer.dart         PaperRenderer 契约
    ├─ ocr/ocr_engine.dart             OcrEngine 契约 + OcrOutput / OcrLine
    ├─ formula/formula_engine.dart     FormulaEngine 契约 + FormulaResult
-   └─ ai/llm_client.dart              LlmClient 契约 + 请求/响应类型
+   ├─ ai/llm_client.dart              LlmClient 契约 + 请求/响应类型
+   └─ export/pdf_writer.dart          极简 PDF 写入器（RGB 页 → FlateDecode + Predictor 15）
 ```
 
-尚未建立的层目录（`app/` 下的 session / ocr / region / grade / analysis / export，
-`domain/` 下的 geometry / assignment / grading / formula / markup / latex，
-`infra/` 下的 db / vault / export，`ui/` 下的 panel）
+尚未建立的层目录（`app/` 下的 analysis；`domain/` 下的 geometry / formula / latex；
+`infra/` 下的 export）
 **在对应任务块开工时创建**，不要提前建空壳——空目录不会提醒你"这里还没实现"。
 
 ---

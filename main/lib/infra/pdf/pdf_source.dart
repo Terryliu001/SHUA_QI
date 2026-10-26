@@ -21,6 +21,26 @@ abstract interface class PdfSource {
   /// 抽取文本层。扫描件没有文本层时返回空列表，**不抛异常**——
   /// "这份 PDF 没有文本层" 是 L2 补位的正常入口（§6.1）。
   Future<List<TextRun>> extractText(int index);
+
+  /// 渲染成**灰度缩略图**（L2 版面切块用）。
+  ///
+  /// 扫描件没有文本层，切题只能看像素；用低分辨率灰度而不是 PNG：
+  /// 只做"有没有墨"的投影，700px 宽足够（实测渲染 3–6ms/页），
+  /// 也避免了 PNG 编码那 120ms。
+  Future<GrayPage?> renderGray(int index, {required int widthPx});
+}
+
+/// 一页的灰度位图。`luma` 长度 = width × height，0（黑）..255（白）。
+class GrayPage {
+  const GrayPage({
+    required this.luma,
+    required this.width,
+    required this.height,
+  });
+
+  final Uint8List luma;
+  final int width;
+  final int height;
 }
 
 /// 屏显位图数据源（`ui.Image`），只给阅读器的位图缓存用。

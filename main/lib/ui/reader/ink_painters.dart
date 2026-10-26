@@ -92,10 +92,16 @@ class CommittedInkPainter extends CustomPainter {
     required this.cache,
     required this.doc,
     required this.scale,
+    required this.darkPaper,
   });
 
   final CommittedInkCache cache;
   final InkDoc doc;
+
+  /// 当前纸的明暗。**必须参与 shouldRepaint**：换纸时 [cache] 是同一个对象，
+  /// 只在 sync 里重建了 ribbon；如果这里不比较 darkPaper，画布会认为
+  /// "doc/scale 都没变"而拒绝重绘，旧墨迹会保持深色（夜读纸上几乎看不见）。
+  final bool darkPaper;
 
   /// 内容坐标（pt）→ 本地逻辑像素的倍率：`displayWidth / pageWidthPt`。
   final double scale;
@@ -113,7 +119,9 @@ class CommittedInkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CommittedInkPainter oldDelegate) {
-    return oldDelegate.doc != doc || oldDelegate.scale != scale;
+    return oldDelegate.doc != doc ||
+        oldDelegate.scale != scale ||
+        oldDelegate.darkPaper != darkPaper;
   }
 }
 

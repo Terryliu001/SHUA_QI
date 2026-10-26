@@ -401,22 +401,6 @@ abstract final class ShqTheme {
         valueIndicatorColor: scheme.inverseSurface,
         showValueIndicator: ShowValueIndicator.never,
       ),
-      tooltipTheme: TooltipThemeData(
-        waitDuration: const Duration(milliseconds: 500),
-        decoration: BoxDecoration(
-          color: scheme.inverseSurface,
-          borderRadius: BorderRadius.circular(ShqRadius.sm),
-        ),
-        textStyle: TextStyle(
-          color: scheme.onInverseSurface,
-          fontSize: ShqType.caption,
-          height: 1.3,
-        ),
-        padding: const EdgeInsets.symmetric(
-          horizontal: ShqSpace.md,
-          vertical: ShqSpace.sm,
-        ),
-      ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: scheme.primary,
         linearTrackColor: scheme.surfaceContainerHighest,
@@ -436,16 +420,51 @@ abstract final class ShqTheme {
         selectionColor: scheme.primary.withValues(alpha: 0.24),
         selectionHandleColor: scheme.primary,
       ),
+      // 提示条 / 工具提示：**暗色下不能用 `inverseSurface`**。
+      //
+      // 2026-10-24 实测根因：M3 的 `inverseSurface` 在**暗色**主题里是**浅色**
+      // （它按定义就是"surface 的反色"，暗色 surface 的反面是浅色），
+      // 所以直接用它做底色 → 暗色界面里弹出一条**白底**小横条，
+      // 在暖黑纸面上格外刺眼（用户 2026-10-24 报"提示条都是白的"）。
+      //
+      // 改法：暗色走**表面阶梯**（`surfaceContainerHighest` = #2B3941 深灰）
+      // + `onSurface`（#E3E9EE 浅字）；浅色保持 `inverseSurface`（深底浅字）。
+      // 两套主题都是"深底浅字"，心智模型统一。
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: scheme.inverseSurface,
+        backgroundColor: dark
+            ? scheme.surfaceContainerHighest
+            : scheme.inverseSurface,
         contentTextStyle: TextStyle(
-          color: scheme.onInverseSurface,
+          color: dark ? scheme.onSurface : scheme.onInverseSurface,
           fontSize: ShqType.bodySmall,
           height: 1.4,
         ),
+        // 暗色下"深灰底 + 深灰界面"边界弱，补一道发丝线让浮层显形
+        // （浅色下 inverseSurface 与页面差异够大，不需要）。
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(ShqRadius.md),
+          side: dark
+              ? BorderSide(color: scheme.outlineVariant)
+              : BorderSide.none,
+        ),
+      ),
+      // 工具提示同源问题：暗色下 inverseSurface 同样是浅色，一并改掉。
+      tooltipTheme: TooltipThemeData(
+        waitDuration: const Duration(milliseconds: 500),
+        decoration: BoxDecoration(
+          color: dark ? scheme.surfaceContainerHighest : scheme.inverseSurface,
+          borderRadius: BorderRadius.circular(ShqRadius.sm),
+          border: dark ? Border.all(color: scheme.outlineVariant) : null,
+        ),
+        textStyle: TextStyle(
+          color: dark ? scheme.onSurface : scheme.onInverseSurface,
+          fontSize: ShqType.caption,
+          height: 1.3,
+        ),
+        padding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.md,
+          vertical: ShqSpace.sm,
         ),
       ),
       // Switch 的统一尺寸：默认轨道偏小，平板手指点起来不够明确。

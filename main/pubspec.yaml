@@ -41,6 +41,12 @@ dependencies:
   # 所以跑宿主机测试要用 `bash tool/run_tests.sh`（它会临时摘掉本依赖再跑）。
   # 首次构建/换机后要重跑 tool/patch_pdfium_mirror.py（pdfium 从 github 下载，本机不通）。
   pdfrx: 2.9.0
+  # 本地手写 OCR（T4.1）。ML Kit 数字墨水：笔画直接识别，模型按语言远程下载；
+  # 无 GMS/模型下载失败时引擎 warmUp 返回 false，上层降级（原图仍留存）。
+  google_mlkit_digital_ink_recognition: 0.16.1
+  # 公式排版（T6.7）：AI 回复与识别文本里的 LaTeX 用 KaTeX 子集离线渲染。
+  # 纯 Dart + Flutter，白名单内；钉到已解析版本。
+  flutter_math_fork: 0.7.4
 
 dev_dependencies:
   flutter_test:

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/state/shell_providers.dart';
 import 'package:shuaqi/ui/bookshelf/bookshelf_page.dart';
-import 'package:shuaqi/ui/mistakes/mistakes_page.dart';
+import 'package:shuaqi/ui/favorites/favorites_page.dart';
 import 'package:shuaqi/ui/records/records_page.dart';
 import 'package:shuaqi/ui/settings/settings_page.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -19,36 +21,32 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 ///
 /// 阅读器**不走 tab**：它是全屏 push 路由（`AppRoutes.reader`），
 /// 从书架卡片进入、返回时回到原 tab——刷题是主流程，不该被 tab 框架包住。
-class AppShell extends StatefulWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
 
   @override
-  State<AppShell> createState() => _AppShellState();
+  ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
-  int _index = 0;
-
+class _AppShellState extends ConsumerState<AppShell> {
   /// 页面只构造一次（IndexedStack 保活）。回调用 late final 绑到当前 State，
   /// 保证"去书架"类跳转永远打到最新的 setState。
   late final List<Widget> _pages = <Widget>[
     const BookshelfPage(),
-    RecordsPage(onGoBookshelf: () => _select(0)),
-    MistakesPage(onGoBookshelf: () => _select(0)),
+    RecordsPage(onGoBookshelf: () => _select(kBookshelfTab)),
+    FavoritesPage(onGoBookshelf: () => _select(kBookshelfTab)),
     const SettingsPage(),
   ];
 
   void _select(int index) {
-    if (index == _index) {
-      return;
-    }
-    setState(() => _index = index);
+    ref.read(shellTabProvider.notifier).select(index);
   }
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final bool wide = MediaQuery.sizeOf(context).width >= 600;
+    final int index = ref.watch(shellTabProvider);
 
     final List<_ShellDestination> destinations = <_ShellDestination>[
       const _ShellDestination(
@@ -62,9 +60,9 @@ class _AppShellState extends State<AppShell> {
         label: '记录',
       ),
       const _ShellDestination(
-        icon: Icons.grade_outlined,
-        selectedIcon: Icons.grade,
-        label: '错题本',
+        icon: Icons.bookmarks_outlined,
+        selectedIcon: Icons.bookmarks,
+        label: '收藏夹',
       ),
       const _ShellDestination(
         icon: Icons.settings_outlined,
@@ -78,7 +76,7 @@ class _AppShellState extends State<AppShell> {
         body: Row(
           children: <Widget>[
             NavigationRail(
-              selectedIndex: _index,
+              selectedIndex: index,
               onDestinationSelected: _select,
               labelType: NavigationRailLabelType.all,
               // 顶部是产品徽标：一个"刷"字方块。比纯文字名更像产品，
@@ -120,7 +118,7 @@ class _AppShellState extends State<AppShell> {
               color: theme.colorScheme.outlineVariant,
             ),
             Expanded(
-              child: IndexedStack(index: _index, children: _pages),
+              child: IndexedStack(index: index, children: _pages),
             ),
           ],
         ),
@@ -128,7 +126,7 @@ class _AppShellState extends State<AppShell> {
     }
 
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
+      body: IndexedStack(index: index, children: _pages),
       // 底部导航加一根发丝线：它不是"浮"在内容上的，而是与内容的分界。
       bottomNavigationBar: DecoratedBox(
         decoration: BoxDecoration(
@@ -137,7 +135,7 @@ class _AppShellState extends State<AppShell> {
           ),
         ),
         child: NavigationBar(
-          selectedIndex: _index,
+          selectedIndex: index,
           onDestinationSelected: _select,
           destinations: <Widget>[
             for (final _ShellDestination d in destinations)

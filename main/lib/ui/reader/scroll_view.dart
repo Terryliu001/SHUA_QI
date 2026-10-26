@@ -12,6 +12,7 @@ import 'package:shuaqi/domain/reader/scroll_math.dart';
 import 'package:shuaqi/ui/reader/camera_viewport.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
+import 'package:shuaqi/ui/reader/region_overlay.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 连续滚动模式（第五版）：**铺满视口的画布 + 单一变换矩阵 + 矩阵与布局分层**。
@@ -61,6 +62,10 @@ class ScrollReaderView extends StatefulWidget {
     this.inkColorIndex = 0,
     this.inkbrushWidth = 1,
     this.onPenMissed,
+    this.regionMarksByPage = const <int, List<RegionMark>>{},
+    this.regionConfig,
+    this.regionEditing = false,
+    this.fingerWrites = true,
   });
 
   /// 默认缩放：0.86 = 页宽占屏幕 86%，两侧留白（和翻页模式的观感一致）。
@@ -98,6 +103,19 @@ class ScrollReaderView extends StatefulWidget {
   /// 存在的意义：用户"按下去没反应"是最难排查的体验。与其让人猜，
   /// 不如明确告诉他这一笔没被纸接住。
   final VoidCallback? onPenMissed;
+
+  /// 每页的题目区域框（T3.5 检查视角）。空 Map = 不画。
+  final Map<int, List<RegionMark>> regionMarksByPage;
+
+  /// 叠加层的编辑配置（null = 只读）。
+  final RegionOverlayConfig? regionConfig;
+
+  /// 正在调框（「题目区域」面板打开）：墨迹层只画不收笔，手写笔用来调框。
+  final bool regionEditing;
+
+  /// 书写模式：单指/笔写字，双指平移缩放。
+  /// false = 手形浏览模式：手/笔都只平移缩放。
+  final bool fingerWrites;
 
   @override
   State<ScrollReaderView> createState() => ScrollReaderViewState();
@@ -207,8 +225,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   Offset _startOffset = Offset.zero;
   Offset _startFocal = Offset.zero;
 
-  /// 本次手势锁定的轴：true = 竖轴，false = 横轴，null = 还没判定。
-  bool? _lockVertical;
+  /// 本次手势的拖动轴：可滚方向决定（见 [DragAxisLock]）。
+  DragAxis _lockAxis = DragAxis.vertical;
 
   Offset _velocity = Offset.zero;
   Duration _lastTick = Duration.zero;
@@ -239,6 +257,12 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   @override
   void didUpdateWidget(covariant ScrollReaderView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.fingerWrites != widget.fingerWrites) {
+      // 切模式时把"笔/手正在写"的状态清掉，避免上一模式的冻结延续到下一模式。
+      _penDown = false;
+      _lastPenSeenMs = -1000000;
+      _gestureFrozen = false;
+    }
     // 换了一卷（或页数变了）：布局、锚点、相机全部作废
     if (!identical(oldWidget.pages, widget.pages)) {
       _tops = const <double>[];
@@ -524,11 +548,21 @@ class ScrollReaderViewState extends State<ScrollReaderView>
   bool _gestureFrozen = false;
 
   void _observePointer(PointerEvent event) {
-    if (event.kind == PointerDeviceKind.stylus ||
-        event.kind == PointerDeviceKind.invertedStylus) {
-      _lastPenSeenMs = DateTime.now().millisecondsSinceEpoch;
-      if (event is PointerDownEvent) {
-        _penDown = true;
+    // 笔在手势模式下也写字，所以"笔优先"的观察在任何非调框模式都要工作：
+    // 笔压屏时冻结单指平移（手掌搭屏），否则写字时页面会跟着跑。
+    final bool stylus =
+        event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+    // 书写模式下，手指也算"正在写"：单指平移必须冻结，否则写字时页面跟着跑。
+    final bool touchWriting =
+        event.kind == PointerDeviceKind.touch && widget.fingerWrites;
+    if (!stylus && !touchWriting) {
+      return;
+    }
+    _lastPenSeenMs = DateTime.now().millisecondsSinceEpoch;
+    if (event is PointerDownEvent) {
+      _penDown = true;
+      if (stylus) {
         _viewportPenDowns++;
         if (_viewportPenDowns > _inkPenDowns) {
           // 这一笔没被任何一页接住。派发顺序是"深的先"（InkLayer 在观察哨
@@ -536,9 +570,9 @@ class ScrollReaderViewState extends State<ScrollReaderView>
           _viewportPenDowns = _inkPenDowns;
           widget.onPenMissed?.call();
         }
-      } else if (event is PointerUpEvent || event is PointerCancelEvent) {
-        _penDown = false;
       }
+    } else if (event is PointerUpEvent || event is PointerCancelEvent) {
+      _penDown = false;
     }
   }
 
@@ -560,15 +594,24 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     _startScale = _scale;
     _startOffset = _offset;
     _startFocal = details.localFocalPoint;
-    // 轴向锁定：内容不够宽（横向推不动）时**直接锁竖轴**，连判定都不等；
-    // 否则等累计位移越过 6dp 再判（偏 35° 以内都算竖滑）。见 DragAxisLock。
+    // 拖动轴：只有**一个方向真的能滚**时才锁那个轴（避免斜向分量被夹掉）；
+    // 横竖都有余量 = 二维平移，自由斜滑。见 DragAxisLock。
     final bool canPanX = _baseWidth * _scale > _viewport.width + 0.5;
-    _lockVertical = canPanX ? null : true;
+    final bool canPanY = _contentH * _scale > _viewport.height + 0.5;
+    _lockAxis = DragAxisLock.decide(
+      allowHorizontal: canPanX,
+      allowVertical: canPanY,
+    );
     // 焦点换算到内容坐标后，整段手势都让这个内容点钉在原来的屏幕位置
     _focalContent = (details.localFocalPoint - _offset) / _scale;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // 双指一旦出现，这次手势就是浏览手势：解除"单指书写"的冻结，
+    // 让缩放/平移正常走完（墨迹层已在第二指落下时取消当前笔画）。
+    if (details.pointerCount >= 2) {
+      _gestureFrozen = false;
+    }
     // 双指捏合永远放行（规格 T2.1「双指缩放除外」）。
     // 单指：手势一开始就被判成 palm，或者此刻笔正压在屏幕上 → 冻结。
     if (details.pointerCount < 2 && (_gestureFrozen || _penActiveNow())) {
@@ -582,26 +625,22 @@ class ScrollReaderViewState extends State<ScrollReaderView>
 
     Offset offset = details.localFocalPoint - _focalContent * scale;
 
-    // ── 轴向锁定（单指平移）────────────────────────────────────────
+    // ── 拖动轴（单指平移）──────────────────────────────────────────
     //
-    // 为什么必须做：手指画不出直线，想竖滑时轨迹总有横向分量。
-    // 旧实现把两个分量都收下，横向那部分一到边界就被吃掉/被橡皮筋弹回，
-    // 主观感受就是"滑了很长距离，页面只走了一点、还有点钝"。
-    // 现在一次手势只认一个轴：竖滑时 dx 完全丢弃 → 竖向 1:1 跟手、不再左右晃。
+    // 2026-10-23 第二轮：横竖都可滚时自由二维平移（支持斜滑）；
+    // 只有单轴可滚时仍投影到那一轴，避免另一个轴被夹紧/橡皮筋吃掉导致"滑了没走"。
     if (details.pointerCount < 2) {
-      final Offset moved = details.localFocalPoint - _startFocal;
-      _lockVertical ??= DragAxisLock.decide(
-        moved.dx,
-        moved.dy,
-        allowHorizontal: _baseWidth * _scale > _viewport.width + 0.5,
-      );
-      final bool? lock = _lockVertical;
-      if (lock != null) {
-        // 用"起点 + 投影后的位移"重算，避免焦点式累加把丢弃的分量又带回来。
+      if (_lockAxis == DragAxis.free) {
+        // 自由二维平移用**增量**而不是"起点 + 总位移"：
+        // 从 down 到越过 18dp 阈值的那一段不会一次性补进来，斜拖更连续；
+        // 单轴模式仍用绝对投影，避免累计误差把锁定轴带偏。
+        offset = _offset + details.focalPointDelta;
+      } else {
+        final Offset moved = details.localFocalPoint - _startFocal;
         final (double dx, double dy) = DragAxisLock.project(
           moved.dx,
           moved.dy,
-          vertical: lock,
+          axis: _lockAxis,
         );
         offset = _startOffset + Offset(dx, dy);
       }
@@ -614,8 +653,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
       offset,
       scale,
       allowOverscroll: true,
-      overscrollVertical: _lockVertical ?? true,
-      overscrollHorizontal: _lockVertical == false,
+      overscrollVertical: _lockAxis != DragAxis.horizontal,
+      overscrollHorizontal: _lockAxis != DragAxis.vertical,
     );
     // 丝滑关键：**不 setState**。矩阵层自己重建 Transform（一个 renderObject），
     // 页面列表纹丝不动。
@@ -638,13 +677,14 @@ class ScrollReaderViewState extends State<ScrollReaderView>
     widget.onZoomChanged?.call(_scale);
     _scheduleQualityUpgrade();
 
-    // 甩动速度也**投影到锁定轴**：斜着甩一把时，不能让它横着飘。
+    // 甩动速度也按当前拖动轴投影：单轴时斜甩不会漏到另一轴；
+    // 自由模式两轴都保留（斜着甩就斜着滑）。
     Offset velocity = details.velocity.pixelsPerSecond;
-    if (details.pointerCount < 2 && _lockVertical != null) {
+    if (details.pointerCount < 2) {
       final (double vx, double vy) = DragAxisLock.project(
         velocity.dx,
         velocity.dy,
-        vertical: _lockVertical!,
+        axis: _lockAxis,
       );
       velocity = Offset(vx, vy);
     }
@@ -950,11 +990,19 @@ class ScrollReaderViewState extends State<ScrollReaderView>
                 intensity: widget.intensity,
                 sessionId: widget.sessionId,
                 inkEnabled: widget.sessionId != null,
+                // 笔永远是笔（手势模式下也写字）；手指是否落墨由 inkTouch 决定。
+                // 只有调框模式整层禁写——那时笔用来调框。
+                inkInteractive: !widget.regionEditing,
+                inkTouch: !widget.regionEditing && widget.fingerWrites,
                 inkTool: widget.inkTool,
                 inkColorIndex: widget.inkColorIndex,
                 inkbrushWidth: widget.inkbrushWidth,
                 // 落笔即停：笔一碰屏，惯性滚动立刻停（否则字画在"还在飘的纸"上）。
                 onPenDown: _onPenDownOnPaper,
+                regionMarks:
+                    widget.regionMarksByPage[widget.pages[i].index] ??
+                    const <RegionMark>[],
+                regionConfig: widget.regionConfig,
               ),
             ),
           );
@@ -973,9 +1021,8 @@ class ScrollReaderViewState extends State<ScrollReaderView>
         // 压成视口大小（滚动模式下"看得到、写不上"的真凶，见 camera_viewport.dart）。
         return GestureDetector(
           behavior: HitTestBehavior.opaque,
-          // 只收 touch：stylus 的拖动是"写字"（墨迹层自己消费），
-          // 绝不能同时被这个缩放手势当成平移——否则边写边跑画面。
-          // 规格 §6.9.1「笔写、指滚」在滚动模式的落地方式。
+          // 缩放手势只收 touch：stylus 永远优先给墨迹层（写字）或题目框（调框）。
+          // 手势模式下"笔还能写字"正是靠这条——只放行 touch，笔不会被当成平移。
           supportedDevices: const <PointerDeviceKind>{PointerDeviceKind.touch},
           // **跟手的关键**（2026-10-23）：默认的 `DragStartBehavior.start`
           // 会让"手指按下 → 越过 18dp 触摸阈值"这一段位移**被丢掉**

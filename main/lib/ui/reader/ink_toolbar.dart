@@ -65,60 +65,69 @@ class _InkFabState extends ConsumerState<InkFab> {
             darkPaper: widget.darkPaper,
           );
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: <Widget>[
-        // 展开面板：AnimatedSize 让"长出来"有 150ms 的呼吸，不做弹跳。
-        AnimatedSize(
-          duration: ShqMotion.fast,
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.bottomRight,
-          child: _open
-              ? Padding(
-                  padding: const EdgeInsets.only(bottom: ShqSpace.sm),
-                  child: _ToolPanel(
-                    darkPaper: widget.darkPaper,
-                    onPick: (_) => setState(() {}),
-                  ),
-                )
-              : const SizedBox.shrink(),
-        ),
-        Material(
-          color: scheme.surfaceContainerHigh.withValues(alpha: 0.97),
-          elevation: 4,
-          shape: CircleBorder(
-            side: BorderSide(
-              color: _open ? scheme.primary : scheme.outlineVariant,
-              width: _open ? 2 : 1,
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: _toggle,
-            child: SizedBox(
-              width: 56,
-              height: 56,
-              child: Stack(
-                alignment: Alignment.center,
-                children: <Widget>[
-                  Icon(
-                    _open ? Icons.close : iconOfTool(brush.tool),
-                    size: 24,
-                    color: scheme.onSurface,
-                  ),
-                  if (dot != null && !_open)
-                    Positioned(
-                      right: 9,
-                      bottom: 9,
-                      child: _ColorDot(color: dot, size: 12),
+    return TapRegion(
+      // 点面板外面（书写区 / 顶栏按钮 / 其他功能键）自动收起。
+      // 用 TapRegion 而不是全屏遮罩：笔写/滚动仍由原手势处理，只是"先收起"。
+      onTapOutside: (_) {
+        if (_open) {
+          setState(() => _open = false);
+        }
+      },
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: <Widget>[
+          // 展开面板：AnimatedSize 让"长出来"有 150ms 的呼吸，不做弹跳。
+          AnimatedSize(
+            duration: ShqMotion.fast,
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.bottomRight,
+            child: _open
+                ? Padding(
+                    padding: const EdgeInsets.only(bottom: ShqSpace.sm),
+                    child: _ToolPanel(
+                      darkPaper: widget.darkPaper,
+                      onPick: (_) => setState(() {}),
                     ),
-                ],
+                  )
+                : const SizedBox.shrink(),
+          ),
+          Material(
+            color: scheme.surfaceContainerHigh.withValues(alpha: 0.97),
+            elevation: 4,
+            shape: CircleBorder(
+              side: BorderSide(
+                color: _open ? scheme.primary : scheme.outlineVariant,
+                width: _open ? 2 : 1,
+              ),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: _toggle,
+              child: SizedBox(
+                width: 56,
+                height: 56,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: <Widget>[
+                    Icon(
+                      _open ? Icons.close : iconOfTool(brush.tool),
+                      size: 24,
+                      color: scheme.onSurface,
+                    ),
+                    if (dot != null && !_open)
+                      Positioned(
+                        right: 9,
+                        bottom: 9,
+                        child: _ColorDot(color: dot, size: 12),
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -165,9 +174,8 @@ class _ToolPanel extends ConsumerWidget {
                 _ModeSwitchButton(
                   icon: Icons.vertical_align_top,
                   label: '固定到顶栏',
-                  onTap: () => ref
-                      .read(inkToolbarPinnedProvider.notifier)
-                      .set(true),
+                  onTap: () =>
+                      ref.read(inkToolbarPinnedProvider.notifier).set(true),
                 ),
               ],
             ),
@@ -606,7 +614,6 @@ class _ColorDot extends StatelessWidget {
     );
   }
 }
-
 
 /// 橡皮大小：三个"空心圆"表示擦除范围，选中那档填色。
 ///

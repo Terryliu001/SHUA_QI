@@ -105,6 +105,75 @@ abstract final class ShqPalette {
   static const Color danger = Color(0xFFB3261E);
 }
 
+/// 题目区域框的三色与形态（T3.5 检查视角）。
+///
+/// 与 [ShqPalette] 的 correct/unclear/wrong **分开**：那三个是"答案对错"的语义色，
+/// 这里的绿/黄/红只表示"这个框可信不可信"。两者混用会让用户以为红色框 = 做错了。
+///
+/// 取值刻意低饱和：框是叠加在题面上的，颜色一艳就抢题干。描边透明度 0.75、
+/// 填充只有 0.055，保证"能看见框、看得清字"。
+///
+/// ## 2026-10-23 形态重做（用户拍板："粗圆角，像搜题软件"）
+/// 旧形态是 1.2px 细线 + 5px 小圆角 + 未选中时四角四个小圆点。真机上看着"碎"：
+/// 细线在扫描卷的灰底上不明显，四个圆点又像调试标记。现在的口径：
+/// - **整框**是主角：2px 上下、14px 大圆角、半透明填充，一眼看出"这一块是一道题"；
+/// - 四角圆点只在**选中后**以手柄形态出现（它是操作元件，不是装饰）；
+/// - 角标题号做成胶囊，贴在框内左上角。
+abstract final class ShqRegion {
+  /// 切题框的**中性色**（2026-10-23 用户口径）。
+  ///
+  /// 绿/黄/红三色留给**后续判题**（对 / 存疑 / 错），切题置信度不能占用它们：
+  /// 框体一旦按置信度染色，用户会把"这个框不确定"误读成"这道题做错了"。
+  static const Color auto = Color(0xFF5B6B7C);
+
+  /// 夜读纸上的提亮版中性色。
+  static const Color autoOnDark = Color(0xFFA9B8C7);
+
+  /// 判题预留色（当前**不用于画框**，后续判题结果再用）。
+  static const Color green = Color(0xFF2F7A55);
+  static const Color yellow = Color(0xFFA9761A);
+  static const Color red = Color(0xFFB03A2E);
+
+  /// 夜读纸上的提亮版：原色在 `#191612` 上几乎看不出。
+  static const Color greenOnDark = Color(0xFF7FC79E);
+  static const Color yellowOnDark = Color(0xFFE0B45C);
+  static const Color redOnDark = Color(0xFFF09A8D);
+
+  /// 用户手画的框：用主色，和"自动切出来的中性框"区分开。
+  static const Color manual = Color(0xFF1F6FEB);
+  static const Color manualOnDark = Color(0xFF8CB8F4);
+
+  /// 作答框：紫色虚线。与切题框（中性）、手画框（蓝）、判题三色都不冲突。
+  static const Color answer = Color(0xFF7A5AF8);
+  static const Color answerOnDark = Color(0xFFC3B4FF);
+
+  /// 框的圆角（逻辑 px，不随缩放变化）。太小就回到"线框"，太大就像卡片。
+  static const double radius = 14;
+
+  /// 框线粗细（逻辑 px）：只读态 / 选中态。
+  ///
+  /// **选中态只靠"更粗更实"表达**（2026-10-23 用户拍板，不再画手柄）：
+  /// 3.0 与 1.8 的差在卷面上足够明显，且完全不遮挡题面。
+  static const double strokeWidth = 1.8;
+  static const double strokeSelected = 3;
+
+  /// 框内填充透明度：只读 / 选中。
+  static const double fillAlpha = 0.055;
+  static const double fillAlphaSelected = 0.12;
+
+  /// 题号胶囊：高度、圆角、字号。
+  static const double labelHeight = 18;
+  static const double labelRadius = 9;
+  static const double labelSize = 10.5;
+
+  /// 缩放把手的**命中区**（没有视觉形态：选中态只画更粗的边）。
+  ///
+  /// 四角 30dp、四边中点 26dp——手指点得中，但界面上看不见它们，
+  /// 所以不会因为"四个方块"抢题面（2026-10-23 第二轮定稿）。
+  static const double handleHit = 30;
+  static const double edgeHandleHit = 26;
+}
+
 /// 纸张预设（§6.9.3）。`original` 为零处理，是可信基线。
 ///
 /// 颜色值唯一来源在 `domain/reader/paper_tint.dart` 的 [PaperRgb]，这里只包成 Color，
@@ -202,6 +271,48 @@ abstract final class ShqDark {
   static const Color onErrorContainer = Color(0xFFF9DEDC);
 }
 
+/// 记录页热力图的绿色阶（阶段 9）。
+///
+/// 为什么允许出现一套"绿色系"：热力图是**唯一**用绿色表达"密度"的地方
+/// （用户明确要求 GitHub 式绿），而绿色在本产品里已经另有语义（判对）。
+/// 两者不会同屏出现——热力图只出现在记录页页首，判定点在卡片/看板上用
+/// [ShqPalette.correct]。取色刻意低饱和，和纸感暖灰不打架。
+///
+/// 档位口径（`domain/records/records_stats.dart` 的 `heatLevel`）：
+/// 0 = 无记录，1 = 1–2 题，2 = 3–5，3 = 6–9，4 = 10–15，5 = 16+。
+abstract final class ShqHeat {
+  /// 浅色主题的 5 档（1→5）。第 1 档要浅到"存在但不抢"，第 5 档要深到一眼看出。
+  static const List<Color> light = <Color>[
+    Color(0xFFD8EBDD),
+    Color(0xFFA9D8B9),
+    Color(0xFF6FBF8E),
+    Color(0xFF3E9668),
+    Color(0xFF1F6B47),
+  ];
+
+  /// 暗色主题的 5 档：低档靠"暗绿"存在，高档靠"亮绿"突出（暗底上提亮才看得见）。
+  static const List<Color> dark = <Color>[
+    Color(0xFF1E3A2B),
+    Color(0xFF2D5B41),
+    Color(0xFF3F8158),
+    Color(0xFF58A976),
+    Color(0xFF83D2A2),
+  ];
+
+  /// 取某一档的颜色。[level] 0 返回 null（由调用方画"空底色"，跟主题走）。
+  static Color? level(int level, {required bool dark}) {
+    if (level <= 0) {
+      return null;
+    }
+    final List<Color> ramp = dark ? ShqHeat.dark : ShqHeat.light;
+    return ramp[(level - 1).clamp(0, ramp.length - 1)];
+  }
+
+  /// 热力图格子边长与间隙（逻辑 dp）：26 列在 2/5 栏里刚好放下。
+  static const double cell = 10.5;
+  static const double gap = 3;
+}
+
 /// 版心。平板竖屏阅读区最大宽度，超过就留白居中，避免长行难读。
 abstract final class ShqLayout {
   static const double maxReadingWidth = 880;
@@ -216,4 +327,24 @@ abstract final class ShqLayout {
 
   /// 设置分组卡片的横向内边距（与分组标题共用同一条竖线）。
   static const double gutter = 16;
+}
+
+/// 全屏遮罩层（图片预览 / 长按浮窗）的固定配色。
+///
+/// 这一层**永远压在图片上**，背景是深色遮罩而不是主题表面：所以前景恒为浅色，
+/// 不跟 `Theme.of(context).brightness` 走（浅色主题下用 onSurface 会变成深字，
+/// 压在黑遮罩上直接看不见）。这是本项目里少数"与主题解耦"的颜色。
+abstract final class ShqScrim {
+  /// 图片预览的遮罩：**纯黑**。看过 86% 与 97% 两档，下层页面的白色标题
+  /// 总能透出轮廓（视觉上"两页叠在一起"），看图场景不需要这层信息，索性全黑。
+  static const Color backdrop = Color(0xFF000000);
+
+  /// 长按浮窗的轻遮罩（只压一层，视觉上不抢图片）。
+  static const Color backdropSoft = Color(0x33000000);
+
+  /// 遮罩上的主要文字/图标。
+  static const Color foreground = Color(0xFFF3EFE7);
+
+  /// 遮罩上的次要说明。
+  static const Color foregroundMuted = Color(0x8FF3EFE7);
 }

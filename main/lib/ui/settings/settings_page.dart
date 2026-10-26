@@ -4,21 +4,33 @@ import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/app_info.dart';
+import 'package:shuaqi/domain/ai/llm_config.dart';
+import 'package:shuaqi/domain/ai/usage.dart';
 import 'package:shuaqi/domain/reader/paper_tint.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/ai_providers.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/theme_mode_provider.dart';
+import 'package:shuaqi/state/ui_prefs_provider.dart';
 import 'package:shuaqi/ui/reader/debug_hud.dart';
+import 'package:shuaqi/ui/settings/about_pages.dart';
+import 'package:shuaqi/ui/settings/ai_settings_sheet.dart';
+import 'package:shuaqi/ui/settings/ai_usage_sheet.dart';
+import 'package:shuaqi/ui/settings/backup_actions.dart';
+import 'package:shuaqi/ui/settings/cache_sheet.dart';
+import 'package:shuaqi/ui/settings/feedback_page.dart';
+import 'package:shuaqi/ui/settings/settings_subpage.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/pressable.dart';
 import 'package:shuaqi/ui/widgets/soft_icon.dart';
 
-/// 设置页（T6.1 的先行子集：外观 + 阅读默认先做真功能，AI/存储留置灰说明）。
+/// 设置页（T6.1：外观 + 阅读默认 + AI 配置；2026-10-26 起再管数据与开发者选项）。
 ///
 /// 设计纪律（项目一贯原则）：**能点但没反应是假功能**。所以这一页只有两种块：
-/// 1. 真实生效的（主题模式、阅读默认）——写了立刻落 `setting` 表；
-/// 2. 明确置灰 + 一句话说明的（AI 配置、存储统计）——告诉用户它在路线图的哪儿。
+/// 1. 真实生效的（主题模式、阅读默认、AI 配置、缓存清理、备份、文字模式）——
+///    写了立刻生效；
+/// 2. 明确说明的（反馈通道未接通）——告诉用户它到哪一步了。
 ///
 /// ## 2026-10-23 设计收尾（v3）
 /// - **每行有图标 + 说明**：设置不是一串开关，而是一份"这个应用怎么工作"的清单；
@@ -27,6 +39,10 @@ import 'package:shuaqi/ui/widgets/soft_icon.dart';
 /// - 主题 / 默认模式改成**整宽分段选择器**（图标 + 文字），比 Material 默认的
 ///   紧凑 segmented button 更适合平板；
 /// - 纸感增加**真实预览块**：选什么纸、什么强度，直接看到"一页纸"。
+///
+/// ## 2026-10-26：关于下面挂三个子页
+/// 「版本说明 / 用户须知 / 用户反馈」是**应用内二级页**（`SettingsSubPage`），
+/// 不是路由：push 全屏路由会把左边的导航栏一起盖住，用户会以为退出了应用。
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
@@ -39,16 +55,101 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// 不自动同步回库——写由交互触发，见 [_writeDefaults]。
   ReaderPrefs? _draft;
 
+  /// 当前打开的二级页（null = 只看设置本体）。
+  SettingsSubPage? _sub;
+
+  /// 版本号连击次数（开发者选项解锁用）。
+  int _versionTaps = 0;
+
   Future<void> _writeDefaults(ReaderPrefs next) async {
     setState(() => _draft = next);
     await ref.read(readerPrefsStoreProvider).saveDefaults(next);
     ref.invalidate(readerDefaultsProvider);
   }
 
+  Future<void> _openAiSettings(LlmConfig config) async {
+    final bool saved = await showAiSettingsSheet(context, initial: config);
+    if (saved) {
+      ref.invalidate(aiConfigProvider);
+    }
+  }
+
+  void _openSub(SettingsSubPage page) {
+    setState(() => _sub = page);
+  }
+
+  /// 版本号连击：8 次解锁开发者选项。
+  ///
+  /// 中途给一次提示（从第 5 次起），免得用户以为点坏了；
+  /// 解锁后弹一句明确的话，别让人自己猜"多出来的这一行是什么"。
+  Future<void> _onVersionTap() async {
+    final int taps = _versionTaps + 1;
+    if (taps >= kDevUnlockTaps) {
+      setState(() => _versionTaps = 0);
+      await ref.read(devOptionsUnlockedProvider.notifier).unlock();
+      if (!mounted) {
+        return;
+      }
+      _showTip('开发者选项已打开');
+      return;
+    }
+    setState(() => _versionTaps = taps);
+    if (taps == kDevUnlockHintFrom) {
+      _showTip('再点 ${kDevUnlockTaps - taps} 次打开开发者选项');
+    }
+  }
+
+  void _showTip(String message) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(milliseconds: 1600),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final SettingsSubPage? sub = _sub;
+    if (sub != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (bool didPop, Object? result) {
+          if (!didPop) {
+            setState(() => _sub = null);
+          }
+        },
+        child: Scaffold(
+          appBar: AppBar(title: Text(sub.title)),
+          body: SafeArea(child: _subBody(sub)),
+        ),
+      );
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('设置')),
+      body: SafeArea(child: _settingsBody()),
+    );
+  }
+
+  Widget _subBody(SettingsSubPage sub) {
+    switch (sub) {
+      case SettingsSubPage.releaseNotes:
+        return ReleaseNotesPage(onClose: () => setState(() => _sub = null));
+      case SettingsSubPage.userNotice:
+        return UserNoticePage(onClose: () => setState(() => _sub = null));
+      case SettingsSubPage.feedback:
+        return FeedbackPage(onClose: () => setState(() => _sub = null));
+    }
+  }
+
+  Widget _settingsBody() {
     final ThemeData theme = Theme.of(context);
     final ThemeMode themeMode = ref.watch(themeModeProvider);
+    final bool iconLabels = ref.watch(iconLabelsProvider);
+    final bool devUnlocked = ref.watch(devOptionsUnlockedProvider);
     final ReaderPrefs defaults =
         _draft ??
         ref
@@ -58,153 +159,260 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               orElse: () => null,
             ) ??
         ReaderPrefs.defaults;
+    final LlmConfig aiConfig = ref
+        .watch(aiConfigProvider)
+        .maybeWhen<LlmConfig>(
+          data: (LlmConfig value) => value,
+          orElse: () => LlmConfig.empty,
+        );
+    final AiUsageSnapshot aiUsage = ref
+        .watch(aiUsageProvider)
+        .maybeWhen<AiUsageSnapshot>(
+          data: (AiUsageSnapshot value) => value,
+          orElse: () => AiUsageSnapshot.empty,
+        );
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: ShqLayout.maxFormWidth),
-          child: ListView(
-            padding: const EdgeInsets.only(bottom: ShqSpace.xxl),
-            children: <Widget>[
-              _Section(
-                title: '外观',
-                children: <Widget>[
-                  _Block(
-                    icon: Icons.brightness_6_outlined,
-                    title: '主题',
-                    subtitle: '深色只影响界面骨架，不影响卷面配色',
-                    child: _ChoiceGroup<ThemeMode>(
-                      options: const <_Choice<ThemeMode>>[
-                        _Choice<ThemeMode>(
-                          value: ThemeMode.system,
-                          label: '跟随系统',
-                          icon: Icons.brightness_auto_outlined,
-                        ),
-                        _Choice<ThemeMode>(
-                          value: ThemeMode.light,
-                          label: '浅色',
-                          icon: Icons.light_mode_outlined,
-                        ),
-                        _Choice<ThemeMode>(
-                          value: ThemeMode.dark,
-                          label: '深色',
-                          icon: Icons.dark_mode_outlined,
-                        ),
-                      ],
-                      selected: themeMode,
-                      onSelected: (ThemeMode mode) => unawaited(
-                        ref.read(themeModeProvider.notifier).set(mode),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: ShqLayout.maxFormWidth),
+        child: ListView(
+          padding: const EdgeInsets.only(bottom: ShqSpace.xxl),
+          children: <Widget>[
+            _Section(
+              title: '外观',
+              children: <Widget>[
+                _Block(
+                  icon: Icons.brightness_6_outlined,
+                  title: '主题',
+                  subtitle: '深色只影响界面骨架，不影响卷面配色',
+                  child: _ChoiceGroup<ThemeMode>(
+                    options: const <_Choice<ThemeMode>>[
+                      _Choice<ThemeMode>(
+                        value: ThemeMode.system,
+                        label: '跟随系统',
+                        icon: Icons.brightness_auto_outlined,
                       ),
-                    ),
-                  ),
-                  const _Hairline(),
-                  const _Note(
-                    '卷面配色在「阅读默认」里单独选：原图 = 白底黑字，夜读 = 黑底白字。'
-                    '两者互不影响，深色界面下也能看白底黑字的卷子。',
-                  ),
-                ],
-              ),
-              _Section(
-                title: '阅读默认',
-                children: <Widget>[
-                  _Block(
-                    icon: Icons.menu_book_outlined,
-                    title: '默认模式',
-                    subtitle: '新打开的卷子用哪种翻页方式',
-                    child: _ChoiceGroup<ViewMode>(
-                      options: const <_Choice<ViewMode>>[
-                        _Choice<ViewMode>(
-                          value: ViewMode.paged,
-                          label: '分页',
-                          icon: Icons.auto_stories_outlined,
-                        ),
-                        _Choice<ViewMode>(
-                          value: ViewMode.scroll,
-                          label: '连续滚动',
-                          icon: Icons.view_day_outlined,
-                        ),
-                      ],
-                      selected: defaults.mode,
-                      onSelected: (ViewMode mode) =>
-                          _writeDefaults(defaults.copyWith(mode: mode)),
-                    ),
-                  ),
-                  const _Hairline(),
-                  _Block(
-                    icon: Icons.palette_outlined,
-                    title: '默认纸感',
-                    subtitle: '纸色、夜读与强度只作用在卷面背景',
-                    child: _PaperPicker(
-                      style: defaults.style,
-                      intensity: defaults.intensity,
-                      onStyle: (PaperStyle style) =>
-                          _writeDefaults(defaults.copyWith(style: style)),
-                    ),
-                  ),
-                  const _Hairline(),
-                  _Block(
-                    icon: Icons.tonality_outlined,
-                    title: '默认强度',
-                    subtitle: '数值越高纸色越浓；原图与夜读不参与',
-                    child: _IntensitySlider(
-                      style: defaults.style,
-                      value: defaults.intensity,
-                      onChanged: (int intensity) => _writeDefaults(
-                        defaults.copyWith(intensity: intensity),
+                      _Choice<ThemeMode>(
+                        value: ThemeMode.light,
+                        label: '浅色',
+                        icon: Icons.light_mode_outlined,
                       ),
-                    ),
-                  ),
-                  const _Note('只影响之后新打开的卷；正在读的卷以阅读器内「显示」浮层为准。'),
-                ],
-              ),
-              _Section(
-                title: '书写',
-                children: <Widget>[
-                  _SettingsRow(
-                    icon: Icons.draw_outlined,
-                    title: '工具条固定在顶栏',
-                    subtitle: '关闭 = 右下角圆形浮钮（点开才是面板，阅读区最干净）',
-                    trailing: Switch(
-                      value: ref.watch(inkToolbarPinnedProvider),
-                      onChanged: (bool pinned) => unawaited(
-                        ref.read(inkToolbarPinnedProvider.notifier).set(pinned),
+                      _Choice<ThemeMode>(
+                        value: ThemeMode.dark,
+                        label: '深色',
+                        icon: Icons.dark_mode_outlined,
                       ),
+                    ],
+                    selected: themeMode,
+                    onSelected: (ThemeMode mode) => unawaited(
+                      ref.read(themeModeProvider.notifier).set(mode),
                     ),
                   ),
-                  const _Hairline(),
-                  const _Note('笔的颜色与粗细在阅读器里的工具面板中选；每支笔分别记住。'),
-                ],
-              ),
-              const _Section(
-                title: 'AI 分析',
-                children: <Widget>[
-                  _SettingsRow(
-                    icon: Icons.key_outlined,
-                    title: 'BYOK 配置',
-                    subtitle: '接入任意 OpenAI 兼容端点，密钥只存在本机',
-                    locked: true,
-                    trailingLabel: 'T6.1',
+                ),
+                const _Hairline(),
+                _SettingsRow(
+                  icon: Icons.label_outline,
+                  title: '文字模式',
+                  subtitle: iconLabels
+                      ? '顶栏与工具栏的图标旁会显示功能文字'
+                      : '顶栏与工具栏只显示图标（长按有说明）',
+                  trailing: Switch(
+                    value: iconLabels,
+                    onChanged: (bool value) => unawaited(
+                      ref.read(iconLabelsProvider.notifier).set(value),
+                    ),
                   ),
-                ],
-              ),
-              const _Section(
-                title: '存储与备份',
-                children: <Widget>[
-                  _SettingsRow(
-                    icon: Icons.storage_outlined,
-                    title: '空间统计与归档',
-                    subtitle: '分类占用 + 归档清理 + zip 备份',
-                    locked: true,
-                    trailingLabel: 'T7.5',
+                ),
+                const _Hairline(),
+                const _Note(
+                  '卷面配色在「阅读默认」里单独选：原图 = 白底黑字，夜读 = 黑底白字。'
+                  '两者互不影响，深色界面下也能看白底黑字的卷子。',
+                ),
+              ],
+            ),
+            _Section(
+              title: '阅读默认',
+              children: <Widget>[
+                _Block(
+                  icon: Icons.menu_book_outlined,
+                  title: '默认模式',
+                  subtitle: '新打开的卷子用哪种翻页方式',
+                  child: _ChoiceGroup<ViewMode>(
+                    options: const <_Choice<ViewMode>>[
+                      _Choice<ViewMode>(
+                        value: ViewMode.paged,
+                        label: '分页',
+                        icon: Icons.auto_stories_outlined,
+                      ),
+                      _Choice<ViewMode>(
+                        value: ViewMode.scroll,
+                        label: '连续滚动',
+                        icon: Icons.view_day_outlined,
+                      ),
+                    ],
+                    selected: defaults.mode,
+                    onSelected: (ViewMode mode) =>
+                        _writeDefaults(defaults.copyWith(mode: mode)),
                   ),
-                ],
-              ),
-              // 只有 debug / profile 构建才会出现（release 里连入口都没有）。
-              if (!kReleaseMode)
-                _Section(
-                  title: '开发',
-                  children: <Widget>[
+                ),
+                const _Hairline(),
+                // 2026-10-24 用户第 6 条：手势模式也进"阅读默认"，
+                // 与默认模式一起决定"新打开一份卷子是什么样"。
+                _Block(
+                  icon: Icons.gesture,
+                  title: '手势模式',
+                  subtitle: '开：手指只平移缩放、笔书写；关：手指也能写',
+                  child: Switch(
+                    value: defaults.handTool,
+                    onChanged: (bool value) =>
+                        _writeDefaults(defaults.copyWith(handTool: value)),
+                  ),
+                ),
+                const _Hairline(),
+                _Block(
+                  icon: Icons.palette_outlined,
+                  title: '默认纸感',
+                  subtitle: '纸色、夜读与强度只作用在卷面背景',
+                  child: _PaperPicker(
+                    style: defaults.style,
+                    intensity: defaults.intensity,
+                    onStyle: (PaperStyle style) =>
+                        _writeDefaults(defaults.copyWith(style: style)),
+                  ),
+                ),
+                const _Hairline(),
+                _Block(
+                  icon: Icons.tonality_outlined,
+                  title: '默认强度',
+                  subtitle: '数值越高纸色越浓；原图与夜读不参与',
+                  child: _IntensitySlider(
+                    style: defaults.style,
+                    value: defaults.intensity,
+                    onChanged: (int intensity) => _writeDefaults(
+                      defaults.copyWith(intensity: intensity),
+                    ),
+                  ),
+                ),
+                const _Note('只影响之后新打开的卷；正在读的卷以阅读器内「显示」浮层为准。'),
+              ],
+            ),
+            _Section(
+              title: '书写',
+              children: <Widget>[
+                _SettingsRow(
+                  icon: Icons.draw_outlined,
+                  title: '工具条固定在顶栏',
+                  subtitle: '关闭 = 右下角圆形浮钮（点开才是面板，阅读区最干净）',
+                  trailing: Switch(
+                    value: ref.watch(inkToolbarPinnedProvider),
+                    onChanged: (bool pinned) => unawaited(
+                      ref.read(inkToolbarPinnedProvider.notifier).set(pinned),
+                    ),
+                  ),
+                ),
+                const _Hairline(),
+                const _Note('笔的颜色与粗细在阅读器里的工具面板中选；每支笔分别记住。'),
+              ],
+            ),
+            _Section(
+              title: 'AI 分析',
+              children: <Widget>[
+                _SettingsRow(
+                  icon: Icons.auto_awesome_outlined,
+                  title: 'AI 配置',
+                  subtitle: aiConfig.validationError() == null
+                      ? '已配置 · ${aiConfig.model} · ${aiConfig.maskedKey}'
+                      : '未配置 · 填端点 / Key / 模型后，问 AI 与判题可用',
+                  onTap: () => unawaited(_openAiSettings(aiConfig)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                const _Hairline(),
+                _SettingsRow(
+                  icon: Icons.data_usage_outlined,
+                  title: 'AI 用量',
+                  subtitle: aiUsage.summary.isEmpty
+                      ? '还没有调用记录'
+                      : '累计 ${aiUsage.summary.calls} 次 · '
+                            '输入 ${_formatTokenCount(aiUsage.summary.tokensIn)} · '
+                            '输出 ${_formatTokenCount(aiUsage.summary.tokensOut)}'
+                            '${aiUsage.summary.estimatedCalls > 0 ? ' · 含估算' : ''}',
+                  onTap: () {
+                    ref.invalidate(aiUsageProvider);
+                    unawaited(showAiUsageSheet(context));
+                  },
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                const _Hairline(),
+                const _Note(
+                  '接入任意 OpenAI 兼容端点。Key 只存在本机，请求直接发往你填的地址；'
+                  'AI 答案与判题都会标「AI · 请自检」，手改结论永远优先。',
+                ),
+              ],
+            ),
+            _Section(
+              title: '数据',
+              children: <Widget>[
+                _SettingsRow(
+                  icon: Icons.cleaning_services_outlined,
+                  title: '缓存统计与清除',
+                  subtitle: '看各类占用，清掉缩略图与作答原图这类可再生的缓存',
+                  onTap: () => unawaited(showCacheSheet(context, ref)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                const _Hairline(),
+                _SettingsRow(
+                  icon: Icons.archive_outlined,
+                  title: '导出备份',
+                  subtitle: '把卷子、笔迹、收藏、记录打成一个 zip，放到「下载/SHUAQI」',
+                  onTap: () => unawaited(exportBackup(context, ref)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                const _Hairline(),
+                _SettingsRow(
+                  icon: Icons.settings_backup_restore,
+                  title: '从备份恢复',
+                  subtitle: '用一份备份覆盖本机数据（替换前会先留底）',
+                  onTap: () => unawaited(restoreBackup(context, ref)),
+                  trailing: Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                const _Hairline(),
+                const _Note(
+                  '数据只在本机。卸载应用会一起删掉，重要资料记得先导出备份。',
+                ),
+              ],
+            ),
+            _Section(
+              title: '关于',
+              children: <Widget>[
+                _AboutEntries(onOpen: _openSub, onVersionTap: _onVersionTap),
+              ],
+            ),
+            // 开发者选项：连点版本号 8 次才出现（2026-10-26 用户第 17 条）。
+            if (devUnlocked)
+              _Section(
+                title: '开发',
+                children: <Widget>[
+                  if (!kReleaseMode)
                     _SettingsRow(
                       icon: Icons.speed_outlined,
                       title: '性能 HUD',
@@ -215,27 +423,39 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             ref.read(debugHudProvider.notifier).toggle(),
                       ),
                     ),
-                  ],
-                ),
-              const _Section(title: '关于', children: <Widget>[_AboutCard()]),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  ShqLayout.gutter,
-                  ShqSpace.lg,
-                  ShqLayout.gutter,
-                  0,
-                ),
-                child: Text(
-                  '刷起 SHUAQI · 以笔为核的刷题工作台\n'
-                  '卷子是你的，笔迹是你的，数据只留在本机。',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline,
-                    height: 1.6,
+                  if (!kReleaseMode) const _Hairline(),
+                  _SettingsRow(
+                    icon: Icons.visibility_off_outlined,
+                    title: '隐藏开发者选项',
+                    subtitle: '把这一组收起来（想再打开就重新连点版本号 8 次）',
+                    onTap: () => unawaited(
+                      ref.read(devOptionsUnlockedProvider.notifier).set(false),
+                    ),
+                    trailing: Icon(
+                      Icons.chevron_right,
+                      size: 18,
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
+                ],
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                ShqLayout.gutter,
+                ShqSpace.lg,
+                ShqLayout.gutter,
+                0,
+              ),
+              child: Text(
+                '刷起 SHUAQI · 以笔为核的刷题工作台\n'
+                '卷子是你的，笔迹是你的，数据只留在本机。',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                  height: 1.6,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -301,15 +521,14 @@ class _Hairline extends StatelessWidget {
   }
 }
 
-/// 带图标的一行设置（开关 / 置灰入口 / 可点动作）。
+/// 带图标的一行设置（开关 / 可点动作）。
 class _SettingsRow extends StatelessWidget {
   const _SettingsRow({
     required this.icon,
     required this.title,
     this.subtitle,
     this.trailing,
-    this.locked = false,
-    this.trailingLabel,
+    this.onTap,
   });
 
   final IconData icon;
@@ -317,18 +536,14 @@ class _SettingsRow extends StatelessWidget {
   final String? subtitle;
   final Widget? trailing;
 
-  /// 置灰 + 锁形角标：功能还没做，别给假入口。
-  final bool locked;
-  final String? trailingLabel;
+  /// 整行可点（AI 配置这类"进下一层"的入口）。
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final Color titleColor = locked ? scheme.outline : scheme.onSurface;
-    final Color iconColor = locked
-        ? scheme.outlineVariant
-        : scheme.onSurfaceVariant;
+    final Color iconColor = scheme.onSurfaceVariant;
 
     final Widget row = Padding(
       padding: const EdgeInsets.symmetric(
@@ -346,7 +561,7 @@ class _SettingsRow extends StatelessWidget {
                 Text(
                   title,
                   style: theme.textTheme.titleSmall?.copyWith(
-                    color: titleColor,
+                    color: scheme.onSurface,
                   ),
                 ),
                 if (subtitle != null) ...<Widget>[
@@ -365,17 +580,19 @@ class _SettingsRow extends StatelessWidget {
             const SizedBox(width: ShqSpace.sm),
             trailing!,
           ],
-          if (locked) ...<Widget>[
-            const SizedBox(width: ShqSpace.sm),
-            _Tag(text: trailingLabel ?? '未开放'),
-            const SizedBox(width: ShqSpace.xs),
-            Icon(Icons.lock_outline, size: 16, color: scheme.outlineVariant),
-          ],
         ],
       ),
     );
 
-    return row;
+    // 只有"进下一层"的行才包 InkWell；纯开关行由 Switch 自己处理点击，
+    // 整行可点反而会误触。
+    return onTap == null
+        ? row
+        : InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(ShqRadius.md),
+            child: row,
+          );
   }
 }
 
@@ -464,30 +681,6 @@ class _Note extends StatelessWidget {
   }
 }
 
-class _Tag extends StatelessWidget {
-  const _Tag({required this.text});
-
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHigh,
-        borderRadius: BorderRadius.circular(ShqRadius.pill),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.labelSmall
-            ?.copyWith(color: scheme.onSurfaceVariant, letterSpacing: 0.2),
-      ),
-    );
-  }
-}
-
 // ── 选择器 ───────────────────────────────────────────────────────────
 
 class _Choice<T> {
@@ -498,7 +691,7 @@ class _Choice<T> {
   final IconData icon;
 }
 
-/// 整宽分段选择器（2–3 项）。比 Material 默认的紧凑分段按钮更适合触屏。
+/// 整宽分段选择器（2–3 项）。比 Material 默认的紧凑 segmented button 更适合触屏。
 class _ChoiceGroup<T> extends StatelessWidget {
   const _ChoiceGroup({
     required this.options,
@@ -516,7 +709,7 @@ class _ChoiceGroup<T> extends StatelessWidget {
     final ThemeData theme = Theme.of(context);
     return Row(
       children: <Widget>[
-        for (int i = 0; i < options.length; i++) ...<Widget>[
+        for (int i = 0; i < options.length; i += 1) ...<Widget>[
           if (i > 0) const SizedBox(width: ShqSpace.sm),
           Expanded(
             child: Pressable(
@@ -760,7 +953,8 @@ class _PaperSwatch extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
     return Pressable(
       onTap: onTap,
       scale: 0.9,
@@ -792,7 +986,7 @@ class _PaperSwatch extends StatelessWidget {
           const SizedBox(height: ShqSpace.xs),
           Text(
             label,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            style: theme.textTheme.labelSmall?.copyWith(
               color: selected ? scheme.primary : scheme.onSurfaceVariant,
               fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
             ),
@@ -862,53 +1056,231 @@ class _IntensitySlider extends StatelessWidget {
 
 // ── 关于 ─────────────────────────────────────────────────────────────
 
-class _AboutCard extends StatelessWidget {
-  const _AboutCard();
+String _formatTokenCount(int value) {
+  if (value < 1000) {
+    return '$value';
+  }
+  if (value < 1000000) {
+    final double k = value / 1000;
+    return '${k.toStringAsFixed(k >= 10 ? 0 : 1)}k';
+  }
+  final double m = value / 1000000;
+  return '${m.toStringAsFixed(m >= 10 ? 0 : 1)}M';
+}
+
+/// 关于卡：**三栏入口**（版本说明 / 用户须知 / 用户反馈）+ 产品信息 + 版本号。
+///
+/// 三栏等分并排（平板上一眼看全），窄屏时自动竖排——分栏在手机上会挤成三根条。
+class _AboutEntries extends StatelessWidget {
+  const _AboutEntries({required this.onOpen, required this.onVersionTap});
+
+  final ValueChanged<SettingsSubPage> onOpen;
+  final VoidCallback onVersionTap;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
+    const List<({SettingsSubPage page, IconData icon, String title, String hint})>
+    entries =
+        <({SettingsSubPage page, IconData icon, String title, String hint})>[
+          (
+            page: SettingsSubPage.releaseNotes,
+            icon: Icons.new_releases_outlined,
+            title: '版本说明',
+            hint: '这一版能做什么',
+          ),
+          (
+            page: SettingsSubPage.userNotice,
+            icon: Icons.menu_book_outlined,
+            title: '用户须知',
+            hint: '权限与数据说明',
+          ),
+          (
+            page: SettingsSubPage.feedback,
+            icon: Icons.chat_bubble_outline,
+            title: '用户反馈',
+            hint: '问题与建议',
+          ),
+        ];
+
     return Padding(
       padding: const EdgeInsets.all(ShqLayout.gutter),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          Container(
-            width: 52,
-            height: 52,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: scheme.primaryContainer,
-              borderRadius: BorderRadius.circular(ShqRadius.md),
-            ),
-            child: Text(
-              '刷',
-              style: theme.textTheme.titleLarge?.copyWith(
-                color: scheme.onPrimaryContainer,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          const SizedBox(width: ShqSpace.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(AppInfo.name, style: theme.textTheme.titleMedium),
-                const SizedBox(height: 2),
-                Text(
-                  AppInfo.tagline,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                width: 52,
+                height: 52,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: scheme.primaryContainer,
+                  borderRadius: BorderRadius.circular(ShqRadius.md),
+                ),
+                child: Text(
+                  '刷',
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    color: scheme.onPrimaryContainer,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: ShqSpace.xs),
-                const _Tag(text: '版本 ${AppInfo.version} · 开发中'),
-              ],
-            ),
+              ),
+              const SizedBox(width: ShqSpace.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(AppInfo.name, style: theme.textTheme.titleMedium),
+                    const SizedBox(height: 2),
+                    Text(
+                      AppInfo.tagline,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: ShqSpace.md),
+          LayoutBuilder(
+            builder: (BuildContext context, BoxConstraints constraints) {
+              final bool wide = constraints.maxWidth >= 420;
+              final List<Widget> tiles = <Widget>[
+                for (final entry in entries)
+                  _AboutTile(
+                    icon: entry.icon,
+                    title: entry.title,
+                    hint: entry.hint,
+                    onTap: () => onOpen(entry.page),
+                  ),
+              ];
+              if (wide) {
+                // IntrinsicHeight：Column 里的 Row 高度是**无界**的，
+                // 直接 `CrossAxisAlignment.stretch` 会让整块渲染失败
+                // （2026-10-26 真机才发现：三个入口整块消失）。
+                // IntrinsicHeight 先把高度定下来，stretch 才有意义。
+                return IntrinsicHeight(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      for (int i = 0; i < tiles.length; i += 1) ...<Widget>[
+                        if (i > 0) const SizedBox(width: ShqSpace.sm),
+                        Expanded(child: tiles[i]),
+                      ],
+                    ],
+                  ),
+                );
+              }
+              return Column(
+                children: <Widget>[
+                  for (int i = 0; i < tiles.length; i += 1) ...<Widget>[
+                    if (i > 0) const SizedBox(height: ShqSpace.sm),
+                    tiles[i],
+                  ],
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: ShqSpace.md),
+          Row(
+            children: <Widget>[
+              Text(
+                '版本 ${AppInfo.version} · 开发中',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: scheme.outline,
+                ),
+              ),
+              const SizedBox(width: ShqSpace.sm),
+              // 版本号可连点：8 次解锁开发者选项（2026-10-26 用户第 17 条）。
+              Pressable(
+                onTap: onVersionTap,
+                scale: 0.95,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: ShqSpace.sm,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: scheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(ShqRadius.pill),
+                    border: Border.all(color: scheme.outlineVariant),
+                  ),
+                  child: Text(
+                    'v${AppInfo.version}',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _AboutTile extends StatelessWidget {
+  const _AboutTile({
+    required this.icon,
+    required this.title,
+    required this.hint,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String hint;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(ShqRadius.md),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.md,
+          vertical: ShqSpace.md,
+        ),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(ShqRadius.md),
+          border: Border.all(color: scheme.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: <Widget>[
+            Icon(icon, size: 20, color: scheme.primary),
+            const SizedBox(height: ShqSpace.sm),
+            Text(
+              title,
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              hint,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

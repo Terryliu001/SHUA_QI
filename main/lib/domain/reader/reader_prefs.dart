@@ -50,6 +50,9 @@ extension PaperStyleTone on PaperStyle {
 /// `setting` 表中的键名（§5.3A）。键名是稳定契约，改名等于丢用户数据。
 abstract final class ReaderSettingKeys {
   static const String defaultMode = 'reader.default_mode';
+
+  /// 手势模式（手指只平移缩放、笔书写）。缺失 = 开（2026-10-24 起的默认）。
+  static const String defaultHand = 'reader.default_hand';
   static const String defaultPaperStyle = 'reader.default_paper_style';
   static const String defaultIntensity = 'reader.default_intensity';
 
@@ -60,9 +63,10 @@ abstract final class ReaderSettingKeys {
 /// 阅读偏好值对象。不可变；所有越界输入在 [fromJson] / [clamp] 里被收敛，不抛异常。
 class ReaderPrefs {
   const ReaderPrefs({
-    this.mode = ViewMode.paged,
+    this.mode = ViewMode.scroll,
     this.style = PaperStyle.original,
     this.intensity = defaultIntensity,
+    this.handTool = true,
   });
 
   /// 从 `setting` 里的 JSON 解析。**任何非法值都回落默认，绝不抛**——
@@ -72,11 +76,17 @@ class ReaderPrefs {
       mode: _modeByName(json['mode']),
       style: _styleByName(json['style']),
       intensity: _toInt(json['intensity']) ?? defaultIntensity,
+      // 缺省 = 开（手势模式）。老数据里没有这个键时跟新默认走。
+      handTool: json['hand'] != false,
     );
     return draft.clamp();
   }
 
-  /// 默认：分页 + 原图 + 强度 55（与 §5.3A 一致）。
+  /// 默认：**滚动 + 原图 + 强度 55 + 手势模式**（2026-10-24 用户第 6 条）。
+  ///
+  /// 为什么改成"滚动 + 手势"：刷题的真实动作是"往下翻卷子、偶尔用笔写"，
+  /// 分页 + 手指书写反而更容易误触（手指一划就落墨）。
+  /// 手指只平移缩放、笔书写，要手指也能写时点一下手形按钮即可。
   static const int defaultIntensity = 55;
 
   static const ReaderPrefs defaults = ReaderPrefs();
@@ -87,11 +97,20 @@ class ReaderPrefs {
   /// 0..100。只影响背景层的不透明度，不影响笔迹。
   final int intensity;
 
-  ReaderPrefs copyWith({ViewMode? mode, PaperStyle? style, int? intensity}) {
+  /// true = 手形浏览模式（单指/笔都平移缩放）；false = 书写模式。
+  final bool handTool;
+
+  ReaderPrefs copyWith({
+    ViewMode? mode,
+    PaperStyle? style,
+    int? intensity,
+    bool? handTool,
+  }) {
     return ReaderPrefs(
       mode: mode ?? this.mode,
       style: style ?? this.style,
       intensity: intensity ?? this.intensity,
+      handTool: handTool ?? this.handTool,
     );
   }
 
@@ -117,6 +136,7 @@ class ReaderPrefs {
     'mode': mode.name,
     'style': style.name,
     'intensity': intensity,
+    'hand': handTool,
   };
 
   @override
@@ -127,15 +147,17 @@ class ReaderPrefs {
     return other is ReaderPrefs &&
         other.mode == mode &&
         other.style == style &&
-        other.intensity == intensity;
+        other.intensity == intensity &&
+        other.handTool == handTool;
   }
 
   @override
-  int get hashCode => Object.hash(mode, style, intensity);
+  int get hashCode => Object.hash(mode, style, intensity, handTool);
 
   @override
   String toString() =>
-      'ReaderPrefs(mode: ${mode.name}, style: ${style.name}, intensity: $intensity)';
+      'ReaderPrefs(mode: ${mode.name}, style: ${style.name}, '
+      'intensity: $intensity, handTool: $handTool)';
 
   static ViewMode _modeByName(Object? raw) {
     for (final ViewMode value in ViewMode.values) {
@@ -143,7 +165,7 @@ class ReaderPrefs {
         return value;
       }
     }
-    return ViewMode.paged;
+    return ViewMode.scroll;
   }
 
   static PaperStyle _styleByName(Object? raw) {

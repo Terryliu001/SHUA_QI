@@ -9,11 +9,17 @@ abstract final class LayoutStatus {
   /// 还没跑过切题。
   static const String none = 'none';
 
+  /// 文本层已抽（L0），但还没切出题目（跑了一半被取消 / 没有文本层）。
+  static const String text = 'text';
+
   /// 自动切题完成（L0–L2）。
   static const String auto = 'auto';
 
   /// 用户手工修正过（有 corrections.json）。
   static const String manual = 'manual';
+
+  /// 原卷文件丢失（启动时孤儿清理标记）。
+  static const String missing = 'missing';
 }
 
 class Workbook {
@@ -29,6 +35,7 @@ class Workbook {
     this.lastSessionId,
     this.layoutStatus = LayoutStatus.none,
     this.folder = '',
+    this.folderId = '',
     this.tags = const <String>[],
   });
 
@@ -45,6 +52,7 @@ class Workbook {
       lastSessionId: row['last_session_id'] as String?,
       layoutStatus: (row['layout_status'] as String?) ?? LayoutStatus.none,
       folder: (row['folder'] as String?) ?? '',
+      folderId: (row['folder_id'] as String?) ?? '',
       tags: WorkbookTags.decode(row['tags'] as String?),
     );
   }
@@ -76,13 +84,25 @@ class Workbook {
   ///
   /// 为什么用"文件夹名字符串"而不是单独一张表：卷子数量是几十级的，
   /// 单层文件夹足够；名字本身就是标识，改名 = 批量 UPDATE 同一个名字，
-  /// 不需要维护 id↔name 的映射，也不会出现"空文件夹"这种要单独保存的状态。
+  /// 不需要维护 id↔name 的映射。
+  ///
+  /// **空文件夹**没有卷子可挂，不能从这一列推导；书架另把手动新建的
+  /// 空文件夹名存到 setting `bookshelf.folders`（JSON 列表）。
   final String folder;
+
+  /// v4 起：指向 `folder` 表的主键；空串 = 未分类。
+  ///
+  /// 与 [folder]（旧的名字字符串）并存：老库靠 `folder` 迁移出 `folder` 行，
+  /// 新逻辑只读 [folderId]，但 `toRow` 仍会写 [folder] 以免清掉旧数据。
+  final String folderId;
 
   /// 标签（多对多，但用逗号串存）。不建关联表的原因同上：量级小、只做筛选。
   final List<String> tags;
 
-  bool get isUnfiled => folder.isEmpty;
+  /// v4 起"有没有归到文件夹"要看 [folderId]：
+  /// 移动只写 `folder_id`（[folder] 是旧列，留着不删但不再维护），
+  /// 只看 [folder] 会让刚移动过的卷仍旧显示成"未分类"。
+  bool get isUnfiled => folder.isEmpty && folderId.isEmpty;
 
   Map<String, Object?> toRow() => <String, Object?>{
     'id': id,
@@ -96,6 +116,7 @@ class Workbook {
     'last_session_id': lastSessionId,
     'layout_status': layoutStatus,
     'folder': folder,
+    'folder_id': folderId,
     'tags': WorkbookTags.encode(tags),
   };
 
@@ -108,6 +129,7 @@ class Workbook {
     String? lastSessionId,
     String? layoutStatus,
     String? folder,
+    String? folderId,
     List<String>? tags,
   }) {
     return Workbook(
@@ -122,6 +144,7 @@ class Workbook {
       lastSessionId: lastSessionId ?? this.lastSessionId,
       layoutStatus: layoutStatus ?? this.layoutStatus,
       folder: folder ?? this.folder,
+      folderId: folderId ?? this.folderId,
       tags: tags ?? this.tags,
     );
   }

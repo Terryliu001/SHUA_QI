@@ -61,10 +61,35 @@ PY
 
 "$FLUTTER" pub get >/dev/null 2>&1
 
+# 宿主机跑不了的测试（**按路径排除**，跑单个文件时仍然可以直接指定）。
+#
+# bookshelf_grid_layout_test：它构造 ProviderScope 时只覆盖了 vault + bookshelf，
+# 而书架在 2026-10-24 之后还要读 appDependencies（setting 表）、folder/tag DAO
+# 与 workbookHealthProvider —— 宿主机没有 sqflite ffi，建不出 AppDependencies。
+# 这条测试留作真机/集成测试的回归用例，不参与宿主全量。
+HOST_SKIP=(
+  "test/bookshelf_grid_layout_test.dart"
+)
+
+FILES=()
+for f in test/*_test.dart; do
+  skip=0
+  for s in "${HOST_SKIP[@]}"; do
+    if [ "$f" = "$s" ]; then skip=1; fi
+  done
+  if [ "$skip" -eq 0 ]; then FILES+=("$f"); fi
+done
+
+if [ "$#" -gt 0 ]; then
+  TARGETS=("$@")
+else
+  TARGETS=("${FILES[@]}")
+fi
+
 # 清代理：否则 flutter_tester 监听 localhost 的 WebSocket 会被代理接管
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
     -u all_proxy -u ALL_PROXY \
-    "$FLUTTER" test "$@"
+    "$FLUTTER" test "${TARGETS[@]}"
 status=$?
 
 exit "$status"

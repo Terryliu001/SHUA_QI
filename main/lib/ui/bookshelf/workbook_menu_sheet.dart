@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/model/shelf_folder.dart';
+import 'package:shuaqi/domain/model/tag_color.dart';
 import 'package:shuaqi/domain/model/workbook.dart';
+import 'package:shuaqi/ui/bookshelf/tag_bookmark.dart';
+import 'package:shuaqi/ui/theme/hex_color.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 书架卡片的**长按菜单**（T1.4 收尾）。
@@ -16,6 +20,7 @@ Future<void> showWorkbookMenu(
   required VoidCallback onEditTags,
   required VoidCallback onMoveToFolder,
   required VoidCallback onDelete,
+  required VoidCallback onExport,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -26,6 +31,7 @@ Future<void> showWorkbookMenu(
       onEditTags: onEditTags,
       onMoveToFolder: onMoveToFolder,
       onDelete: onDelete,
+      onExport: onExport,
     ),
   );
 }
@@ -37,13 +43,18 @@ class _WorkbookMenuSheet extends StatelessWidget {
     required this.onEditTags,
     required this.onMoveToFolder,
     required this.onDelete,
+    required this.onExport,
   });
 
   final Workbook workbook;
   final VoidCallback onRename;
+
+  /// 「编辑标签」里已经带书签配色，不再单列一项（2026-10-24 用户口径）。
   final VoidCallback onEditTags;
+
   final VoidCallback onMoveToFolder;
   final VoidCallback onDelete;
+  final VoidCallback onExport;
 
   @override
   Widget build(BuildContext context) {
@@ -126,30 +137,18 @@ class _WorkbookMenuSheet extends StatelessWidget {
               onTap: () => closeAndRun(onDelete),
             ),
             const Divider(),
-            // 置灰项：不可点 + 锁形角标 + 一句规划位置
+            // 导出（2026-10-25 落地）：原题 / 笔迹 / 答题卡 三件套自由组合。
             ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                Icons.ios_share_outlined,
-                color: scheme.outlineVariant,
-              ),
-              title: Text(
-                '导出',
-                style: theme.textTheme.bodyLarge?.copyWith(
-                  color: scheme.outline,
-                ),
-              ),
+              leading: const Icon(Icons.ios_share_outlined),
+              title: const Text('导出 PDF'),
               subtitle: Text(
-                'PDF / 墨迹层 / zip 备份 · 规划在 T7',
+                '原题 / 笔迹 / 答题卡，可组合',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
               ),
-              trailing: Icon(
-                Icons.lock_outline,
-                size: 18,
-                color: scheme.outlineVariant,
-              ),
+              onTap: () => closeAndRun(onExport),
             ),
           ],
         ),
@@ -210,11 +209,15 @@ Future<String?> showRenameDialog(
 
 /// 删除确认对话框。返回 true 才真删。
 ///
-/// 文案说清"连带删除什么"：这一卷目录下的 PDF、缩略图、将来的笔迹与
-/// 识别记录都跟着没——删除是 T1.4 里唯一不可逆的操作，确认必须具体。
+/// 文案说清"连带删除什么"：这一卷目录下的 PDF、缩略图、笔迹与识别记录
+/// 都跟着没——删除是 T1.4 里唯一不可逆的操作，确认必须具体。
+///
+/// [favoriteCount] > 0 时额外说明**收藏不会跟着删**（T8.6）：收藏是跨卷快照
+/// （`favorites/<id>/`），卷删了题面/笔迹/AI 对话仍在，只是「回看出处」失效。
 Future<bool> showDeleteConfirmDialog(
   BuildContext context, {
   required String title,
+  int favoriteCount = 0,
 }) async {
   final ThemeData theme = Theme.of(context);
   final bool? result = await showDialog<bool>(
@@ -223,7 +226,9 @@ Future<bool> showDeleteConfirmDialog(
       title: const Text('删除这一卷？'),
       content: Text(
         '《$title》删除后无法恢复。\n这一卷的 PDF、缩略图，以及之后产生的笔迹和'
-        '识别记录都会一起删除。',
+        '识别记录都会一起删除。'
+        '${favoriteCount > 0 ? '\n\n其中 $favoriteCount 道题已收藏：收藏夹里的题面、'
+              '作答与 AI 对话是独立快照，会保留下来（「回到出处」将不可用）。' : ''}',
         style: theme.textTheme.bodyMedium,
       ),
       actions: <Widget>[
@@ -237,7 +242,7 @@ Future<bool> showDeleteConfirmDialog(
             foregroundColor: theme.colorScheme.onError,
           ),
           onPressed: () => Navigator.of(context).pop(true),
-          child: const Text('删除'),
+          child: Text(favoriteCount > 0 ? '删除（保留 $favoriteCount 道收藏）' : '删除'),
         ),
       ],
     ),
@@ -245,31 +250,183 @@ Future<bool> showDeleteConfirmDialog(
   return result ?? false;
 }
 
-/// 编辑标签。返回规范化后的标签列表；取消返回 null。
+/// 编辑标签 **+ 书签颜色**（同一个弹窗）。
 ///
-/// 输入一行、逗号分隔（中英文都接受）。规范化规则在 [WorkbookTags.parse]，
-/// 这里只负责把用户输入原样带走 —— 上限与去重都由那一处决定。
+/// 2026-10-24 用户口径：改标签和挑颜色是一件事——标签在书架上就是一枚彩色
+/// 书签，分开两个入口等于让人把同一个决定做两遍。所以颜色区就长在这个
+/// 对话框里，跟着输入框里的内容实时走（打完逗号，色板立刻多一行）。
+///
+/// 返回规范化后的标签列表；取消返回 null。颜色不走返回值——它按标签名存
+/// （[onPickColor]），点一个色点就落盘，用户能马上看到书签变色。
 Future<List<String>?> showTagsDialog(
   BuildContext context, {
   required List<String> initial,
+  Map<String, String> colors = const <String, String>{},
+  void Function(String tag, String hex)? onPickColor,
 }) {
-  final TextEditingController controller = TextEditingController(
-    text: WorkbookTags.toEditable(initial),
-  );
   return showDialog<List<String>>(
     context: context,
-    builder: (BuildContext context) => AlertDialog(
+    builder: (BuildContext context) => _TagsDialog(
+      initial: initial,
+      colors: colors,
+      onPickColor: onPickColor,
+    ),
+  );
+}
+
+class _TagsDialog extends StatefulWidget {
+  const _TagsDialog({
+    required this.initial,
+    required this.colors,
+    this.onPickColor,
+  });
+
+  final List<String> initial;
+  final Map<String, String> colors;
+  final void Function(String tag, String hex)? onPickColor;
+
+  @override
+  State<_TagsDialog> createState() => _TagsDialogState();
+}
+
+class _TagsDialogState extends State<_TagsDialog> {
+  late final TextEditingController _controller;
+  late Map<String, String> _colors;
+  List<String> _tags = const <String>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(
+      text: WorkbookTags.toEditable(widget.initial),
+    );
+    _controller.addListener(_sync);
+    _colors = Map<String, String>.of(widget.colors);
+    _tags = WorkbookTags.parse(_controller.text);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_sync);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  /// 输入框一变就重算标签列表：颜色区要跟"正在打的这行"同步，
+  /// 否则用户加完标签还得关掉再开一次才能配色。
+  void _sync() {
+    final List<String> next = WorkbookTags.parse(_controller.text);
+    if (next.length == _tags.length) {
+      bool same = true;
+      for (int i = 0; i < next.length; i++) {
+        if (next[i] != _tags[i]) {
+          same = false;
+          break;
+        }
+      }
+      if (same) {
+        return;
+      }
+    }
+    setState(() => _tags = next);
+  }
+
+  Color _colorOf(String tag) {
+    final String hex = _colors[tag] ?? '';
+    return shqHexColor(hex.isEmpty ? defaultTagHex(tag) : hex);
+  }
+
+  void _pick(String tag, String hex) {
+    setState(() => _colors[tag] = hex);
+    widget.onPickColor?.call(tag, hex);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return AlertDialog(
       title: const Text('标签'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: '用逗号分隔',
-          helperText:
-              '最多 ${WorkbookTags.maxCount} 个，每个 ≤${WorkbookTags.maxLength} 字',
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '用逗号分隔',
+                helperText:
+                    '最多 ${WorkbookTags.maxCount} 个，每个 ≤${WorkbookTags.maxLength} 字',
+              ),
+              onSubmitted: (String value) =>
+                  Navigator.of(context).pop(WorkbookTags.parse(value)),
+            ),
+            if (widget.onPickColor != null) ...<Widget>[
+              const SizedBox(height: ShqSpace.md),
+              Text(
+                '书签颜色',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: ShqSpace.xxs),
+              Text(
+                '同一种标签在所有卷子上都是同一个颜色。',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: ShqSpace.sm),
+              if (_tags.isEmpty)
+                Text(
+                  '先写几个标签，下面就会出现色板。',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                )
+              else
+                for (final String tag in _tags) ...<Widget>[
+                  Row(
+                    children: <Widget>[
+                      TagBookmark(tag: tag, color: _colorOf(tag)),
+                      const SizedBox(width: ShqSpace.sm),
+                      Expanded(
+                        child: Text(
+                          tag,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: ShqSpace.xs),
+                  Wrap(
+                    spacing: ShqSpace.sm,
+                    runSpacing: ShqSpace.xs,
+                    children: <Widget>[
+                      for (final String hex in kTagPalette)
+                        SwatchDot(
+                          hex: hex,
+                          selected:
+                              (_colors[tag] ?? '').toUpperCase() ==
+                              hex.toUpperCase(),
+                          onTap: () => _pick(tag, hex),
+                        ),
+                      SwatchDot(
+                        hex: defaultTagHex(tag),
+                        label: '默认',
+                        selected: (_colors[tag] ?? '').isEmpty,
+                        onTap: () => _pick(tag, ''),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: ShqSpace.md),
+                ],
+            ],
+          ],
         ),
-        onSubmitted: (String value) =>
-            Navigator.of(context).pop(WorkbookTags.parse(value)),
       ),
       actions: <Widget>[
         TextButton(
@@ -278,12 +435,12 @@ Future<List<String>?> showTagsDialog(
         ),
         FilledButton(
           onPressed: () =>
-              Navigator.of(context).pop(WorkbookTags.parse(controller.text)),
+              Navigator.of(context).pop(WorkbookTags.parse(_controller.text)),
           child: const Text('保存'),
         ),
       ],
-    ),
-  );
+    );
+  }
 }
 
 /// 选择文件夹。返回选中的名字（'' = 未分类）；取消返回 null。
@@ -292,9 +449,13 @@ Future<List<String>?> showTagsDialog(
 /// 书架上的文件夹是**卷的归属**，不应该存在空文件夹，所以入口放在"移动"里最自然。
 Future<String?> showFolderPicker(
   BuildContext context, {
-  required List<String> folders,
-  required String current,
+  required List<ShelfFolder> folders,
+  required String currentId,
 }) {
+  // 按"树形缩进"列出全部文件夹：嵌套之后光看名字会分不清同名文件夹。
+  final List<ShelfFolderRow> rows = visibleFolderRows(folders, <String>{
+    for (final ShelfFolder folder in folders) folder.id,
+  });
   return showDialog<String>(
     context: context,
     builder: (BuildContext context) => SimpleDialog(
@@ -305,7 +466,7 @@ Future<String?> showFolderPicker(
           child: Row(
             children: <Widget>[
               Icon(
-                current.isEmpty ? Icons.check : Icons.folder_off_outlined,
+                currentId.isEmpty ? Icons.check : Icons.folder_off_outlined,
                 size: 18,
               ),
               const SizedBox(width: ShqSpace.sm),
@@ -313,39 +474,38 @@ Future<String?> showFolderPicker(
             ],
           ),
         ),
-        for (final String folder in folders)
+        for (final ShelfFolderRow row in rows)
           SimpleDialogOption(
-            onPressed: () => Navigator.of(context).pop(folder),
-            child: Row(
-              children: <Widget>[
-                Icon(
-                  current == folder ? Icons.check : Icons.folder_outlined,
-                  size: 18,
-                ),
-                const SizedBox(width: ShqSpace.sm),
-                Text(folder),
-              ],
+            onPressed: () => Navigator.of(context).pop(row.folder.id),
+            child: Padding(
+              padding: EdgeInsets.only(left: row.depth * 16),
+              child: Row(
+                children: <Widget>[
+                  Icon(
+                    currentId == row.folder.id
+                        ? Icons.check
+                        : Icons.folder_outlined,
+                    size: 18,
+                  ),
+                  const SizedBox(width: ShqSpace.sm),
+                  Flexible(
+                    child: Text(
+                      row.folder.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         const Divider(),
-        SimpleDialogOption(
-          onPressed: () async {
-            final String? name = await showRenameDialog(
-              context,
-              initialTitle: '',
-              dialogTitle: '新建文件夹',
-              fieldLabel: '文件夹名',
-            );
-            if (name != null && name.isNotEmpty && context.mounted) {
-              Navigator.of(context).pop(name);
-            }
-          },
-          child: const Row(
-            children: <Widget>[
-              Icon(Icons.create_new_folder_outlined, size: 18),
-              SizedBox(width: ShqSpace.sm),
-              Text('新建文件夹…'),
-            ],
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
+          child: Text(
+            '新建文件夹请用书架上方的「新建」',
+            style: Theme.of(context).textTheme.labelSmall
+                ?.copyWith(color: Theme.of(context).colorScheme.outline),
           ),
         ),
       ],

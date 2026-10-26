@@ -99,55 +99,46 @@ abstract final class ScrollMath {
   }
 }
 
-/// 拖动的**轴向锁定**（2026-10-23：用户反馈"上下滑动有些迟钝"）。
+/// 拖动方向（连续滚动模式）。
 ///
-/// ## 问题
-/// 人手指划过屏幕时不可能笔直：想竖着翻页，实际轨迹总有 10°–30° 的横向分量。
-/// 旧实现把 x/y 两个分量**都**照单全收（并各自夹紧 / 各自橡皮筋），于是：
-/// 1. 横向分量被夹紧在中间位置 → 那部分位移**凭空消失**，竖滑只走了
-///    `dy`（虽然数值上是对的，但手指走过的斜线距离明显更长，主观就是"没跟手"）；
-/// 2. 一旦缩放放大到内容宽于视口，斜滑会让页面**斜着漂**，竖着看的内容左右乱窜；
-/// 3. 本轮加的橡皮筋在横向也生效 → 斜滑时页面会左右晃一下再弹回。
+/// 2026-10-23 第二轮用户口径："上下、左右都要能滑，也要能斜着滑"。
+/// 上一版为了修"竖滑迟钝"做了单轴锁定；但那是**只在一个轴真的能滚**时的正确解。
+/// 放大到内容比视口宽、高都大时，用户就是在做二维平移，这时再锁轴会让斜拖很别扭。
 ///
-/// ## 规则
-/// 每次手势**只认一个轴**，且**偏向竖轴**（这是阅读器，竖滑是绝对主诉求）：
-/// - 先看"横向能不能动"（内容宽 ≤ 视口宽时不能动）→ 不能动就直接锁竖轴，
-///   连判定都不用等；
-/// - 能动时，累计位移超过 [decideDistance] 后按 `|dy| ≥ |dx|·[verticalBias]`
-///   判定：竖轴的**容错区间非常宽**（偏 35° 以内都算竖）；
-/// - 判定后整段手势不再改轴（避免中途跳轴导致画面顿一下）。
+/// 所以规则改成"按可滚方向决定"：
+/// - 横、竖都能滚 → [free]（两轴都收，斜向 1:1）；
+/// - 只有竖能滚 → [vertical]（横向位移丢弃，避免被夹紧/橡皮筋吃掉造成的迟钝）；
+/// - 只有横能滚 → [horizontal]；
+/// - 都不能滚 → [vertical]（没有位移，方向无意义）。
+enum DragAxis { vertical, horizontal, free }
+
+/// 按"哪个方向真的有可滚余量"决定拖动轴。
+///
+/// 不再用位移角度猜方向：角度猜测只在"两个方向都能滚"时有意义，
+/// 而那正是现在要自由斜滑的场景。可滚余量由调用方按
+/// `contentSize * scale > viewport + 0.5` 算好传进来。
 abstract final class DragAxisLock {
-  /// 判定前的位移阈值（逻辑像素）。太小会被抖动误判，太大会有"起手迟滞"。
-  /// 6dp ≈ 指尖轻微移动的量，真机上几乎察觉不到。
-  static const double decideDistance = 6;
-
-  /// 竖轴偏好：`|dy| ≥ |dx| × 0.7` 即判为竖轴（约偏 35° 以内都算竖滑）。
-  static const double verticalBias = 0.7;
-
-  /// 根据**手势累计位移**判定轴向。
-  ///
-  /// 返回 `true` = 竖轴；`false` = 横轴；`null` = 还没到阈值，继续等。
-  /// [allowHorizontal] 为 false（内容窄于视口、横向根本推不动）时直接判竖轴。
-  static bool? decide(
-    double dx,
-    double dy, {
-    bool allowHorizontal = true,
+  static DragAxis decide({
+    required bool allowHorizontal,
+    required bool allowVertical,
   }) {
-    if (!allowHorizontal) {
-      return true;
+    if (allowHorizontal && allowVertical) {
+      return DragAxis.free;
     }
-    if (dx.abs() < decideDistance && dy.abs() < decideDistance) {
-      return null;
+    if (allowHorizontal) {
+      return DragAxis.horizontal;
     }
-    return dy.abs() >= dx.abs() * verticalBias;
+    return DragAxis.vertical;
   }
 
-  /// 锁定后把位移投影到该轴上（另一轴归零）。
-  ///
-  /// 返回 `(dx, dy)`：锁定竖轴时 dx 为 0，锁定横轴时 dy 为 0。
+  /// 按轴投影位移。自由模式原样返回，斜向手势不再被吞掉一个分量。
   static (double, double) project(
     double dx,
     double dy, {
-    required bool vertical,
-  }) => vertical ? (0, dy) : (dx, 0);
+    required DragAxis axis,
+  }) => switch (axis) {
+    DragAxis.vertical => (0, dy),
+    DragAxis.horizontal => (dx, 0),
+    DragAxis.free => (dx, dy),
+  };
 }

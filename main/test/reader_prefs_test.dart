@@ -3,11 +3,30 @@ import 'package:shuaqi/domain/reader/reader_prefs.dart';
 
 void main() {
   group('ReaderPrefs', () {
-    test('默认值符合 §5.3A：分页 / 原图 / 强度 55', () {
+    // 2026-10-24 第二轮（用户第 6 条）：默认改成滚动 + 手势模式。
+    // 设计理念："任何一次启动文件，默认打开时都是滚动模式 + 手势操控"，
+    // 而且不再按卷记忆（偏好只有全局一份）。
+    test('默认值：滚动 / 原图 / 强度 55 / 手势模式', () {
       const ReaderPrefs prefs = ReaderPrefs.defaults;
-      expect(prefs.mode, ViewMode.paged);
+      expect(prefs.mode, ViewMode.scroll);
       expect(prefs.style, PaperStyle.original);
       expect(prefs.intensity, 55);
+      expect(prefs.handTool, isTrue);
+    });
+
+    test('旧数据没有 hand 字段时按新默认（手势开）', () {
+      final ReaderPrefs restored = ReaderPrefs.fromJson(<String, Object?>{
+        'mode': 'paged',
+        'style': 'warm',
+        'intensity': 40,
+      });
+      expect(restored.mode, ViewMode.paged);
+      expect(restored.handTool, isTrue);
+      // 明确写了 false 才关掉。
+      expect(
+        ReaderPrefs.fromJson(<String, Object?>{'hand': false}).handTool,
+        isFalse,
+      );
     });
 
     test('JSON 往返不丢字段', () {
@@ -15,6 +34,7 @@ void main() {
         mode: ViewMode.scroll,
         style: PaperStyle.warm,
         intensity: 30,
+        handTool: true,
       );
       final ReaderPrefs restored = ReaderPrefs.fromJson(source.toJson());
       expect(restored, source);
@@ -26,7 +46,7 @@ void main() {
         'style': 42,
         'intensity': 'abc',
       });
-      expect(restored.mode, ViewMode.paged);
+      expect(restored.mode, ViewMode.scroll);
       expect(restored.style, PaperStyle.original);
       expect(restored.intensity, 55);
     });
@@ -67,6 +87,7 @@ void main() {
       expect(ReaderSettingKeys.defaultMode, 'reader.default_mode');
       expect(ReaderSettingKeys.defaultPaperStyle, 'reader.default_paper_style');
       expect(ReaderSettingKeys.defaultIntensity, 'reader.default_intensity');
+      expect(ReaderSettingKeys.defaultHand, 'reader.default_hand');
       expect(ReaderSettingKeys.viewOf('wb_abc'), 'reader.view.wb_abc');
     });
   });

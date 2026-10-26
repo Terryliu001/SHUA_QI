@@ -3,12 +3,23 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/bootstrap.dart';
 import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/ink/ink_session_id.dart';
 import 'package:shuaqi/domain/ink/ink_store.dart';
 import 'package:shuaqi/domain/ink/undo_stack.dart';
+import 'package:shuaqi/domain/records/answer_log.dart';
+import 'package:shuaqi/domain/records/record_time.dart';
+import 'package:shuaqi/infra/ink/answer_ink_store.dart';
+import 'package:shuaqi/infra/ink/favorite_redo_ink_store.dart';
 import 'package:shuaqi/infra/ink/ink_writer.dart';
 import 'package:shuaqi/infra/ink/memory_ink_store.dart';
 import 'package:shuaqi/infra/ink/sif_ink_store.dart';
 import 'package:shuaqi/state/app_providers.dart';
+import 'package:shuaqi/state/record_providers.dart';
+import 'package:shuaqi/state/redo_context.dart';
+
+/// session id 的编解码在 `domain/ink/ink_session_id.dart`（数据契约，测试也要用）。
+/// 这里 re-export，老的 `import state/ink_providers.dart` 不用改。
+export 'package:shuaqi/domain/ink/ink_session_id.dart';
 
 /// 笔迹存储（T2.4：真实 SIF 落盘）。
 ///
@@ -47,15 +58,57 @@ final Provider<InkWriter> Function(String) inkWriterProvider =
       return writer;
     });
 
+/// 按页键选存储：普通 PDF 页走 SifInkStore；答题卡画布走 AnswerInkStore；
+/// 收藏二刷走 FavoriteRedoInkStore。
+final Provider<InkStore> Function(InkPageKey) inkStoreForKeyProvider =
+    Provider.family<InkStore, InkPageKey>((Ref ref, InkPageKey key) {
+      final String? redoFavoriteId = parseFavoriteRedoSession(key.sessionId);
+      if (redoFavoriteId != null) {
+        final AppDependencies redoDeps = ref.watch(appDependenciesProvider);
+        return FavoriteRedoInkStore(
+          vault: redoDeps.vault,
+          favoriteId: redoFavoriteId,
+        );
+      }
+      final ({String sessionId, String questionId})? answer = parseAnswerInkSession(
+        key.sessionId,
+      );
+      if (answer == null) {
+        return ref.watch(inkStoreProvider(key.workbookId));
+      }
+      final AppDependencies deps = ref.watch(appDependenciesProvider);
+      return AnswerInkStore(
+        vault: deps.vault,
+        workbookId: key.workbookId,
+        sessionId: answer.sessionId,
+        questionId: answer.questionId,
+      );
+    });
+
+/// 按页键选 writer：答题卡/二刷每题一个独立 writer，PDF 页共享阅读器 writer。
+final Provider<InkWriter> Function(InkPageKey) inkWriterForKeyProvider =
+    Provider.family<InkWriter, InkPageKey>((Ref ref, InkPageKey key) {
+      final bool independent =
+          parseFavoriteRedoSession(key.sessionId) != null ||
+          parseAnswerInkSession(key.sessionId) != null;
+      if (!independent) {
+        return ref.watch(inkWriterProvider(key.workbookId));
+      }
+      final InkWriter writer = InkWriter(
+        store: ref.watch(inkStoreForKeyProvider(key)),
+        debounce: const Duration(milliseconds: 500),
+      );
+      ref.onDispose(() {
+        unawaited(writer.flushAll().whenComplete(writer.dispose));
+      });
+      return writer;
+    });
+
 /// 一页笔迹的定位键。做成值对象而不是 `'$sessionId#$pageIndex'` 字符串：
 /// family 的 arg 直接当 Map 键用，字符串拼接要小心分隔符碰撞，
 /// 值对象靠结构相等，编译期就能发现漏字段。
 class InkPageKey {
-  const InkPageKey(
-    this.sessionId,
-    this.pageIndex, {
-    this.workbookId = '',
-  });
+  const InkPageKey(this.sessionId, this.pageIndex, {this.workbookId = ''});
 
   final String sessionId;
   final int pageIndex;
@@ -173,7 +226,7 @@ class InkEditController extends Notifier<InkEditState> {
   InkDoc get doc => state.doc;
 
   Future<void> _load() async {
-    final InkStore store = ref.read(inkStoreProvider(_key.workbookId));
+    final InkStore store = ref.read(inkStoreForKeyProvider(_key));
     InkDoc loaded = InkDoc.empty;
     InkLoadIssue issue = InkLoadIssue.none;
     try {
@@ -201,11 +254,7 @@ class InkEditController extends Notifier<InkEditState> {
     // 磁盘来的 doc 是新的基线：旧历史（如果有）对不上，直接清掉。
     _history.clear();
     _pendingEraseSteps.clear();
-    state = InkEditState(
-      doc: loaded,
-      epoch: state.epoch + 1,
-      issue: issue,
-    );
+    state = InkEditState(doc: loaded, epoch: state.epoch + 1, issue: issue);
   }
 
   // ── 书写 ─────────────────────────────────────────────────────────
@@ -252,6 +301,28 @@ class InkEditController extends Notifier<InkEditState> {
     state = state.copyWith(
       canUndo: _history.canUndo,
       canRedo: _history.canRedo,
+    );
+    _scheduleSave();
+  }
+
+  /// 第二根手指落下 = 双指手势：**撤回**本次擦除，不留撤销项。
+  ///
+  /// 和 [cancelErase] 的区别：cancel 是"擦到一半但确实想擦"，收尾成一步撤销；
+  /// abort 是"误触/想缩放"，必须把 doc 还原到擦除前，否则用户会莫名少半页。
+  void abortErase() {
+    if (_pendingEraseSteps.isEmpty) {
+      return;
+    }
+    InkDoc next = state.doc;
+    for (final EraseStrokes step in _pendingEraseSteps.reversed) {
+      next = step.revert(next);
+    }
+    _pendingEraseSteps.clear();
+    state = state.copyWith(
+      doc: next,
+      canUndo: _history.canUndo,
+      canRedo: false,
+      epoch: state.epoch + 1,
     );
     _scheduleSave();
   }
@@ -329,9 +400,7 @@ class InkEditController extends Notifier<InkEditState> {
   /// 把进行中的擦除收成一步撤销（没有就什么也不做）。
   void _settlePendingErase() {
     if (_pendingEraseSteps.isNotEmpty) {
-      _history.push(
-        EraseBatch(List<EraseStrokes>.of(_pendingEraseSteps)),
-      );
+      _history.push(EraseBatch(List<EraseStrokes>.of(_pendingEraseSteps)));
       _pendingEraseSteps.clear();
     }
   }
@@ -343,7 +412,130 @@ class InkEditController extends Notifier<InkEditState> {
   /// 不被磁盘 revision 回填（回填会让它倒退，识别失效判定更不可靠）。
   void _scheduleSave() {
     ref
-        .read(inkWriterProvider(_key.workbookId))
+        .read(inkWriterForKeyProvider(_key))
         .schedule(_key.sessionId, _key.pageIndex, state.doc);
+    _recordAnsweredIfAny();
+  }
+
+  /// 答题卡画布切题/退出时立刻落盘（独立 writer 不会走 ReaderPage 的 flushAll）。
+  Future<void> flushSave() {
+    return ref
+        .read(inkWriterForKeyProvider(_key))
+        .flush(_key.sessionId, _key.pageIndex);
+  }
+
+  /// 作答记录去重：`questionId|day`。
+  ///
+  /// 为什么在这里打点：`_key.sessionId` 对答题卡是 `ans:<sid>:<qid>`，
+  /// **每一笔落下都会经过 `_scheduleSave`**——这是"有笔迹更新"唯一可靠的时刻，
+  /// 保存按钮、切题、系统返回都只是它的后续动作。放页面里会漏掉"系统返回"。
+  ///
+  /// 一个进程内一题一天只写一次库：记录页数的是"做过几道题"，
+  /// 不是"写过几笔"；去重后每次抬笔都不碰数据库，性能上没有代价。
+  static final Set<String> _recordedQuestionDays = <String>{};
+
+  void _recordAnsweredIfAny() {
+    try {
+      _recordAnsweredInner();
+    } on Object {
+      // 记录是旁路：任何异常（含测试环境没有 appDependencies）都不能影响落笔。
+    }
+  }
+
+  void _recordAnsweredInner() {
+    final String? questionId = answerQuestionIdOf(
+      sessionId: _key.sessionId,
+      workbookId: _key.workbookId,
+      strokeCount: state.doc.strokeCount,
+    );
+    if (questionId != null) {
+      final String stamp = answerRecordKeyOf(
+        questionId,
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      if (!_recordedQuestionDays.add(stamp)) {
+        return;
+      }
+      unawaited(
+        ref
+            .read(recordServiceProvider)
+            .touch(
+              workbookId: _key.workbookId,
+              questionId: questionId,
+              source: RecordSource.ink,
+            ),
+      );
+      return;
+    }
+    if (state.doc.strokes.isEmpty || _key.workbookId.isEmpty) {
+      return;
+    }
+    // 收藏重刷：session 只带收藏 id，卷/题要回表查一次（一题一天只查一次）。
+    final String? favoriteId = parseFavoriteRedoSession(_key.sessionId);
+    if (favoriteId == null) {
+      return;
+    }
+    // v8：重刷的记录带**来源**（组卷 / 单题重刷），同一天可以与原卷的记录并存。
+    final RedoContext? context = ref.read(redoContextProvider);
+    final RecordOrigin origin = context != null && context.isSet
+        ? RecordOrigin.set
+        : RecordOrigin.redo;
+    final String stamp =
+        'fav:$favoriteId|${RecordTime.dayKey(DateTime.now())}|${origin.name}';
+    if (!_recordedQuestionDays.add(stamp)) {
+      return;
+    }
+    unawaited(
+      _recordFavoriteRedo(
+        favoriteId,
+        origin: origin,
+        originTitle: context?.title ?? '',
+      ),
+    );
+  }
+
+  /// 重刷页的一笔也算"做过"：回表拿到这道收藏的来源卷与题号。
+  ///
+  /// 原卷已删时照样记（[workbookId] 只作为溯源键，`RecordService` 查不到卷名就用快照），
+  /// 这正是"记录独立于卷"的用处。
+  Future<void> _recordFavoriteRedo(
+    String favoriteId, {
+    required RecordOrigin origin,
+    required String originTitle,
+  }) async {
+    try {
+      final List<Map<String, Object?>> rows = await ref
+          .read(appDependenciesProvider)
+          .db
+          .raw
+          .query(
+            'favorite',
+            columns: <String>['workbook_id', 'question_id', 'workbook_title'],
+            where: 'id = ?',
+            whereArgs: <Object?>[favoriteId],
+            limit: 1,
+          );
+      if (rows.isEmpty) {
+        return;
+      }
+      final Map<String, Object?> row = rows.first;
+      final String workbookId = (row['workbook_id'] as String?) ?? '';
+      final String questionId = (row['question_id'] as String?) ?? '';
+      if (questionId.isEmpty) {
+        return;
+      }
+      await ref
+          .read(recordServiceProvider)
+          .touch(
+            workbookId: workbookId,
+            questionId: questionId,
+            source: RecordSource.redo,
+            workbookTitle: (row['workbook_title'] as String?) ?? '',
+            origin: origin,
+            originTitle: originTitle,
+          );
+    } on Object {
+      // 旁路：重刷照常进行。
+    }
   }
 }

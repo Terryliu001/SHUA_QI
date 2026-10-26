@@ -89,6 +89,32 @@ abstract final class SifCodec {
     }
   }
 
+  /// 只读页尺寸（不解笔画）。
+  ///
+  /// 用途：改了答题卡纸张之后，把旧笔迹按比例搬到新纸（见 `scaleInkDoc`）。
+  /// 读不出来返回 null —— 调用方按"尺寸未知"处理，不做缩放。
+  ///
+  /// ⚠️ **必须 little-endian**：与 [_Writer.u16] / [_Reader.u16] 同一口径。
+  /// 2026-10-25 修：这里原来用了 `ByteData.getUint16` 的默认大端，1000×600
+  /// 会被读成 413.5×2869.5，于是答题卡/二刷每次载入都按错误比例缩放笔迹。
+  static SifPageSize? readPageSize(Uint8List bytes) {
+    try {
+      final Uint8List body = const ZLibDecoder().decodeBytes(bytes);
+      if (body.length < headerBytes) {
+        return null;
+      }
+      final ByteData view = ByteData.sublistView(body);
+      final int width = view.getUint16(5, Endian.little);
+      final int height = view.getUint16(7, Endian.little);
+      if (width <= 0 || height <= 0) {
+        return null;
+      }
+      return SifPageSize(width / 10, height / 10);
+    } on Object {
+      return null;
+    }
+  }
+
   /// 解码（含 zlib 解压 + CRC 校验）。任何结构错误抛 [SifCorruptException]。
   static InkDoc decode(Uint8List bytes) {
     if (bytes.length < 8) {

@@ -8,6 +8,7 @@ import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/ui/reader/ink_layer.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
+import 'package:shuaqi/ui/reader/region_overlay.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/paper_effect.dart';
 
@@ -32,10 +33,14 @@ class PageLayer extends StatefulWidget {
     this.intensity = ReaderPrefs.defaultIntensity,
     this.sessionId,
     this.inkEnabled = false,
+    this.inkInteractive = true,
+    this.inkTouch = false,
     this.inkTool = InkTool.pen,
     this.inkColorIndex = 0,
     this.inkbrushWidth = 1,
     this.onPenDown,
+    this.regionMarks = const <RegionMark>[],
+    this.regionConfig,
   });
 
   final PageImageCache cache;
@@ -65,6 +70,16 @@ class PageLayer extends StatefulWidget {
   /// 这一页此刻是否接受落笔（分页模式放大中用 touch 平移，不写字）。
   final bool inkEnabled;
 
+  /// 这一页的墨迹层是否接受**输入**（仍照常绘制已有笔迹）。
+  ///
+  /// 打开「题目区域」时置 false：此时手写笔要用来调框，不能同时落笔。
+  /// 与 [inkEnabled] 的区别：[inkEnabled] 决定"要不要建墨迹层"（非当前页不建），
+  /// 这里只决定"建好的层收不收指针"。
+  final bool inkInteractive;
+
+  /// 是否接受手指落笔（书写模式）。false = 单指只滚动/缩放（手形浏览模式）。
+  final bool inkTouch;
+
   /// 当前笔刷。只影响之后画的笔。
   final InkTool inkTool;
 
@@ -74,6 +89,15 @@ class PageLayer extends StatefulWidget {
 
   /// 笔落屏时通知外层（滚动模式用来停惯性滚动）。见 [InkLayer.onPenDown]。
   final VoidCallback? onPenDown;
+
+  /// 本页的题目区域框（T3.5 检查视角）。为空表示不画。
+  ///
+  /// 它画在**墨迹层之上**（规格 03 的层序：PDF → 已落笔 → 正在写 → 区域 → 手势）。
+  /// 只读时整层不参与命中；可编辑时**只有框线与角标**吃指针，框内仍然透传给笔。
+  final List<RegionMark> regionMarks;
+
+  /// null = 只读叠加层。
+  final RegionOverlayConfig? regionConfig;
 
   @override
   State<PageLayer> createState() => _PageLayerState();
@@ -248,10 +272,48 @@ class _PageLayerState extends State<PageLayer> {
       ),
     );
 
+    final Widget? regions = widget.regionMarks.isEmpty
+        ? null
+        : Positioned.fill(
+            child: RegionOverlay(
+              marks: widget.regionMarks,
+              pageIndex: widget.page.index,
+              pageWidthPt: widget.page.width,
+              pageHeightPt: widget.page.height,
+              width: widget.width,
+              darkPaper: darkPaper,
+              editable: widget.regionConfig?.editable ?? false,
+              selectedKey: widget.regionConfig?.selectedKey,
+              onSelect: widget.regionConfig?.onSelect,
+              // 2026-10-23 修复：这三个回调以前漏传，贴框浮动条的"删除"点了没反应
+              // （按钮渲染出来了，onAction 却是 null）。所有编辑回调都必须在这里
+              // 逐个转发，不能只在 ReaderPage 里配置。
+              onDeselect: widget.regionConfig?.onDeselect,
+              onMove: widget.regionConfig?.onMove,
+              onResize: widget.regionConfig?.onResize,
+              onMenu: widget.regionConfig?.onMenu,
+              actionsOf: widget.regionConfig?.actionsOf,
+              onAction: widget.regionConfig?.onAction,
+              answerEditing: widget.regionConfig?.answerEditing ?? false,
+            ),
+          );
+
     // 没有墨迹层：背景自己就带确定尺寸（width/height 已写死），直接返回。
     final String? sessionId = widget.sessionId;
     if (sessionId == null || !widget.inkEnabled) {
-      return paper;
+      if (regions == null) {
+        return paper;
+      }
+      return SizedBox(
+        width: widget.width,
+        height: height,
+        child: Stack(
+          children: <Widget>[
+            Positioned.fill(child: paper),
+            regions,
+          ],
+        ),
+      );
     }
     // 墨迹层：PaperEffect 的兄弟节点（T1.6 红线），只吃自己的 stylus 手势。
     //
@@ -284,10 +346,13 @@ class _PageLayerState extends State<PageLayer> {
                 tool: widget.inkTool,
                 colorIndex: widget.inkColorIndex,
                 brushWidth: widget.inkbrushWidth,
+                enabled: widget.inkInteractive,
+                inkTouch: widget.inkTouch,
                 onPenDown: widget.onPenDown,
               ),
             ),
           ),
+          ?regions,
         ],
       ),
     );

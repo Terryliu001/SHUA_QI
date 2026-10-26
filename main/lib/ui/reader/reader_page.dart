@@ -1,31 +1,98 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shuaqi/app/ai/ai_service.dart';
+import 'package:shuaqi/app/ai/chat_store.dart';
+import 'package:shuaqi/app/answer/answer_paper_store.dart';
+import 'package:shuaqi/app/answer/answer_sheet_controller.dart';
+import 'package:shuaqi/app/favorite/favorite_store.dart';
+import 'package:shuaqi/app/grade/grading_controller.dart';
 import 'package:shuaqi/app/reader/reader_prefs_store.dart';
+import 'package:shuaqi/app/region/question_order_controller.dart';
+import 'package:shuaqi/app/region/region_builder.dart';
+import 'package:shuaqi/domain/ai/chat.dart';
+import 'package:shuaqi/domain/ai/llm_config.dart';
+import 'package:shuaqi/domain/ai/question_payload.dart';
+import 'package:shuaqi/domain/answer/answer_paper.dart';
 import 'package:shuaqi/domain/ink/ink_brush.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
+import 'package:shuaqi/domain/model/answer_sheet.dart';
+import 'package:shuaqi/domain/model/favorite.dart';
+import 'package:shuaqi/domain/model/grading.dart';
+import 'package:shuaqi/domain/model/question.dart';
+import 'package:shuaqi/domain/model/region_set.dart';
+import 'package:shuaqi/domain/model/wb_page.dart';
+import 'package:shuaqi/domain/reader/panel_metrics.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/domain/region/answer.dart';
+import 'package:shuaqi/domain/region/correction.dart';
+import 'package:shuaqi/domain/region/edited_question.dart';
+import 'package:shuaqi/domain/region/grading_rules.dart';
+import 'package:shuaqi/domain/region/math_text.dart';
+import 'package:shuaqi/domain/region/region_rect.dart';
+import 'package:shuaqi/domain/util/ulid.dart';
+import 'package:shuaqi/infra/ocr/mlkit_ink_engine.dart';
+import 'package:shuaqi/infra/ocr/ocr_engine.dart';
+import 'package:shuaqi/infra/vault/layout_store.dart';
+import 'package:shuaqi/infra/vault/paths.dart';
+import 'package:shuaqi/state/ai_providers.dart';
+import 'package:shuaqi/state/answer_sheet_providers.dart';
+import 'package:shuaqi/state/app_providers.dart';
+import 'package:shuaqi/state/favorite_providers.dart';
+import 'package:shuaqi/state/grading_providers.dart';
 import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
+import 'package:shuaqi/state/panel_width_provider.dart';
+import 'package:shuaqi/state/question_order_providers.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/reader_providers.dart';
+import 'package:shuaqi/state/region_providers.dart';
+import 'package:shuaqi/state/ui_prefs_provider.dart';
+import 'package:shuaqi/ui/panel/ai_chat_panel.dart';
+import 'package:shuaqi/ui/panel/answer_adjust_bar.dart';
+import 'package:shuaqi/ui/panel/answer_ink_preview.dart';
+import 'package:shuaqi/ui/panel/answer_sheet_page.dart';
+import 'package:shuaqi/ui/panel/answer_sheet_prep.dart';
+import 'package:shuaqi/ui/panel/answer_status_card.dart';
+import 'package:shuaqi/ui/panel/panel_resize_handle.dart';
+import 'package:shuaqi/ui/panel/question_thumb.dart';
+import 'package:shuaqi/ui/panel/region_panel.dart';
+import 'package:shuaqi/ui/panel/region_preview.dart';
+import 'package:shuaqi/ui/reader/answer_crop_renderer.dart';
 import 'package:shuaqi/ui/reader/debug_hud.dart';
 import 'package:shuaqi/ui/reader/ink_toolbar.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/paged_view.dart';
 import 'package:shuaqi/ui/reader/paper_style_sheet.dart';
+import 'package:shuaqi/ui/reader/reader_top_actions.dart';
+import 'package:shuaqi/ui/reader/region_overlay.dart';
 import 'package:shuaqi/ui/reader/scroll_view.dart';
 import 'package:shuaqi/ui/reader/thumb_drawer.dart';
+import 'package:shuaqi/ui/region/region_action.dart';
+import 'package:shuaqi/ui/settings/ai_settings_sheet.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
+import 'package:shuaqi/ui/widgets/ai_image_attachment.dart';
+import 'package:shuaqi/ui/widgets/image_viewer.dart';
+import 'package:shuaqi/ui/widgets/labeled_action.dart';
 
 /// 阅读器（T1.5）：**只读**的 PDF 视图，双模式 + 缩放 + 翻页 + 记进度。
 ///
 /// 第 2 周的墨迹层会叠在 `PageLayer` 上，这一版刻意不碰笔。
 class ReaderPage extends ConsumerStatefulWidget {
-  const ReaderPage({super.key, required this.workbookId});
+  const ReaderPage({
+    super.key,
+    required this.workbookId,
+    this.initialQuestionId,
+  });
 
   final String workbookId;
+
+  /// 打开后定位并选中这道题（收藏夹「回看出处」用）；null = 正常打开。
+  final String? initialQuestionId;
 
   @override
   ConsumerState<ReaderPage> createState() => _ReaderPageState();
@@ -33,6 +100,10 @@ class ReaderPage extends ConsumerStatefulWidget {
 
 class _ReaderPageState extends ConsumerState<ReaderPage>
     with WidgetsBindingObserver {
+  static const MethodChannel _mediaChannel = MethodChannel(
+    'com.shuaqi.shuaqi/media',
+  );
+
   final GlobalKey<PagedReaderViewState> _pagedKey =
       GlobalKey<PagedReaderViewState>();
   final GlobalKey<ScrollReaderViewState> _scrollKey =
@@ -42,6 +113,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   PageImageCache? _cache;
   ReaderHandle? _handle;
   int _current = 0;
+
+  /// 写入器/编辑器的"落盘函数"在依赖就绪时缓存下来。
+  ///
+  /// 不能在 [dispose] 里 `ref.read`：Riverpod 3 会报
+  /// `Bad state: Using "ref" when a widget is about to or has been unmounted`。
+  /// 这里存函数而不是控制器，避免 ui 直接依赖 infra 的类型。
+  Future<void> Function()? _flushAllInk;
+  Future<void> Function(String sessionId, int page)? _flushPageInk;
+  Future<void> Function()? _flushRegions;
 
   /// 阅读偏好（mode / style / intensity）。null 表示还没从库加载完成，
   /// 期间用 [ReaderPrefs.defaults] 渲染，加载完再无缝替换。
@@ -61,15 +141,171 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   PaperStyle get _style => _prefs?.style ?? PaperStyle.original;
   int get _intensity => _prefs?.intensity ?? ReaderPrefs.defaultIntensity;
 
+  /// 手势模式：开 = 手指只平移/缩放，**笔仍然书写**；关 = 手指和笔都能书写。
+  ///
+  /// 2026-10-24 用户口径：手势模式下"仅手写笔可以书写，手不能书写"。
+  /// 所以这个开关只决定**手指算不算笔**，不再把笔一起禁掉；笔的书写入口
+  /// 与工具体在两种模式下都保留。
+  bool get _handTool => _prefs?.handTool ?? false;
+
   /// 性能 HUD 的帧耗时采集（T2.5）。release 构建不创建，不产生任何开销。
   FrameStatsCollector? _frameStats;
+
+  /// 本轮打开是否已经尝试过自动切题（只试一次，失败也不反复重试）。
+  bool _regionEnsured = false;
+
+  /// 右侧检查面板是否展开（T3.5）。展开即"看框/改框"模式。
+  bool _panelOpen = false;
+
+  /// 正在拖面板宽度时的临时宽度（dp）。null = 没在拖。
+  ///
+  /// 拖动中只改面板自身宽度、**不让阅读区跟着重排**（重排会让 PageLayer
+  /// 重新取位图，12ms/次 × 每帧 = 直接掉帧）；松手才一次性应用并落盘。
+  double? _dragPanelWidth;
+
+  /// 开始拖动时的面板宽度。配合把手抛来的**总位移**算新宽度——
+  /// 用累加 + clamp 的话，超限后要"抵消超出量"才动，手感就是"不跟手"（2026-10-24 用户第 10 条）。
+  double _dragStartPanelWidth = 0;
+
+  /// 当前选中的框。存的是**锚点**（题号 + 起始页 + 起始 y）而不是 anchor key：
+  /// 拖动会改变 key（key 含 y），存 key 的话"拖一下就丢选中"。
+  ({String label, int page, double y})? _selected;
+
+  /// 「问 AI」面板：盖在题目区域上，返回即回到题目区域。
+  /// [_aiBundle] 保留上一道题，关闭时还能播放滑出动画。
+  bool _aiOpen = false;
+  QuestionBundle? _aiBundle;
+
+  /// 打开 AI 面板时一次性准备好的对话与附件。
+  ///
+  /// 面板自己管理后续消息；这里只在"打开/换题"时换一份，
+  /// 避免父级重建（例如刚补了答案）把用户临时移除的图片又加回来。
+  List<ChatTurn> _aiTurns = const <ChatTurn>[];
+  List<AiImageAttachment> _aiAttachments = const <AiImageAttachment>[];
+
+  /// 作答框控制器（每卷一个）。由 provider 持有，页面只监听它的 value。
+  AnswerSheetController? _answerSheet;
+  bool _answerSheetAttached = false;
+
+  /// 是否在卷面上同步显示全部作答框（面板上部的开关）。
+  bool _showAnswers = false;
+
+  /// 当前展开「答题情况」的题目 id；null = 没有展开。
+  String? _answerQuestionId;
+
+  /// 答题卡画布上的内容（按题缓存），用于「答题情况」同步预览与 OCR。
+  final Map<String, InkDoc> _answerInkDocs = <String, InkDoc>{};
+
+  /// 面板里「答题情况」的 OCR 引擎与进行态。
+  MlKitInkEngine? _panelOcr;
+  bool _recognizingAnswer = false;
+
+  /// 正在保存作答原图（防连点）。
+  bool _savingAnswerCrop = false;
+
+  /// 面板「保存修改」的进行态。
+  bool _savingEdits = false;
+
+  /// 面板「保存修改」成功了几次。面板用它把"手改 +N 道"的提示收掉。
+  int _saveTick = 0;
+
+  /// 手动题目顺序（拖动排序）。null = 尚未挂载。
+  QuestionOrderController? _questionOrder;
+  bool _questionOrderAttached = false;
+
+  /// 判题结果（对/待判/错）。null = 尚未挂载。
+  GradingController? _grades;
+  bool _gradesAttached = false;
+
+  /// 一键改卷进行中。
+  bool _grading = false;
+
+  /// 「AI 补答案」进行中与进度（工具行第三个键）。
+  bool _fillingAi = false;
+  int _fillDone = 0;
+  int _fillTotal = 0;
+
+  /// 多选批量「AI 判」进行中。
+  bool _batchAiRunning = false;
+
+  /// 「重框」态的目标题（左上角浮窗用）。null = 不在重框态。
+  QuestionBundle? _adjustTarget;
+
+  /// 最近一次把改动落盘的时刻（浮窗显示"已保存 12:34"）。
+  ///
+  /// 2026-10-26 用户第 5/12 条：自动保存要**看得见**——
+  /// 用户改完框最怕的是"到底存没存"，界面上写一句就踏实了。
+  DateTime? _lastSavedAt;
+
+  /// 多选模式与已勾选的题（按 questionId，跨重算稳定）。
+  bool _multiSelecting = false;
+  final Set<String> _multiSelected = <String>{};
+
+  /// 本卷已收藏的题目 id（题目面板画实心星；收藏/取消后由 provider 刷新）。
+  Set<String> _favoriteQuestionIds = <String>{};
+
+  /// 待定位的题（收藏夹「回看出处」传入）；切题结果加载后跳转并选中，然后清空。
+  String? _pendingQuestionId;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _pendingQuestionId = widget.initialQuestionId;
     if (!kReleaseMode) {
       _frameStats = FrameStatsCollector();
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 只在这里取一次 ref；dispose 阶段只调用缓存下来的函数。
+    _flushAllInk ??= ref.read(inkWriterProvider(widget.workbookId)).flushAll;
+    _flushPageInk ??= ref.read(inkWriterProvider(widget.workbookId)).flush;
+    _flushRegions ??= ref.read(regionEditProvider(widget.workbookId)).flush;
+    // 作答框只在一个地方初始化；provider 会负责 load 与 dispose。
+    if (!_answerSheetAttached) {
+      _answerSheetAttached = true;
+      final AnswerSheetController controller = ref.read(
+        answerSheetProvider(widget.workbookId),
+      );
+      _answerSheet = controller;
+      controller.data.addListener(_onAnswerSheetChanged);
+    }
+    if (!_questionOrderAttached) {
+      _questionOrderAttached = true;
+      final QuestionOrderController controller = ref.read(
+        questionOrderProvider(widget.workbookId),
+      );
+      _questionOrder = controller;
+      controller.order.addListener(_onQuestionOrderChanged);
+    }
+    if (!_gradesAttached) {
+      _gradesAttached = true;
+      final GradingController controller = ref.read(
+        gradingProvider(widget.workbookId),
+      );
+      _grades = controller;
+      controller.data.addListener(_onGradesChanged);
+    }
+  }
+
+  void _onGradesChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _onQuestionOrderChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _onAnswerSheetChanged() {
+    if (mounted) {
+      setState(() {});
     }
   }
 
@@ -79,9 +315,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     // 所以防抖仍然是第一道保险，这里是最后一道。
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
-      unawaited(
-        ref.read(inkWriterProvider(widget.workbookId)).flushAll(),
-      );
+      final Future<void> Function()? flushAll = _flushAllInk;
+      if (flushAll != null) {
+        unawaited(flushAll());
+      }
+      // 覆盖层同理：300ms 防抖窗口里的修改也要落地。
+      final Future<void> Function()? flushRegions = _flushRegions;
+      if (flushRegions != null) {
+        unawaited(flushRegions());
+      }
+      final AnswerSheetController? answers = _answerSheet;
+      if (answers != null) {
+        unawaited(answers.flush());
+      }
+      final QuestionOrderController? order = _questionOrder;
+      if (order != null) {
+        unawaited(order.flush());
+      }
     }
   }
 
@@ -91,18 +341,37 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     if (session == null) {
       return;
     }
-    unawaited(
-      ref
-          .read(inkWriterProvider(widget.workbookId))
-          .flush(session.id, page),
-    );
+    final Future<void> Function(String, int)? flushPage = _flushPageInk;
+    if (flushPage == null) {
+      return;
+    }
+    unawaited(flushPage(session.id, page));
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    unawaited(_panelOcr?.dispose());
     // 退出阅读器前把 500ms 防抖窗口里的内容也写掉。
-    unawaited(ref.read(inkWriterProvider(widget.workbookId)).flushAll());
+    // **不能在这时 ref.read**：widget 已 deactivated，Riverpod 3 会直接报错。
+    final Future<void> Function()? flushAll = _flushAllInk;
+    if (flushAll != null) {
+      unawaited(flushAll());
+    }
+    final Future<void> Function()? flushRegions = _flushRegions;
+    if (flushRegions != null) {
+      unawaited(flushRegions());
+    }
+    final AnswerSheetController? answers = _answerSheet;
+    if (answers != null) {
+      answers.data.removeListener(_onAnswerSheetChanged);
+      unawaited(answers.flush());
+    }
+    final QuestionOrderController? order = _questionOrder;
+    if (order != null) {
+      order.order.removeListener(_onQuestionOrderChanged);
+      unawaited(order.flush());
+    }
     _frameStats?.dispose();
     _progress?.cancel();
     _prefsSaveTimer?.cancel();
@@ -162,6 +431,2592 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     _updatePrefs(next);
   }
 
+  /// 打开/收起检查面板。**打开面板 = 同时打开框显示**：
+  /// 面板里全是框的条目，框却看不见会让人不知道在改什么。
+  void _togglePanel() {
+    setState(() {
+      _panelOpen = !_panelOpen;
+      if (!_panelOpen) {
+        _selected = null;
+        _answerQuestionId = null;
+        _adjustTarget = null;
+        // AI 是题目区域的下一层，主面板收起时一起收，避免留下一个悬空对话。
+        _aiOpen = false;
+      }
+    });
+  }
+
+  /// 打开「答题卡」：先确认切题，再逐题作答。
+  ///
+  /// 这一层只负责把"当前卷的题目 + 页图"交给确认组件；逐题作答画布是下一步，
+  /// 不在这里提前造第二套笔迹存储。
+  void _openAnswerSheet() {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    final RegionSet set = _regionSetOf();
+    if (handle == null || cache == null || set.isEmpty) {
+      _showReaderTip('题目还没切好，稍等一下再打开答题卡');
+      return;
+    }
+    unawaited(_openAnswerSheetFlow(handle, cache, set));
+  }
+
+  Future<void> _openAnswerSheetFlow(
+    ReaderHandle handle,
+    PageImageCache cache,
+    RegionSet set, {
+    String? initialQuestionId,
+  }) async {
+    final AnswerSheetPrepResult? result = await showAnswerSheetPrep(
+      context,
+      workbookId: widget.workbookId,
+      set: set,
+      pages: handle.pages,
+      cache: cache,
+    );
+    if (!mounted || result == null) {
+      return;
+    }
+    if (result.action == AnswerSheetPrepAction.adjust) {
+      // 和「题目区域」共用同一套原卷拖框，不在确认页重复造第二套编辑器。
+      setState(() {
+        _panelOpen = true;
+        _aiOpen = false;
+        _answerQuestionId = null;
+        _showAnswers = false;
+      });
+      final QuestionBundle? target = result.questionId == null
+          ? null
+          : _bundleById(set, result.questionId!);
+      if (target != null) {
+        _selectFromPanel(target);
+      }
+      _showReaderTip('在原卷拖动**题目框**调整切题；完成后可重新打开答题卡');
+      return;
+    }
+    final AnswerSheetResult? sheet = await showAnswerSheetPage(
+      context,
+      workbookId: widget.workbookId,
+      sessionId: handle.session.id,
+      set: set,
+      pages: handle.pages,
+      cache: cache,
+      handTool: _handTool,
+      initialQuestionId: initialQuestionId,
+    );
+    if (!mounted) {
+      return;
+    }
+    // 用户在答题卡里点了「重框」：回到原卷、选中这道题、进作答框编辑。
+    final String? adjustId = sheet?.questionId;
+    if (adjustId != null) {
+      _enterAdjustFor(adjustId);
+      return;
+    }
+    // 答题卡笔迹独立存储；回到题目面板时刷新一下"答题情况"里的统计。
+    final QuestionBundle? selected = _bundleById(set, _answerQuestionId ?? '');
+    if (selected != null) {
+      unawaited(_refreshAnswerInkCount(selected));
+    }
+    setState(() {});
+  }
+
+  /// 直接打开答题卡并定位到某题（跳过确认页）。
+  ///
+  /// 「答题情况 → 去写」用它：用户已经看着这道题的作答情况了，
+  /// 再让他过一遍"确认切题"没有意义，而且要准确落在这道题上。
+  void _openAnswerSheetAt(String questionId) {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    final RegionSet set = _regionSetOf();
+    if (handle == null || cache == null || set.isEmpty) {
+      _showReaderTip('题目还没切好，稍等一下再打开答题卡');
+      return;
+    }
+    unawaited(
+      _openAnswerSheetFlow(handle, cache, set, initialQuestionId: questionId),
+    );
+  }
+
+  /// 进入「重框」态：打开面板、选中该题、进入**切题框**编辑，并显示左上角浮窗。
+  ///
+  /// 2026-10-26 用户第 12 条：这里原来置 `_showAnswers = true`，
+  /// 于是拖的是**作答框**（紫色虚线），用户以为是改切题框——白改一场。
+  /// 现在 `_showAnswers = false`：拖的就是题目框本身。
+  void _enterAdjustFor(String questionId) {
+    final RegionSet set = _regionSetOf();
+    final QuestionBundle? bundle = _bundleById(set, questionId);
+    if (bundle == null) {
+      _showReaderTip('这道题已经不在了，可能刚重新切过题');
+      return;
+    }
+    setState(() {
+      _panelOpen = true;
+      // 编辑**题目框**（作答框的编辑由面板里的「答题情况」进入）。
+      _showAnswers = false;
+      _aiOpen = false;
+      _answerQuestionId = questionId;
+      _adjustTarget = bundle;
+    });
+    _selectFromPanel(bundle);
+    _showReaderTip('正在调整这道题的切题框；改完点左上角「完成」');
+  }
+
+  /// 浮窗「返回」：保存 + 等重算完，再带着这道题回答题卡。
+  Future<void> _backToAnswerSheet() async {
+    final QuestionBundle? target = _adjustTarget;
+    if (target == null) {
+      return;
+    }
+    await _saveEdits();
+    if (!mounted) {
+      return;
+    }
+    // 重算后 id 可能变：优先 id，其次 anchor（题号|页|y），都不中就用原 bundle。
+    final RegionSet set = _regionSetOf();
+    final QuestionBundle resolved =
+        _bundleById(set, target.question.id) ??
+        _bundleOf(set, target.anchorKey) ??
+        target;
+    setState(() => _adjustTarget = null);
+    _openAnswerSheetAt(resolved.question.id);
+  }
+
+  /// 浮窗「停留」：保存并收起浮窗，人留在原卷。
+  Future<void> _stayInReader() async {
+    await _saveEdits();
+    if (mounted) {
+      setState(() => _adjustTarget = null);
+    }
+  }
+
+  /// 手势按钮：在"书写模式"和"手势模式"之间切。
+  ///
+  /// - 手势模式（开）：手指只平移缩放，笔仍然书写（手掌放屏上不会画线）；
+  /// - 书写模式（关）：手指和笔都书写，双指平移缩放。
+  void _toggleHandTool() {
+    _updatePrefs(
+      (_prefs ?? ReaderPrefs.defaults).copyWith(handTool: !_handTool),
+    );
+  }
+
+  /// 点面板条目：跳到那一页并选中。
+  void _selectFromPanel(QuestionBundle bundle) {
+    if (bundle.slices.isEmpty) {
+      return;
+    }
+    if (_answerQuestionId != null) {
+      setState(() => _answerQuestionId = null);
+    }
+    final int page = bundle.slices.first.pageIndex;
+    _selectBundle(bundle);
+    if (page != _current) {
+      _jumpTo(page);
+    }
+  }
+
+  // ── 作答框 / 答题情况（2026-10-24）──────────────────────────────
+
+  static String _answerMarkKey(String questionId) => 'ans:$questionId';
+
+  static String? _answerIdOfKey(String key) {
+    return key.startsWith('ans:') ? key.substring(4) : null;
+  }
+
+  AnswerSheetEntry _answerEntryOf(QuestionBundle bundle) {
+    return _answerSheet?.entryFor(bundle) ??
+        AnswerSheetEntry.defaultFor(bundle);
+  }
+
+  QuestionBundle? _bundleById(RegionSet set, String questionId) {
+    for (final QuestionBundle bundle in set.questions) {
+      if (bundle.question.id == questionId) {
+        return bundle;
+      }
+    }
+    return null;
+  }
+
+  /// 展开/收起某道题的「答题情况」。
+  void _toggleAnswerFor(QuestionBundle bundle) {
+    if (bundle.question.level <= 1) {
+      return;
+    }
+    if (_answerQuestionId == bundle.question.id) {
+      setState(() => _answerQuestionId = null);
+      return;
+    }
+    _openAnswerFor(bundle);
+  }
+
+  /// 选中某道题的作答框：跳作答页、展开「答题情况」、把叠加层选中态切到作答框。
+  void _openAnswerFor(QuestionBundle bundle) {
+    if (bundle.slices.isEmpty || bundle.question.level <= 1) {
+      return;
+    }
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final int lastPage = math.max(0, (_handle?.pages.length ?? 1) - 1);
+    final int page = entry.pageIndex.clamp(0, lastPage);
+    setState(() {
+      _panelOpen = true;
+      _selected = (
+        label: bundle.question.label ?? '',
+        page: bundle.slices.first.pageIndex,
+        y: bundle.slices.first.rect.top,
+      );
+      _answerQuestionId = bundle.question.id;
+    });
+    if (page != _current) {
+      _jumpTo(page);
+    }
+    // 展开即自动识别（用户第 4 条：不要「识别」按钮，展开就是后台行为）。
+    // 先等答题卡笔迹统计回来，否则"有没有笔迹"判断不到。
+    unawaited(
+      _refreshAnswerInkCount(bundle)
+          .then((_) => _autoRecognizeIfNeeded(bundle)),
+    );
+  }
+
+  /// 一次展开只自动试一次（避免模型不可用时反复触发）。
+  final Set<String> _autoOcrTried = <String>{};
+
+  void _autoRecognizeIfNeeded(QuestionBundle bundle) {
+    if (!mounted) {
+      return;
+    }
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final InkDoc? ink = _answerInkDocs[bundle.question.id];
+    final bool hasInk =
+        (ink?.strokes.isNotEmpty ?? false) || _answerStrokeCountOf(entry) > 0;
+    if (!hasInk) {
+      return;
+    }
+    // 有文字且未过期 → 不用重跑。
+    if (entry.hasText && !entry.ocrStale) {
+      return;
+    }
+    if (!_autoOcrTried.add(bundle.question.id)) {
+      return;
+    }
+    unawaited(_recognizePanelAnswer(bundle, silent: true));
+  }
+
+  Future<void> _refreshAnswerInkCount(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    if (handle == null) {
+      return;
+    }
+    final InkPageKey key = InkPageKey(
+      answerInkSessionId(handle.session.id, bundle.question.id),
+      0,
+      workbookId: widget.workbookId,
+    );
+    try {
+      final InkDoc doc = await ref
+          .read(inkStoreForKeyProvider(key))
+          .load(key.sessionId, 0);
+      if (mounted) {
+        setState(() => _answerInkDocs[bundle.question.id] = doc);
+      }
+    } on Object {
+      // 统计失败不影响主流程。
+    }
+  }
+
+  /// 卷面上点中作答框。
+  void _selectAnswerById(RegionSet set, String questionId) {
+    final QuestionBundle? bundle = _bundleById(set, questionId);
+    if (bundle == null) {
+      return;
+    }
+    _openAnswerFor(bundle);
+  }
+
+  void _moveAnswer(String key, int page, double dx, double dy) {
+    final String? id = _answerIdOfKey(key);
+    if (id == null) {
+      return;
+    }
+    final RegionSet set = _regionSetOf();
+    final QuestionBundle? bundle = _bundleById(set, id);
+    final AnswerSheetController? controller = _answerSheet;
+    if (bundle == null || controller == null) {
+      return;
+    }
+    final AnswerSheetEntry entry = controller.entryFor(bundle);
+    final RegionRect rect = RegionRect.fromLTRB(
+      entry.rect.left + dx,
+      entry.rect.top + dy,
+      entry.rect.right + dx,
+      entry.rect.bottom + dy,
+    );
+    // 框变了：旧文字属于旧框，允许下次展开时重新自动识别。
+    _autoOcrTried.remove(id);
+    unawaited(controller.updateRect(bundle, pageIndex: page, rect: rect));
+  }
+
+  void _resizeAnswer(String key, int page, RegionRect rect) {
+    final String? id = _answerIdOfKey(key);
+    if (id == null) {
+      return;
+    }
+    final RegionSet set = _regionSetOf();
+    final QuestionBundle? bundle = _bundleById(set, id);
+    final AnswerSheetController? controller = _answerSheet;
+    if (bundle == null || controller == null) {
+      return;
+    }
+    // 同上：框变了就允许重新识别。
+    _autoOcrTried.remove(id);
+    unawaited(controller.updateRect(bundle, pageIndex: page, rect: rect));
+  }
+
+  /// 长按作答框：只给一个恢复整题的入口，避免和题目动作条混在一起。
+  Future<void> _showAnswerMenu(QuestionBundle bundle) async {
+    final bool? reset = await showModalBottomSheet<bool>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(ShqRadius.xl)),
+      ),
+      builder: (BuildContext context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            ListTile(
+              leading: const Icon(Icons.restart_alt),
+              title: const Text('恢复整题作答框'),
+              subtitle: const Text('回到覆盖整道题的默认区域；已有识别文字会保留'),
+              onTap: () => Navigator.of(context).pop(true),
+            ),
+            const SizedBox(height: ShqSpace.sm),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || reset != true) {
+      return;
+    }
+    await _answerSheet?.reset(bundle);
+  }
+
+  /// 当前页上落在这道题作答框里的笔数。`-1` = 不在当前页，未统计。
+  int _answerStrokeCountOf(AnswerSheetEntry entry) {
+    final ReaderHandle? handle = _handle;
+    if (handle == null || entry.pageIndex != _current) {
+      return -1;
+    }
+    final InkDoc doc = ref.watch(
+      inkDocProvider(
+        InkPageKey(
+          handle.session.id,
+          entry.pageIndex,
+          workbookId: widget.workbookId,
+        ),
+      ),
+    );
+    int count = 0;
+    for (final InkStroke stroke in doc.recognizableStrokes) {
+      if (stroke.points.isEmpty) {
+        continue;
+      }
+      final InkPoint first = stroke.points.first;
+      final InkRect bounds = stroke.bounds;
+      if (entry.rect.contains(first.x, first.y) ||
+          entry.rect.contains(bounds.centerX, bounds.centerY)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  Widget _buildAnswerPanel(QuestionBundle bundle, AnswerNote? answerNote) {
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final InkDoc? ink = _answerInkDocs[bundle.question.id];
+    final InkDoc? pageInk = _pageInkOf(entry);
+    final ReaderHandle? handle = _handle;
+    final WbPage? page =
+        handle != null &&
+            entry.pageIndex >= 0 &&
+            entry.pageIndex < handle.pages.length
+        ? handle.pages[entry.pageIndex]
+        : null;
+    return AnswerStatusCard(
+      entry: entry,
+      strokeCount: _answerStrokeCountOf(entry),
+      answerNote: answerNote,
+      onJump: () => _jumpTo(entry.pageIndex),
+      answerInkCount: ink?.strokeCount ?? -1,
+      answerInk: ink,
+      pageInk: pageInk,
+      pageWidth: page?.width ?? 0,
+      pageHeight: page?.height ?? 0,
+      recognizing: _recognizingAnswer,
+      onRegenerate: () => unawaited(_regenerateAnswer(bundle)),
+      onPreview: () => unawaited(_showAnswerPreview(bundle)),
+      onLongPress: () => _openAnswerImageActions(bundle),
+      onOpenSheet: () => _openAnswerSheetAt(bundle.question.id),
+      onRenderMerged: () => _renderMergedAnswer(bundle),
+      onAskAi: () => unawaited(_showAskAi(bundle)),
+    );
+  }
+
+  /// 当前页作答框里的笔画（只算当前页，别的页等切过去再算）。
+  ///
+  /// 没有答题卡笔迹时，答题情况卡显示的就是这一份——用户的口径是
+  /// "没有答题卡就当他是直接在卷面上写的"（2026-10-24 第二轮第 2 条）。
+  InkDoc? _pageInkOf(AnswerSheetEntry entry) {
+    final ReaderHandle? handle = _handle;
+    if (handle == null || entry.pageIndex != _current) {
+      return null;
+    }
+    final InkDoc doc = ref.watch(
+      inkDocProvider(
+        InkPageKey(
+          handle.session.id,
+          entry.pageIndex,
+          workbookId: widget.workbookId,
+        ),
+      ),
+    );
+    final List<InkStroke> strokes = _strokesInRect(doc, entry.rect);
+    if (strokes.isEmpty) {
+      return null;
+    }
+    return InkDoc(revision: doc.revision, strokes: strokes);
+  }
+
+  /// 点「作答」预览：有答题卡笔迹看答题卡大图，否则看页内笔迹。
+  Future<void> _showAnswerPreview(QuestionBundle bundle) async {
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final InkDoc? ink = _answerInkDocs[bundle.question.id];
+    if (ink != null && ink.strokes.isNotEmpty) {
+      await _showAnswerInk(bundle);
+      return;
+    }
+    final InkDoc? pageInk = _pageInkOf(entry);
+    final ReaderHandle? handle = _handle;
+    if (pageInk == null || handle == null) {
+      return;
+    }
+    final WbPage? page =
+        entry.pageIndex >= 0 && entry.pageIndex < handle.pages.length
+        ? handle.pages[entry.pageIndex]
+        : null;
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    await showImageViewer(
+      context,
+      title: '第 $label 题 · 作答手写',
+      aspectRatio: entry.rect.width / math.max(1, entry.rect.height),
+      actions: _answerImageActions(bundle),
+      builder: (BuildContext context, Size size) => AnswerInkPreview(
+        doc: pageInk,
+        region: entry.rect,
+        canvasWidth: page?.width ?? 1000,
+        canvasHeight: page?.height ?? 1000,
+      ),
+    );
+  }
+
+  /// 双击「答题情况」卡片时生成"题面 + 书写"的合并图。
+  ///
+  /// - 有答题卡笔迹：题面裁切 + 多张作答纵向拼接（`renderAnswerSheetWithQuestionPng`）；
+  /// - 只有页内笔迹：题面裁切 + 框内笔迹叠加（`renderAnswerCropPng`）。
+  ///
+  /// 这里的"总区域"就是题目区域本身（`slice.rect`）——题面和书写不重合时，
+  /// 以能覆盖两者的题目框为准，不做二次并集（并集会让题面露出半截更难看）。
+  Future<Uint8List?> _renderMergedAnswer(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    if (handle == null || cache == null || bundle.slices.isEmpty) {
+      return null;
+    }
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final List<InkDoc> docs = await _loadAnswerInkPages(bundle);
+    final bool hasSheet = docs.any((InkDoc d) => d.strokes.isNotEmpty);
+    if (hasSheet) {
+      final QuestionSlice slice = bundle.slices.first;
+      if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+        return null;
+      }
+      final AnswerPaper paper = (await _papersOf()).forQuestion(
+        bundle.question.id,
+      );
+      return renderAnswerSheetWithQuestionPng(
+        cache: cache,
+        page: handle.pages[slice.pageIndex],
+        rect: slice.rect,
+        docs: docs,
+        widthPt: paper.widthPt,
+        heightPt: paper.heightPt,
+      );
+    }
+    final int page = entry.pageIndex.clamp(0, handle.pages.length - 1);
+    await ref
+        .read(inkWriterProvider(widget.workbookId))
+        .flush(handle.session.id, page);
+    final InkDoc pageDoc = await ref
+        .read(inkStoreProvider(widget.workbookId))
+        .load(handle.session.id, page);
+    return renderAnswerCropPng(
+      cache: cache,
+      page: handle.pages[page],
+      rect: entry.rect,
+      doc: pageDoc,
+      darkPaper: false,
+    );
+  }
+
+  /// 作答图的长按照片动作：两种图各存一张（用户第 7 条的两个选项）。
+  List<ImageAction> _answerImageActions(QuestionBundle bundle) => <ImageAction>[
+    ImageAction(
+      label: '保存含题图',
+      subtitle: '题目 + 作答，一张合并图',
+      icon: Icons.image_outlined,
+      onSelected: () =>
+          _downloadAnswerImage(bundle, includeQuestion: true, silent: true),
+    ),
+    ImageAction(
+      label: '保存仅笔迹',
+      subtitle: '白底手写，不含题目',
+      icon: Icons.draw_outlined,
+      onSelected: () =>
+          _downloadAnswerImage(bundle, includeQuestion: false, silent: true),
+    ),
+  ];
+
+  void _openAnswerImageActions(QuestionBundle bundle) {
+    final Size screen = MediaQuery.sizeOf(context);
+    unawaited(
+      showImageActions(
+        context,
+        anchor: Offset(screen.width, screen.height * 0.34),
+        actions: _answerImageActions(bundle),
+      ),
+    );
+  }
+
+  /// 作答手写大图（弹窗）：白纸 + 笔迹，按答题卡画布比例显示。
+  Future<void> _showAnswerInk(QuestionBundle bundle) async {
+    final InkDoc doc = await _loadAnswerInk(bundle);
+    if (!mounted || doc.strokes.isEmpty) {
+      return;
+    }
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    await showImageViewer(
+      context,
+      title: '第 $label 题 · 作答手写',
+      aspectRatio: AnswerCanvas.aspect,
+      actions: _answerImageActions(bundle),
+      builder: (BuildContext context, Size size) => AnswerInkPreview(doc: doc),
+    );
+  }
+
+  /// 双击「答题情况」= 重新生成：现在重跑本地识别，接了模型后在这里加 AI 补答案。
+  Future<void> _regenerateAnswer(QuestionBundle bundle) async {
+    if (_recognizingAnswer) {
+      return;
+    }
+    await _recognizePanelAnswer(bundle, silent: false);
+  }
+
+  // ── 判题 / 改卷 / 多选（2026-10-24 用户第 9、10 条）──────────────
+
+  /// 参与判题的题：与答题卡同一口径——有小题目录时只判小题。
+  List<QuestionBundle> _gradableQuestions(RegionSet set) {
+    final List<QuestionBundle> all = <QuestionBundle>[
+      for (final QuestionBundle bundle in set.questions)
+        if (bundle.slices.isNotEmpty) bundle,
+    ];
+    final List<QuestionBundle> subs = <QuestionBundle>[
+      for (final QuestionBundle bundle in all)
+        if (bundle.question.level > 1) bundle,
+    ];
+    return subs.isEmpty ? all : subs;
+  }
+
+  /// 判一道题：有答案 + 有识别文本才可能判出对错，其余落 none/pending。
+  AnswerVerdict _judgeOne(QuestionBundle bundle, RegionSet set) {
+    final AnswerNote? note = set.answers.forQuestion(
+      ordinal: bundle.question.ordinal,
+      label: bundle.question.label,
+    );
+    if (note == null) {
+      return AnswerVerdict.none;
+    }
+    final AnswerVerdict? verdict = judgeObjective(
+      answer: _answerEntryOf(bundle).ocrText,
+      reference: note.text,
+    );
+    // null = 本地判不了（主观题/公式）→ 待判，等 AI。
+    return verdict ?? AnswerVerdict.pending;
+  }
+
+  /// 一键改卷：跑一遍全部小题，自动结论覆盖旧的自动结论，**手改的保留**。
+  Future<void> _gradeAll() async {
+    if (_grading) {
+      return;
+    }
+    final GradingController? controller = _grades;
+    final RegionSet set = _regionSetOf();
+    if (controller == null || set.isEmpty) {
+      return;
+    }
+    setState(() => _grading = true);
+    try {
+      final Map<String, AnswerVerdict> verdicts = <String, AnswerVerdict>{
+        for (final QuestionBundle bundle in _gradableQuestions(set))
+          bundle.question.id: _judgeOne(bundle, set),
+      };
+      await controller.applyAuto(verdicts);
+      if (!mounted) {
+        return;
+      }
+      final VerdictCounts counts = controller.data.value.countsOf(
+        verdicts.keys,
+      );
+      _showReaderTip(
+        '改卷完成：对 ${counts.correct} · 待判 ${counts.pending} · '
+        '错 ${counts.wrong} · 未判 ${counts.none}',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _grading = false);
+      }
+    }
+  }
+
+  /// 「AI 补答案」（2026-10-26 用户第 1 条）。
+  ///
+  /// 给**没有参考答案**的题补一份 AI 答案：题面图发给模型，它做一遍，
+  /// 答案写进 `layout/answers_ai.v1.json`（PDF 里的答案仍然优先）。
+  ///
+  /// 为什么要单独做一个动作：卷子里的答案常常只解析出一部分
+  /// （尤其是扫描件），剩下的题连"对答案"都无从谈起。
+  /// 补齐之后，判题与「问 AI」才有东西可对照。
+  Future<void> _fillAnswersWithAi() async {
+    if (_grading || _fillingAi || _batchAiRunning) {
+      return;
+    }
+    final RegionSet set = _regionSetOf();
+    final List<QuestionBundle> targets = <QuestionBundle>[
+      for (final QuestionBundle bundle in _gradableQuestions(set))
+        if (!_hasReferenceAnswer(bundle, set)) bundle,
+    ];
+    if (targets.isEmpty) {
+      _showReaderTip('这卷的题都已有答案了');
+      return;
+    }
+    final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
+    if (config.validationError() != null) {
+      _showReaderTip('先在「设置 → AI 分析」填端点与 Key');
+      return;
+    }
+    final AiService service = ref.read(aiServiceProvider(widget.workbookId));
+    setState(() {
+      _fillingAi = true;
+      _fillDone = 0;
+      _fillTotal = targets.length;
+    });
+    final LayoutStore store = ref.read(layoutStoreProvider);
+    AnswerSet next = AnswerSet.fromJson(
+      await store.readAiAnswers(widget.workbookId),
+    );
+    int filled = 0;
+    int skipped = 0;
+    try {
+      for (final QuestionBundle bundle in targets) {
+        if (!mounted) {
+          return;
+        }
+        try {
+          final AiSolution solution = await service.solve(
+            config: config,
+            payload: _aiPayloadOf(bundle),
+            attachments: await _aiAttachmentsOf(bundle, includeAnswer: false),
+          );
+          final String answer = solution.answer.trim();
+          if (answer.isEmpty) {
+            skipped++;
+          } else {
+            next = next.withNote(
+              AnswerNote(
+                label: _answerLabelOf(bundle),
+                text: answer,
+                source: 'ai',
+                pageIndex: bundle.slices.first.pageIndex,
+                ordinal: bundle.question.ordinal,
+              ),
+            );
+            filled++;
+          }
+        } on Object {
+          skipped++;
+        } finally {
+          if (mounted) {
+            setState(() => _fillDone++);
+          }
+        }
+      }
+      // 一次性落盘：避免每补一题就重画一次卷面。
+      if (filled > 0) {
+        await store.writeAiAnswers(widget.workbookId, next.toJson());
+        ref.invalidate(regionSetProvider(widget.workbookId));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _fillingAi = false;
+          _fillTotal = 0;
+        });
+        _showReaderTip(
+          '补答案完成：补了 $filled 道 · 跳过 $skipped 道（没题面或调用失败）',
+        );
+      }
+    }
+  }
+
+  /// 多选批量「AI 判」（2026-10-26 用户第 7 条）。
+  ///
+  /// 三步走一步都不能少：
+  /// 1. **缺答案的先补答案**（否则模型没有参考答案可比）；
+  /// 2. **判题**（写 `grading.v1.json`，不覆盖用户手改）；
+  /// 3. **写进该题的「问 AI」对话**——用户在那一题里能看到这次判了什么、
+  ///    为什么判成对/错/拿不准。
+  Future<void> _gradeSelectedWithAi(List<QuestionBundle> picked) async {
+    if (_batchAiRunning || _fillingAi) {
+      return;
+    }
+    if (picked.isEmpty) {
+      return;
+    }
+    final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
+    if (config.validationError() != null) {
+      _showReaderTip('先在「设置 → AI 分析」填端点与 Key');
+      return;
+    }
+    final AiService service = ref.read(aiServiceProvider(widget.workbookId));
+    final GradingController? controller = _grades;
+    final LayoutStore store = ref.read(layoutStoreProvider);
+    setState(() => _batchAiRunning = true);
+    int filled = 0;
+    int graded = 0;
+    int skipped = 0;
+    try {
+      // 1) 补答案（只补没有的）。
+      AnswerSet next = AnswerSet.fromJson(
+        await store.readAiAnswers(widget.workbookId),
+      );
+      for (final QuestionBundle bundle in picked) {
+        if (!mounted) {
+          return;
+        }
+        final RegionSet set = _regionSetOf();
+        if (_hasReferenceAnswer(bundle, set)) {
+          continue;
+        }
+        try {
+          final AiSolution solution = await service.solve(
+            config: config,
+            payload: _aiPayloadOf(bundle),
+            attachments: await _aiAttachmentsOf(bundle, includeAnswer: false),
+          );
+          final String answer = solution.answer.trim();
+          if (answer.isEmpty) {
+            continue;
+          }
+          next = next.withNote(
+            AnswerNote(
+              label: _answerLabelOf(bundle),
+              text: answer,
+              source: 'ai',
+              pageIndex: bundle.slices.first.pageIndex,
+              ordinal: bundle.question.ordinal,
+            ),
+          );
+          filled++;
+        } on Object {
+          // 单题失败不中断整批。
+        }
+      }
+      if (filled > 0) {
+        await store.writeAiAnswers(widget.workbookId, next.toJson());
+        ref.invalidate(regionSetProvider(widget.workbookId));
+      }
+
+      // 2) 逐题判 + 3) 写回对话。
+      for (final QuestionBundle bundle in picked) {
+        if (!mounted) {
+          return;
+        }
+        final AnswerSheetEntry entry = _answerEntryOf(bundle);
+        final List<AiImageAttachment> attachments = await _aiAttachmentsOf(
+          bundle,
+        );
+        final bool hasAnswer =
+            entry.ocrText.trim().isNotEmpty ||
+            attachments.any(
+              (AiImageAttachment item) => item.kind == AiImageKind.answer,
+            );
+        if (!hasAnswer) {
+          skipped++;
+          continue;
+        }
+        try {
+          final AiGrade grade = await service.grade(
+            config: config,
+            payload: _aiPayloadOf(bundle),
+            referenceAnswer: _referenceAnswerOf(bundle),
+            studentAnswerText: entry.ocrText,
+            attachments: attachments,
+          );
+          final bool applied = await controller?.applyAi(
+            bundle.question.id,
+            grade.verdict,
+            note: grade.reason,
+          ) ??
+              false;
+          graded++;
+          await _appendBatchAiTurns(
+            bundle,
+            grade: grade,
+            applied: applied,
+            referenceAnswer: _referenceAnswerOf(bundle),
+          );
+        } on Object {
+          skipped++;
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _batchAiRunning = false);
+        final String filledText = filled > 0 ? ' · 补答案 $filled 道' : '';
+        _showReaderTip(
+          'AI 判完成：判了 $graded 道$filledText'
+          '${skipped > 0 ? ' · 跳过 $skipped 道（没作答或调用失败）' : ''}',
+        );
+      }
+    }
+  }
+
+  /// 把这次批量判题的结论写进该题的「问 AI」对话。
+  ///
+  /// 用户在题目面板点「问 AI」时看到的就是这一段——所以这里要写全：
+  /// 问了什么、参考答案是多少、判成什么、为什么。
+  Future<void> _appendBatchAiTurns(
+    QuestionBundle bundle, {
+    required AiGrade grade,
+    required bool applied,
+    String? referenceAnswer,
+  }) async {
+    try {
+      final AiChatStore store = ref.read(aiChatStoreProvider(widget.workbookId));
+      final List<ChatTurn> turns = await store.load(
+        widget.workbookId,
+        bundle.question.id,
+      );
+      final int at = DateTime.now().millisecondsSinceEpoch;
+      await store.save(widget.workbookId, bundle.question.id, <ChatTurn>[
+        ...turns,
+        ChatTurn.user('批量 AI 判：帮我判一下这道作答。', at: at),
+        if (referenceAnswer != null && referenceAnswer.trim().isNotEmpty)
+          ChatTurn(
+            role: ChatRole.assistant,
+            text: '参考答案：\n$referenceAnswer',
+            at: at,
+            kind: ChatTurnKind.answer,
+            referenceAnswer: referenceAnswer,
+          ),
+        ChatTurn(
+          role: ChatRole.assistant,
+          text: grade.reason,
+          at: at,
+          kind: ChatTurnKind.verdict,
+          verdict: grade.verdict,
+          applied: applied,
+        ),
+      ]);
+    } on Object {
+      // 写对话失败不影响判题结果（判题已经落库了）。
+    }
+  }
+
+  /// 这道题有没有参考答案（PDF 的或 AI 补的）。
+  bool _hasReferenceAnswer(QuestionBundle bundle, RegionSet set) {
+    final AnswerNote? note = set.answers.forQuestion(
+      ordinal: bundle.question.ordinal,
+      label: bundle.question.label,
+    );
+    return note != null && note.text.trim().isNotEmpty;
+  }
+
+  /// 答案库里的题号口径（与 [_saveAiAnswer] 一致）。
+  String _answerLabelOf(QuestionBundle bundle) =>
+      bundle.question.label ?? '${bundle.question.ordinal}';
+
+  Future<void> _setVerdict(QuestionBundle bundle, AnswerVerdict verdict) async {
+    await _grades?.setManual(bundle.question.id, verdict);
+  }
+
+  VerdictCounts? _gradeCounts(RegionSet set) {
+    final GradingController? controller = _grades;
+    if (controller == null) {
+      return null;
+    }
+    return controller.data.value.countsOf(<String>[
+      for (final QuestionBundle bundle in _gradableQuestions(set))
+        bundle.question.id,
+    ]);
+  }
+
+  void _toggleMultiSelect() {
+    setState(() {
+      _multiSelecting = !_multiSelecting;
+      if (!_multiSelecting) {
+        _multiSelected.clear();
+      }
+    });
+  }
+
+  void _toggleSelect(QuestionBundle bundle) {
+    setState(() {
+      final String id = bundle.question.id;
+      if (!_multiSelected.add(id)) {
+        _multiSelected.remove(id);
+      }
+    });
+  }
+
+  /// 批量动作：收藏 / 对答案。
+  Future<void> _runBatch(RegionPanelBatch action) async {
+    final List<QuestionBundle> picked = <QuestionBundle>[
+      for (final QuestionBundle bundle in _regionSetOf().questions)
+        if (_multiSelected.contains(bundle.question.id)) bundle,
+    ];
+    if (picked.isEmpty) {
+      return;
+    }
+    switch (action) {
+      case RegionPanelBatch.favorite:
+        final FavoriteStore store = ref.read(favoriteStoreProvider);
+        int added = 0;
+        for (final QuestionBundle bundle in picked) {
+          if (await store.idOfQuestion(bundle.question.id) != null) {
+            continue;
+          }
+          final FavoriteCapture? capture = await _buildFavoriteCapture(bundle);
+          if (capture == null) {
+            continue;
+          }
+          try {
+            await store.capture(capture);
+            added++;
+          } on Object {
+            // 单题失败不中断整批。
+          }
+        }
+        if (mounted) {
+          ref.invalidate(favoritesProvider);
+          _showReaderTip('已收藏 $added 道题');
+        }
+      case RegionPanelBatch.aiGrade:
+        // 2026-10-26 用户第 7 条：批量「对答案」换成「AI 判」——
+        // 补答案 → 判题 → 把结论写进该题的「问 AI」对话。
+        await _gradeSelectedWithAi(picked);
+    }
+  }
+
+  /// 把虚线作答框**提升为一道题目**（用户第 10 条）。
+  ///
+  /// 走的是同一个覆盖层（`AddQuestionCorrection`），所以可撤销、重切题也保留；
+  /// 题号给一个"最大数字 +1"的默认值，用户可以在列表里改。
+  Future<void> _promoteAnswerToQuestion(
+    RegionSet set,
+    String questionId,
+  ) async {
+    final QuestionBundle? bundle = _bundleById(set, questionId);
+    if (bundle == null) {
+      return;
+    }
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    if (entry.rect.isEmpty) {
+      return;
+    }
+    await ref
+        .read(regionEditProvider(widget.workbookId))
+        .run(
+          AddQuestionCorrection(
+            id: Ulid.next(),
+            key: '',
+            label: _nextQuestionLabel(set),
+            rect: entry.rect,
+            page: entry.pageIndex,
+          ),
+        );
+    if (mounted) {
+      _showReaderTip('已把这一块加为题目，可在列表里改题号');
+    }
+  }
+
+  /// 下一个默认题号：现有最大数字 +1（扫描件认不出题号时也给一个能用的值）。
+  String _nextQuestionLabel(RegionSet set) {
+    int max = 0;
+    for (final QuestionBundle bundle in set.questions) {
+      final Match? match = RegExp(r'\d+')
+          .firstMatch(bundle.question.label ?? '');
+      final int? number = match == null ? null : int.tryParse(match.group(0)!);
+      if (number != null && number > max) {
+        max = number;
+      }
+    }
+    return '${max + 1}.';
+  }
+
+  /// 保存题目图片。返回一句给用户看的结果（由长按浮窗就地显示）。
+  ///
+  /// 优先走原生 MediaStore 存进相册（Android 10+ 不需要存储权限）；
+  /// 原生通道不可用时退回应用导出目录，至少不丢图。
+  Future<String?> _saveQuestionImage(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    if (handle == null || cache == null || bundle.slices.isEmpty) {
+      return null;
+    }
+    final QuestionSlice slice = bundle.slices.first;
+    if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+      return null;
+    }
+    try {
+      final Uint8List? bytes = await renderAnswerCropPng(
+        cache: cache,
+        page: handle.pages[slice.pageIndex],
+        rect: slice.rect,
+        doc: InkDoc.empty,
+      );
+      if (bytes == null) {
+        return '题目图片生成失败';
+      }
+      final String label =
+          (bundle.question.label ?? '${bundle.question.ordinal}').replaceAll(
+            RegExp(r'[^\w\u4e00-\u9fa5-]'),
+            '_',
+          );
+      final String name =
+          'shuaqi_${label}_${bundle.question.id.substring(0, 6)}.png';
+      try {
+        await _mediaChannel.invokeMethod<String>('saveImage', <String, Object>{
+          'bytes': bytes,
+          'name': name,
+        });
+        return '已保存到相册';
+      } on PlatformException {
+        // 通道不可用/被拒绝：落应用导出目录兜底。
+      } on MissingPluginException {
+        // 同上。
+      }
+      final String path = VaultPaths.exportQuestionImage(
+        widget.workbookId,
+        bundle.question.id,
+      );
+      await ref
+          .read(appDependenciesProvider)
+          .vault
+          .writeAtomically(path, bytes);
+      return '已保存到应用导出目录';
+    } on Object {
+      return '题目图片保存失败';
+    }
+  }
+
+  /// 题面图片的动作（长按侧边浮窗用）。B 批：题目原图只有"存相册"一件事。
+  List<ImageAction> _questionImageActions(QuestionBundle bundle) =>
+      <ImageAction>[
+        ImageAction(
+          label: '保存到相册',
+          subtitle: '题目原图，适合发给老师或 AI',
+          icon: Icons.download_outlined,
+          onSelected: () => _saveQuestionImage(bundle),
+        ),
+      ];
+
+  /// 打开题面大图（2026-10-24 用户第 2 条：预览必须单独弹窗、比例真实）。
+  ///
+  /// 图片按**整题真实宽高比**显示：长题限高并居中，极宽的题占满横向；
+  /// 弹窗内可双指放大拖动，再点一下回到面板原尺寸。
+  Future<void> _showQuestionImage(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    if (handle == null || cache == null || bundle.slices.isEmpty) {
+      return;
+    }
+    final QuestionSlice slice = bundle.slices.first;
+    if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+      return;
+    }
+    final WbPage page = handle.pages[slice.pageIndex];
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    await showImageViewer(
+      context,
+      title: '第 ${slice.pageIndex + 1} 页 · 第 $label 题',
+      aspectRatio: slice.rect.width / math.max(1, slice.rect.height),
+      actions: _questionImageActions(bundle),
+      builder: (BuildContext context, Size size) => QuestionThumb(
+        cache: cache,
+        page: page,
+        rect: slice.rect,
+        width: size.width,
+        height: size.height,
+        paperColor: ShqPaper.base,
+      ),
+    );
+  }
+
+  /// 面板里长按题面预览：贴着图片右侧出浮窗（不再直接保存）。
+  void _openQuestionImageActions(QuestionBundle bundle) {
+    final Size screen = MediaQuery.sizeOf(context);
+    unawaited(
+      showImageActions(
+        context,
+        anchor: Offset(screen.width, screen.height * 0.42),
+        actions: _questionImageActions(bundle),
+      ),
+    );
+  }
+
+  void _toggleShowAnswers(bool value) {
+    setState(() => _showAnswers = value);
+  }
+
+  /// 面板「保存修改」：把切题覆盖层、作答框、手动顺序和笔迹一起落盘。
+  ///
+  /// 这些改动平时都有自动保存；这个按钮给用户一个**确定的提交点**，
+  /// 也是"保存切题修改"这个需求最直接的落点。
+  Future<void> _saveEdits() async {
+    if (_savingEdits) {
+      return;
+    }
+    setState(() => _savingEdits = true);
+    try {
+      final Future<void> Function()? flushRegions = _flushRegions;
+      if (flushRegions != null) {
+        await flushRegions();
+      }
+      final AnswerSheetController? answers = _answerSheet;
+      if (answers != null) {
+        final Set<String> keep = <String>{
+          for (final QuestionBundle bundle in _regionSetOf().questions)
+            bundle.question.id,
+        };
+        await answers.prune(keep);
+        await answers.flush();
+      }
+      final QuestionOrderController? order = _questionOrder;
+      if (order != null) {
+        final Set<String> keep = <String>{
+          for (final QuestionBundle bundle in _regionSetOf().questions)
+            bundle.question.id,
+        };
+        await order.prune(keep);
+        await order.flush();
+      }
+      // 判题结果同样是用户产物：删过题之后把幽灵记录清掉并落盘。
+      final GradingController? grades = _grades;
+      if (grades != null) {
+        await grades.prune(<String>{
+          for (final QuestionBundle bundle in _regionSetOf().questions)
+            bundle.question.id,
+        });
+        await grades.flush();
+      }
+      final Future<void> Function()? flushAll = _flushAllInk;
+      if (flushAll != null) {
+        await flushAll();
+      }
+      if (mounted) {
+        // 保存 = 本次"改了哪几道题"的提示使命结束（面板据此把提示收掉）。
+        setState(() {
+          _saveTick += 1;
+          _lastSavedAt = DateTime.now();
+        });
+        _showReaderTip('修改已保存');
+      }
+    } on Object {
+      if (mounted) {
+        _showReaderTip('保存失败，请稍后再试');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _savingEdits = false);
+      }
+    }
+  }
+
+  /// 下载答题信息：含题目合并图 / 仅白底笔迹图。
+  ///
+  /// 不传 [includeQuestion] 时先弹选择；传了就按选择直接导出。
+  /// **返回一句给用户看的结果**（长按浮窗就地显示），不再自己弹提示——
+  /// 同一件事在两个地方各弹一次提示会互相打架（2026-10-24）。
+  Future<String?> _downloadAnswerImage(
+    QuestionBundle bundle, {
+    bool? includeQuestion,
+    bool silent = false,
+  }) async {
+    if (includeQuestion == null) {
+      final bool? picked = await showModalBottomSheet<bool>(
+        context: context,
+        showDragHandle: true,
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+        builder: (BuildContext context) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.image_outlined),
+                title: const Text('含题目：题目 + 作答'),
+                subtitle: const Text('一张合并图，适合发给 AI / 老师'),
+                onTap: () => Navigator.of(context).pop(true),
+              ),
+              ListTile(
+                leading: const Icon(Icons.draw_outlined),
+                title: const Text('仅笔迹：白底手写'),
+                subtitle: const Text('不含题目，适合判题 / 归档'),
+                onTap: () => Navigator.of(context).pop(false),
+              ),
+              const SizedBox(height: ShqSpace.sm),
+            ],
+          ),
+        ),
+      );
+      if (picked == null || !mounted) {
+        return null;
+      }
+      includeQuestion = picked;
+    }
+
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    final AnswerSheetController? controller = _answerSheet;
+    if (handle == null || cache == null || controller == null) {
+      return null;
+    }
+    final AnswerSheetEntry entry = controller.entryFor(bundle);
+    if (entry.rect.isEmpty || bundle.slices.isEmpty) {
+      return null;
+    }
+    if (!silent && _savingAnswerCrop) {
+      return null;
+    }
+    if (!silent) {
+      setState(() => _savingAnswerCrop = true);
+    }
+    try {
+      final List<InkDoc> sheetDocs = await _loadAnswerInkPages(bundle);
+      final AnswerPaper paper = (await _papersOf()).forQuestion(
+        bundle.question.id,
+      );
+      final int pageIndex = entry.pageIndex.clamp(0, handle.pages.length - 1);
+      await ref
+          .read(inkWriterProvider(widget.workbookId))
+          .flush(handle.session.id, pageIndex);
+      final InkDoc pageDoc = await ref
+          .read(inkStoreProvider(widget.workbookId))
+          .load(handle.session.id, pageIndex);
+      final bool hasSheetInk = sheetDocs.any(
+        (InkDoc d) => d.strokes.isNotEmpty,
+      );
+      final List<InkStroke> pageStrokes = _strokesInRect(pageDoc, entry.rect);
+      final bool hasPageInk = pageStrokes.isNotEmpty;
+      if (!hasSheetInk && !hasPageInk) {
+        return '还没有手写内容';
+      }
+
+      Uint8List? bytes;
+      String path;
+      if (hasSheetInk) {
+        if (includeQuestion) {
+          final QuestionSlice slice = bundle.slices.first;
+          if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+            return '题目页无效，无法合成含题图';
+          }
+          bytes = await renderAnswerSheetWithQuestionPng(
+            cache: cache,
+            page: handle.pages[slice.pageIndex],
+            rect: slice.rect,
+            docs: sheetDocs,
+            widthPt: paper.widthPt,
+            heightPt: paper.heightPt,
+          );
+          path = VaultPaths.answerSheetExport(
+            widget.workbookId,
+            bundle.question.id,
+          );
+        } else {
+          bytes = await renderAnswerSheetInkPng(
+            docs: sheetDocs,
+            widthPt: paper.widthPt,
+            heightPt: paper.heightPt,
+          );
+          path = VaultPaths.answerInkExport(
+            widget.workbookId,
+            bundle.question.id,
+          );
+        }
+      } else {
+        if (includeQuestion) {
+          bytes = await renderAnswerCropPng(
+            cache: cache,
+            page: handle.pages[pageIndex],
+            rect: entry.rect,
+            doc: pageDoc,
+            darkPaper: false,
+          );
+          path = VaultPaths.answerCrop(widget.workbookId, bundle.question.id);
+        } else {
+          bytes = await renderPageInkOnlyPng(rect: entry.rect, doc: pageDoc);
+          path = VaultPaths.answerInkExport(
+            widget.workbookId,
+            bundle.question.id,
+          );
+        }
+      }
+      if (bytes == null || bytes.isEmpty) {
+        return '答题图片生成失败';
+      }
+      await ref
+          .read(appDependenciesProvider)
+          .vault
+          .writeAtomically(path, bytes);
+      await controller.updateCrop(bundle, cropPath: path);
+      if (!mounted) {
+        return null;
+      }
+      final String label =
+          (bundle.question.label ?? '${bundle.question.ordinal}').replaceAll(
+            RegExp(r'[^\w\u4e00-\u9fa5-]'),
+            '_',
+          );
+      final String suffix = includeQuestion ? 'with_question' : 'ink';
+      final String name =
+          'shuaqi_answer_${label}_${bundle.question.id.substring(0, 6)}_$suffix.png';
+      try {
+        await _mediaChannel.invokeMethod<String>('saveImage', <String, Object>{
+          'bytes': bytes,
+          'name': name,
+        });
+        return includeQuestion ? '已保存含题图到相册' : '已保存仅笔迹图到相册';
+      } on Object {
+        // 原生通道不可用：图已经写进 Vault，不算失败。
+        return includeQuestion ? '已保存含题图（应用目录）' : '已保存仅笔迹图（应用目录）';
+      }
+    } on Object {
+      return '答题图片保存失败';
+    } finally {
+      if (mounted && !silent) {
+        setState(() => _savingAnswerCrop = false);
+      }
+    }
+  }
+
+  Future<InkDoc> _loadAnswerInk(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    if (handle == null) {
+      return InkDoc.empty;
+    }
+    final InkPageKey key = InkPageKey(
+      answerInkSessionId(handle.session.id, bundle.question.id),
+      0,
+      workbookId: widget.workbookId,
+    );
+    try {
+      await ref.read(inkEditProvider(key).notifier).flushSave();
+      return await ref.read(inkStoreForKeyProvider(key)).load(key.sessionId, 0);
+    } on Object {
+      return InkDoc.empty;
+    }
+  }
+
+  /// 这一题的全部纸张配置（进程内缓存一次，换配置由答题卡页写盘后重进生效）。
+  AnswerPaperData? _answerPapers;
+
+  Future<AnswerPaperData> _papersOf() async {
+    final AnswerPaperData? cached = _answerPapers;
+    if (cached != null) {
+      return cached;
+    }
+    final AnswerPaperData data = await AnswerPaperStore(
+      ref.read(layoutStoreProvider),
+    ).load(widget.workbookId);
+    _answerPapers = data;
+    return data;
+  }
+
+  /// 这一题**所有张**的笔迹（按顺序）。多张作答要一起识别/导出。
+  Future<List<InkDoc>> _loadAnswerInkPages(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    if (handle == null) {
+      return const <InkDoc>[];
+    }
+    final AnswerPaperData papers = await _papersOf();
+    final int pages = papers.forQuestion(bundle.question.id).pages;
+    final String sid = answerInkSessionId(
+      handle.session.id,
+      bundle.question.id,
+    );
+    final List<InkDoc> docs = <InkDoc>[];
+    for (int i = 0; i < pages; i++) {
+      final InkPageKey key = InkPageKey(sid, i, workbookId: widget.workbookId);
+      try {
+        await ref.read(inkEditProvider(key).notifier).flushSave();
+        docs.add(
+          await ref.read(inkStoreForKeyProvider(key)).load(key.sessionId, i),
+        );
+      } on Object {
+        docs.add(InkDoc.empty);
+      }
+    }
+    return docs;
+  }
+
+  List<InkStroke> _strokesInRect(InkDoc doc, RegionRect rect) {
+    return <InkStroke>[
+      for (final InkStroke stroke in doc.strokes)
+        if (stroke.points.isNotEmpty &&
+            (rect.contains(stroke.points.first.x, stroke.points.first.y) ||
+                rect.contains(stroke.bounds.centerX, stroke.bounds.centerY)))
+          stroke,
+    ];
+  }
+
+  /// 「答题情况」卡里的 OCR：优先答题卡，其次 PDF 页内该作答框的笔画。
+  ///
+  /// [silent] = 自动触发（展开卡片时）：不弹任何提示，结果只落在卡片文字上；
+  /// 用户主动双击重生成时走非 silent，过程与结果都给一句。
+  Future<void> _recognizePanelAnswer(
+    QuestionBundle bundle, {
+    bool silent = false,
+  }) async {
+    if (_recognizingAnswer) {
+      return;
+    }
+    final ReaderHandle? handle = _handle;
+    final AnswerSheetController? controller = _answerSheet;
+    if (handle == null || controller == null) {
+      return;
+    }
+    final AnswerSheetEntry entry = controller.entryFor(bundle);
+    setState(() => _recognizingAnswer = true);
+    if (!silent) {
+      _showReaderTip('正在识别…首次使用会下载本地模型');
+    }
+    try {
+      // 多张纸：逐张识别，按顺序拼接成这一题的作答文本。
+      final List<InkDoc> sheetDocs = await _loadAnswerInkPages(bundle);
+      final List<InkDoc> targets = <InkDoc>[
+        for (final InkDoc doc in sheetDocs)
+          if (doc.strokes.isNotEmpty) doc,
+      ];
+      if (targets.isEmpty) {
+        // 没有答题卡笔迹：看 PDF 页内作答框里的笔画。
+        final int page = entry.pageIndex.clamp(0, handle.pages.length - 1);
+        await ref
+            .read(inkWriterProvider(widget.workbookId))
+            .flush(handle.session.id, page);
+        final InkDoc pageDoc = await ref
+            .read(inkStoreProvider(widget.workbookId))
+            .load(handle.session.id, page);
+        final List<InkStroke> pageStrokes = _strokesInRect(pageDoc, entry.rect);
+        if (pageStrokes.isNotEmpty) {
+          targets.add(InkDoc(revision: 0, strokes: pageStrokes));
+        }
+      }
+      if (targets.isEmpty) {
+        if (!silent) {
+          _showReaderTip('这道题还没有手写内容');
+        }
+        return;
+      }
+      final MlKitInkEngine engine = _panelOcr ??= MlKitInkEngine();
+      final StringBuffer buffer = StringBuffer();
+      double confidenceSum = 0;
+      int confidenceCount = 0;
+      for (final InkDoc doc in targets) {
+        final OcrOutput output = await engine.recognizeStrokes(
+          doc.strokes,
+          revision: 0,
+        );
+        if (output.text.trim().isEmpty) {
+          continue;
+        }
+        if (buffer.isNotEmpty) {
+          buffer.writeln();
+        }
+        buffer.write(output.text);
+        confidenceSum += output.confidence;
+        confidenceCount += 1;
+      }
+      if (!mounted) {
+        return;
+      }
+      final String text = buffer.toString();
+      if (text.trim().isEmpty) {
+        if (!silent) {
+          _showReaderTip('未识别出文字；公式/符号可先保留原图');
+        }
+        return;
+      }
+      final double confidence = confidenceCount == 0
+          ? 0
+          : confidenceSum / confidenceCount;
+      await controller.updateOcr(
+        bundle,
+        text: text,
+        confidence: confidence,
+        engine: engine.name,
+      );
+      if (mounted && !silent) {
+        final String preview = text.replaceAll('\n', ' ');
+        _showReaderTip(
+          '识别完成：${preview.length > 28 ? preview.substring(0, 28) : preview}',
+        );
+      }
+    } on Object {
+      if (mounted && !silent) {
+        _showReaderTip('本地 OCR 不可用');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _recognizingAnswer = false);
+      }
+    }
+  }
+
+  /// 按 anchor key 找题（找不到返回 null）。
+  QuestionBundle? _bundleOf(RegionSet set, String key) {
+    for (final QuestionBundle bundle in set.questions) {
+      if (bundle.anchorKey == key) {
+        return bundle;
+      }
+    }
+    return null;
+  }
+
+  /// 上一道"有区域"的题 = 合并目标（规格：保留先出现者）。
+  QuestionBundle? _previousOf(RegionSet set, QuestionBundle bundle) {
+    final int index = set.questions.indexWhere(
+      (QuestionBundle item) => item.anchorKey == bundle.anchorKey,
+    );
+    if (index <= 0) {
+      return null;
+    }
+    for (int i = index - 1; i >= 0; i--) {
+      if (set.questions[i].slices.isNotEmpty) {
+        return set.questions[i];
+      }
+    }
+    return null;
+  }
+
+  /// 这道题此刻能用哪些动作。
+  ///
+  /// 不可用的动作**灰掉而不是藏起来**：用户看到"并入上题"是灰的，会知道
+  /// "这已经是第一题"，而不是以为这个功能不存在。
+  Set<RegionAction> _actionsFor(
+    QuestionBundle bundle,
+    RegionSet set,
+    ReaderHandle handle,
+  ) {
+    // 2026-10-26 用户第 18 条：**锁定后只保留改题号**。
+    // 锁定原来的语义只是"重新切题不覆盖它"，用户以为锁了就是"框不能动"；
+    // 现在门禁做实：拖框 / 切开 / 并入 / 跨页 / 加题 / 删除全部禁用，
+    // 想改框必须先解锁。
+    if (bundle.locked) {
+      return allowedActionsWhenLocked();
+    }
+    final Set<RegionAction> out = <RegionAction>{
+      RegionAction.split,
+      RegionAction.lock,
+      RegionAction.rename,
+      RegionAction.delete,
+      // 2026-10-24 用户第 10 条：题目框上也能"加题"——
+      // 切题把两道题并成一条时，从中间加一道回去比"切开"更直观。
+      RegionAction.addQuestion,
+    };
+    if (_previousOf(set, bundle) != null) {
+      out.add(RegionAction.merge);
+    }
+    if (bundle.slices.isNotEmpty &&
+        bundle.slices.last.pageIndex < handle.pages.length - 1) {
+      out.add(RegionAction.extend);
+    }
+    return out;
+  }
+
+  /// 执行一个框操作。三个入口（贴框浮动条 / 面板条目 / 长按菜单）共用这一条路径。
+  Future<void> _applyAction(
+    QuestionBundle bundle,
+    RegionAction action,
+    ReaderHandle handle,
+    RegionSet set,
+  ) async {
+    final RegionEditController edit = ref.read(
+      regionEditProvider(widget.workbookId),
+    );
+    final String key = bundle.anchorKey;
+    switch (action) {
+      case RegionAction.addQuestion:
+        // 在本题下方插入一道新题（区域取本题的最后一段，用户随后拖框即可）。
+        final QuestionSlice base = bundle.slices.last;
+        await edit.run(
+          AddQuestionCorrection(
+            id: Ulid.next(),
+            key: '',
+            label: _nextQuestionLabel(set),
+            rect: base.rect,
+            page: base.pageIndex,
+          ),
+        );
+        // 灰色虚线框 = 切题把它当成"大题容器"（level 1）。用户在它上面点「加题」，
+        // 意思就是"这一块其实是一道题"——所以把原来那个容器框一起收掉，
+        // 否则新题与虚线框叠在原处（用户 2026-10-25 第 4 条）。
+        // 只删这个容器本身；它下面的小题不受影响（DeleteCorrection 只标记自己）。
+        if (bundle.question.level == 1) {
+          await edit.run(
+            DeleteCorrection(id: Ulid.next(), key: key),
+          );
+          if (mounted) {
+            _showReaderTip('已把这一块加为题目，原来的虚线框已去掉');
+          }
+        }
+      case RegionAction.split:
+        final QuestionSlice slice = bundle.slices.firstWhere(
+          (QuestionSlice s) => s.pageIndex == _current,
+          orElse: () => bundle.slices.first,
+        );
+        await edit.run(
+          SplitCorrection(
+            id: Ulid.next(),
+            key: key,
+            page: slice.pageIndex,
+            atY: slice.rect.centerY,
+          ),
+        );
+      case RegionAction.merge:
+        final QuestionBundle? previous = _previousOf(set, bundle);
+        if (previous == null) {
+          return;
+        }
+        await edit.run(
+          MergeCorrection(
+            id: Ulid.next(),
+            key: previous.anchorKey,
+            fromKey: key,
+          ),
+        );
+        _selectBundle(previous);
+      case RegionAction.extend:
+        final int nextPage = bundle.slices.last.pageIndex + 1;
+        if (nextPage >= handle.pages.length) {
+          return;
+        }
+        final WbPage page = handle.pages[nextPage];
+        final RegionRect last = bundle.slices.last.rect;
+        await edit.run(
+          AddSliceCorrection(
+            id: Ulid.next(),
+            key: key,
+            page: nextPage,
+            rect: RegionRect.fromLTRB(
+              last.left,
+              page.height * 0.06,
+              last.right,
+              page.height * 0.45,
+            ),
+          ),
+        );
+      case RegionAction.lock:
+        await edit.run(
+          LockCorrection(id: Ulid.next(), key: key, value: !bundle.locked),
+        );
+      case RegionAction.rename:
+        await _renameRegion(bundle);
+      case RegionAction.delete:
+        await edit.run(DeleteCorrection(id: Ulid.next(), key: key));
+        if (mounted) {
+          setState(() => _selected = null);
+        }
+    }
+  }
+
+  /// 改题号（浮动条点题号 / 面板条目 / 长按菜单共用）。
+  ///
+  /// 为什么必须有：扫描件与版面切块**认不出数字**，标签只是序号。用户手填一个
+  /// "12."，这一题在第 4 周喂给 AI 时才有真正的题号，面板上也能一眼对上卷面。
+  Future<void> _renameRegion(QuestionBundle bundle) async {
+    final TextEditingController controller = TextEditingController(
+      text: bundle.question.label ?? '',
+    );
+    final String? next = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('改题号'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 12,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(
+            hintText: '例如 12. / （3） / 一、',
+            isDense: true,
+          ),
+          onSubmitted: (String value) => Navigator.of(context).pop(value),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    final String? label = next?.trim();
+    if (!mounted || label == null || label.isEmpty) {
+      return;
+    }
+    if (label == (bundle.question.label ?? '')) {
+      return;
+    }
+    await ref
+        .read(regionEditProvider(widget.workbookId))
+        .run(
+          RenameCorrection(
+            id: Ulid.next(),
+            key: bundle.anchorKey,
+            label: label,
+          ),
+        );
+  }
+
+  /// 长按框体弹出的菜单。与浮动条/面板同一批动作，只是多一行解释文案。
+  Future<void> _showRegionMenu(String key, ReaderHandle handle) async {
+    final RegionSet set = _regionSetOf();
+    final QuestionBundle? target = _bundleOf(set, key);
+    if (target == null || target.slices.isEmpty) {
+      return;
+    }
+    final QuestionBundle bundle = target;
+    _selectBundle(bundle);
+    final QuestionBundle? previous = _previousOf(set, bundle);
+    final Set<RegionAction> enabled = _actionsFor(bundle, set, handle);
+    final String? picked = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      // 主题的 bottom sheet 背景是透明的（给自绘容器用）；这里只有 ListTile，
+      // 不给实底会把下面的卷面透出来。
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(ShqRadius.xl)),
+      ),
+      builder: (BuildContext context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            for (final RegionAction action in RegionAction.values)
+              ListTile(
+                leading: Icon(
+                  regionActionIcon(action, locked: bundle.locked),
+                  color: action.destructive
+                      ? Theme.of(context).colorScheme.error
+                      : null,
+                ),
+                title: Text(
+                  action == RegionAction.lock && bundle.locked
+                      ? '解锁'
+                      : action.menuLabel,
+                  style: action.destructive
+                      ? TextStyle(color: Theme.of(context).colorScheme.error)
+                      : null,
+                ),
+                subtitle: Text(_menuSubtitle(action, bundle, previous, handle)),
+                enabled: enabled.contains(action),
+                onTap: () => Navigator.of(context).pop(action.name),
+              ),
+            const SizedBox(height: ShqSpace.sm),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || picked == null) {
+      return;
+    }
+    for (final RegionAction action in RegionAction.values) {
+      if (action.name == picked) {
+        await _applyAction(bundle, action, handle, set);
+        return;
+      }
+    }
+  }
+
+  static String _menuSubtitle(
+    RegionAction action,
+    QuestionBundle bundle,
+    QuestionBundle? previous,
+    ReaderHandle handle,
+  ) => switch (action) {
+    RegionAction.split => '从框的中间切成上下两道题',
+    RegionAction.merge =>
+      previous == null
+          ? '已经是第一道题'
+          : '并入 ${previous.question.label ?? previous.question.ordinal}',
+    RegionAction.extend =>
+      bundle.slices.last.pageIndex < handle.pages.length - 1
+          ? '跨页题：在下一页补一段'
+          : '已经是最后一页',
+    RegionAction.lock => bundle.locked ? '解锁后重新切题会覆盖它' : '锁定后重新切题不会覆盖它',
+    RegionAction.rename => bundle.question.label ?? '扫描件认不出题号，可以手填',
+    RegionAction.delete => '这一块不再算作题目（可撤销）',
+    RegionAction.addQuestion => '在本题下方补一道题，再拖框定位',
+  };
+
+  /// 在当前页空白处补一个框（面板「新增框」）。
+  Future<void> _addRegion(ReaderHandle handle) async {
+    if (_current >= handle.pages.length) {
+      return;
+    }
+    final WbPage page = handle.pages[_current];
+    final RegionRect rect = RegionRect.fromLTRB(
+      page.width * 0.08,
+      page.height * 0.28,
+      page.width * 0.92,
+      page.height * 0.28 + 120,
+    );
+    final String key = anchorKey('手画', _current, rect.top);
+    await ref
+        .read(regionEditProvider(widget.workbookId))
+        .run(
+          AddQuestionCorrection(
+            id: Ulid.next(),
+            key: key,
+            label: '手画',
+            page: _current,
+            rect: rect,
+          ),
+        );
+    if (mounted) {
+      _selected = (label: '手画', page: _current, y: rect.top);
+    }
+  }
+
+  /// 把锚点解析成当前数据里的 anchor key（数据一刷新就是新的 key）。
+  String? _selectedKeyOf(RegionSet set) {
+    final ({String label, int page, double y})? anchor = _selected;
+    if (anchor == null) {
+      return null;
+    }
+    QuestionBundle? best;
+    double bestDistance = double.infinity;
+    for (final QuestionBundle bundle in set.questions) {
+      if (bundle.question.label != anchor.label || bundle.slices.isEmpty) {
+        continue;
+      }
+      if (bundle.slices.first.pageIndex != anchor.page) {
+        continue;
+      }
+      final double distance = (bundle.slices.first.rect.top - anchor.y).abs();
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = bundle;
+      }
+    }
+    return best?.anchorKey;
+  }
+
+  /// 选中题的 PDF 原图裁切预览：公式按矢量原样显示，不经过文本层。
+  ///
+  /// 文本层的公式是碎片 + 私有区码位，纯文本只能做到"可读的近似"；
+  /// 预览图给用户一个"这一题在卷面上到底长什么样"的可靠锚点。
+  Widget? _previewFor(
+    ReaderHandle handle,
+    RegionSet set,
+    BuildContext context, {
+    bool formulaPaper = false,
+  }) {
+    final PageImageCache? cache = _cache;
+    if (cache == null || _selected == null) {
+      return null;
+    }
+    final String? key = _selectedKeyOf(set);
+    if (key == null) {
+      return null;
+    }
+    QuestionBundle? bundle;
+    for (final QuestionBundle item in set.questions) {
+      if (item.anchorKey == key) {
+        bundle = item;
+        break;
+      }
+    }
+    if (bundle == null || bundle.slices.isEmpty) {
+      return null;
+    }
+    final QuestionSlice slice = bundle.slices.first;
+    if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+      return null;
+    }
+    return RegionPreview(
+      cache: cache,
+      page: handle.pages[slice.pageIndex],
+      rect: slice.rect,
+      width: math.max(120, _panelWidth(context) - ShqSpace.lg * 2),
+      // 公式卷不显示文字，预览就是唯一题面：给高一点。
+      maxHeight: formulaPaper ? 230 : 150,
+      note: formulaPaper ? '公式题：以卷面为准，不做文字转写' : null,
+      // 点击 = 独立大图弹窗；长按 = 贴图侧边浮窗（保存）。不再做"框内 2× 缩放"。
+      onTap: () => unawaited(_showQuestionImage(bundle!)),
+      onLongPress: () => _openQuestionImageActions(bundle!),
+    );
+  }
+
+  /// 公式/符号题是否多到"整卷不适合显示文字"。
+  ///
+  /// 用户口径：数学等符号多的学科，如果公式不能正确显示，就**不显示文字**，
+  /// 只给 PDF 题面预览；提交给 AI 时以图片为准。
+  bool _showStemText(RegionSet set) {
+    final List<String> stems = <String>[
+      for (final QuestionBundle bundle in set.questions)
+        if (bundle.question.stemText != null &&
+            bundle.question.stemText!.trim().isNotEmpty)
+          bundle.question.stemText!,
+    ];
+    if (stems.length < 3) {
+      return true;
+    }
+    final int heavy = stems.where(formulaHeavyText).length;
+    return heavy / stems.length < 0.3;
+  }
+
+  /// 打开右侧「问 AI」面板（2026-10-24 接入真实模型）。
+  ///
+  /// 打开前做三件事，避免"面板先弹出来、图片晚半拍"：
+  /// 1. 读这一题上次的对话（Vault）；
+  /// 2. 把题面与当前作答渲染成 PNG（≤1024 长边）；
+  /// 3. 刷新答题卡笔迹统计（决定「判我的作答」是否可用）。
+  Future<void> _showAskAi(QuestionBundle bundle) async {
+    if (bundle.slices.isEmpty) {
+      return;
+    }
+    await _refreshAnswerInkCount(bundle);
+    final List<ChatTurn> turns = await ref
+        .read(aiChatStoreProvider(widget.workbookId))
+        .load(widget.workbookId, bundle.question.id);
+    final List<AiImageAttachment> attachments = await _aiAttachmentsOf(bundle);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _aiBundle = bundle;
+      _aiTurns = turns;
+      _aiAttachments = attachments;
+      _aiOpen = true;
+      _panelOpen = true;
+    });
+  }
+
+  /// 题面 + 学生作答两张图。题面永远第一张（与 system 里的声明顺序一致）。
+  ///
+  /// [includeAnswer] = false 时**只给题面**：补答案（让 AI 自己做一遍）
+  /// 不需要看学生的作答，发过去只是白费 token 与等待。
+  Future<List<AiImageAttachment>> _aiAttachmentsOf(
+    QuestionBundle bundle, {
+    bool includeAnswer = true,
+  }) async {
+    final PageImageCache? cache = _cache;
+    final ReaderHandle? handle = _handle;
+    if (cache == null || handle == null || bundle.slices.isEmpty) {
+      return const <AiImageAttachment>[];
+    }
+    final QuestionSlice slice = bundle.slices.first;
+    if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+      return const <AiImageAttachment>[];
+    }
+    final List<AiImageAttachment> out = <AiImageAttachment>[];
+    final Uint8List? questionBytes = await renderAnswerCropPng(
+      cache: cache,
+      page: handle.pages[slice.pageIndex],
+      rect: slice.rect,
+      doc: InkDoc.empty,
+    );
+    if (questionBytes != null) {
+      final AiImageAttachment? question = await prepareAiImage(
+        bytes: questionBytes,
+        kind: AiImageKind.question,
+        label: '题面',
+      );
+      if (question != null) {
+        out.add(question);
+      }
+    }
+
+    if (!includeAnswer) {
+      return out;
+    }
+
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final List<InkDoc> docs = await _loadAnswerInkPages(bundle);
+    Uint8List? answerBytes;
+    if (docs.any((InkDoc doc) => doc.strokes.isNotEmpty)) {
+      final AnswerPaper paper = (await _papersOf()).forQuestion(
+        bundle.question.id,
+      );
+      answerBytes = await renderAnswerSheetInkPng(
+        docs: docs,
+        widthPt: paper.widthPt,
+        heightPt: paper.heightPt,
+      );
+    } else {
+      // 没有答题卡笔迹：把 PDF 页内该作答框里的笔画单独画出来。
+      final int pageIndex = entry.pageIndex.clamp(0, handle.pages.length - 1);
+      await ref
+          .read(inkWriterProvider(widget.workbookId))
+          .flush(handle.session.id, pageIndex);
+      final InkDoc pageDoc = await ref
+          .read(inkStoreProvider(widget.workbookId))
+          .load(handle.session.id, pageIndex);
+      final List<InkStroke> strokes = _strokesInRect(pageDoc, entry.rect);
+      if (strokes.isNotEmpty) {
+        answerBytes = await renderPageInkOnlyPng(
+          rect: entry.rect,
+          doc: InkDoc(revision: 0, strokes: strokes),
+        );
+      }
+    }
+    if (answerBytes != null) {
+      final AiImageAttachment? answer = await prepareAiImage(
+        bytes: answerBytes,
+        kind: AiImageKind.answer,
+        label: '我的作答',
+      );
+      if (answer != null) {
+        out.add(answer);
+      }
+    }
+    return out;
+  }
+
+  /// 本题参考答案（PDF 或 AI 补的）。没有返回 null。
+  String? _referenceAnswerOf(QuestionBundle bundle) {
+    final AnswerNote? note = _regionSetOf().answers.forQuestion(
+      ordinal: bundle.question.ordinal,
+      label: bundle.question.label,
+    );
+    final String? text = note?.text.trim();
+    return text == null || text.isEmpty ? null : text;
+  }
+
+  bool _hasStudentAnswerOf(QuestionBundle bundle) {
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    if (entry.hasText) {
+      return true;
+    }
+    final InkDoc? ink = _answerInkDocs[bundle.question.id];
+    if (ink != null && ink.strokes.isNotEmpty) {
+      return true;
+    }
+    // 页内书写（没有答题卡时）：只有当前页能便宜地统计。
+    return entry.pageIndex == _current && _answerStrokeCountOf(entry) > 0;
+  }
+
+  /// 打开 AI 配置（面板里没有配置时的"去配置"、以及菜单项都走这里）。
+  Future<void> _openAiConfig(LlmConfig config) async {
+    final bool saved = await showAiSettingsSheet(context, initial: config);
+    if (!mounted) {
+      return;
+    }
+    if (saved) {
+      ref.invalidate(aiConfigProvider);
+      setState(() {});
+    }
+  }
+
+  Stream<AiChatChunk> _aiSend(
+    LlmConfig config,
+    QuestionBundle bundle,
+    String message,
+    List<ChatTurn> history,
+    List<AiImageAttachment> attachments,
+    bool deepThinking,
+  ) {
+    return ref
+        .read(aiServiceProvider(widget.workbookId))
+        .chat(
+          config: config,
+          payload: _aiPayloadOf(bundle),
+          history: history,
+          message: message,
+          attachments: attachments,
+          referenceAnswer: _referenceAnswerOf(bundle),
+          deepThinking: deepThinking,
+        );
+  }
+
+  /// 快捷动作：先做一遍 → 落 AI 答案；判我的作答 → 落 grading（source=ai）。
+  Future<AiChatResult?> _runAiQuick(
+    LlmConfig config,
+    QuestionBundle bundle,
+    AiQuickAction action,
+    List<AiImageAttachment> attachments,
+  ) async {
+    final AiService service = ref.read(aiServiceProvider(widget.workbookId));
+    final QuestionAiPayload payload = _aiPayloadOf(bundle);
+    switch (action) {
+      case AiQuickAction.explain:
+        return null;
+      case AiQuickAction.solve:
+        final AiSolution solution = await service.solve(
+          config: config,
+          payload: payload,
+          attachments: attachments,
+        );
+        if (solution.answer.trim().isNotEmpty) {
+          await _saveAiAnswer(bundle, solution.answer.trim());
+        }
+        return AiChatResult(text: solution.explanation, solution: solution);
+      case AiQuickAction.grade:
+        final String studentAnswer = _answerEntryOf(bundle).ocrText;
+        final AiGrade grade = await service.grade(
+          config: config,
+          payload: payload,
+          referenceAnswer: _referenceAnswerOf(bundle),
+          studentAnswerText: studentAnswer,
+          attachments: attachments,
+        );
+        final bool applied =
+            await _grades?.applyAi(
+              bundle.question.id,
+              grade.verdict,
+              note: grade.reason,
+            ) ??
+            false;
+        return AiChatResult(text: grade.reason, grade: grade, applied: applied);
+    }
+  }
+
+  /// AI 补的答案单独落 `answers_ai.v1.json`：重切题不会覆盖它。
+  Future<void> _saveAiAnswer(QuestionBundle bundle, String text) async {
+    final store = ref.read(layoutStoreProvider);
+    final AnswerSet existing = AnswerSet.fromJson(
+      await store.readAiAnswers(widget.workbookId),
+    );
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    final AnswerSet next = existing.withNote(
+      AnswerNote(
+        label: label,
+        text: text,
+        source: 'ai',
+        pageIndex: bundle.slices.first.pageIndex,
+        ordinal: bundle.question.ordinal,
+      ),
+    );
+    await store.writeAiAnswers(widget.workbookId, next.toJson());
+    ref.invalidate(regionSetProvider(widget.workbookId));
+    if (mounted) {
+      _showReaderTip('已写入参考答案（AI · 请自检）');
+    }
+  }
+
+  /// 顶栏「保存」：把**当前答题情况**立刻落盘。
+  ///
+  /// 落三样东西，缺一不可：
+  /// - **笔迹**（`_flushAllInk`）：所有待写页，不只是当前页——
+  ///   用户可能翻回前一页补了一笔，那一笔也在防抖窗口里；
+  /// - **阅读进度**（`saveLastPage`）：500ms 防抖可能还没写；
+  /// - **切题改动**（`_flushRegions`）：题目区域的覆盖层同样有防抖。
+  ///
+  /// 笔迹本来就有 500ms 自动落盘 + 生命周期兜底，所以这个按钮的价值是
+  /// **给用户一个确定感**（"我写的东西已经存下来了"），而不是救数据。
+  /// 落盘完成后给一句明确反馈——按下去没反应会让人怀疑没点上。
+  Future<void> _saveNow() async {
+    final Future<void> Function()? flushAll = _flushAllInk;
+    final Future<void> Function()? flushRegions = _flushRegions;
+    final ReaderHandle? handle = _handle;
+    if (flushAll != null) {
+      await flushAll();
+    }
+    if (flushRegions != null) {
+      await flushRegions();
+    }
+    if (handle != null) {
+      await handle.saveLastPage(_current);
+    }
+    if (!mounted) {
+      return;
+    }
+    _showReaderTip('已保存答题情况');
+  }
+
+  /// 「收藏」入口：已收藏则取消，未收藏则做一份独立快照。
+  Future<void> _favoriteQuestion(QuestionBundle bundle) async {
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    final FavoriteStore store = ref.read(favoriteStoreProvider);
+    try {
+      final String? existing = await store.idOfQuestion(bundle.question.id);
+      if (existing != null) {
+        await store.remove(existing);
+        if (mounted) {
+          ref.invalidate(favoritesProvider);
+          _showReaderTip('已取消收藏第 $label 题');
+        }
+        return;
+      }
+      final FavoriteCapture? capture = await _buildFavoriteCapture(bundle);
+      if (capture == null) {
+        if (mounted) {
+          _showReaderTip('收藏失败：题面无法生成');
+        }
+        return;
+      }
+      await store.capture(capture);
+      if (mounted) {
+        ref.invalidate(favoritesProvider);
+        _showReaderTip('已收藏第 $label 题');
+      }
+    } on Object {
+      if (mounted) {
+        _showReaderTip('收藏失败，请重试');
+      }
+    }
+  }
+
+  /// 收藏那一刻定格的数据：题面图 + 作答图 + AI 对话 + 判题 + 答案。
+  ///
+  /// 渲染失败不阻断收藏——图片/JSON 都允许缺，只是看题页少一部分展示。
+  /// 返回 null 表示连题面图都渲染不出来（没有可用的页/区域）。
+  Future<FavoriteCapture?> _buildFavoriteCapture(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    final PageImageCache? cache = _cache;
+    if (handle == null || cache == null || bundle.slices.isEmpty) {
+      return null;
+    }
+    final Question question = bundle.question;
+    final QuestionSlice slice = bundle.slices.first;
+    if (slice.pageIndex < 0 || slice.pageIndex >= handle.pages.length) {
+      return null;
+    }
+    final WbPage page = handle.pages[slice.pageIndex];
+
+    // 题面图（纯题面，不含笔迹）。收藏夹「点开看」要清晰：
+    // 按 2.8×pt、上限 1800×2600 出图（默认的 1.6×/1024 在平板上会发虚）。
+    final Uint8List? stemPng = await renderAnswerCropPng(
+      cache: cache,
+      page: page,
+      rect: slice.rect,
+      doc: InkDoc.empty,
+      scale: 2.8,
+      maxWidth: 1800,
+      maxHeight: 2600,
+    );
+
+    // 作答图：优先答题卡笔迹，其次 PDF 页内该作答框的笔迹。
+    Uint8List? answerPng;
+    final List<InkDoc> sheetDocs = await _loadAnswerInkPages(bundle);
+    if (sheetDocs.any((InkDoc doc) => doc.strokes.isNotEmpty)) {
+      answerPng = await renderAnswerSheetInkPng(docs: sheetDocs);
+    } else {
+      final AnswerSheetEntry entry = _answerEntryOf(bundle);
+      final int pageIndex = entry.pageIndex.clamp(0, handle.pages.length - 1);
+      final InkDoc pageDoc = await ref
+          .read(inkStoreProvider(widget.workbookId))
+          .load(handle.session.id, pageIndex);
+      final List<InkStroke> strokes = _strokesInRect(pageDoc, entry.rect);
+      if (strokes.isNotEmpty) {
+        answerPng = await renderAnswerCropPng(
+          cache: cache,
+          page: handle.pages[pageIndex],
+          rect: entry.rect,
+          doc: InkDoc(revision: 0, strokes: strokes),
+          scale: 2.4,
+          maxWidth: 1600,
+          maxHeight: 2400,
+        );
+      }
+    }
+
+    // AI 对话快照。
+    final List<ChatTurn> turns = await ref
+        .read(aiChatStoreProvider(widget.workbookId))
+        .load(widget.workbookId, question.id);
+    final Map<String, Object?>? chatJson = turns.isEmpty
+        ? null
+        : <String, Object?>{'turns': ChatTurn.listToJson(turns)};
+
+    // 判题结论快照。
+    final QuestionGrade? grade = _grades?.data.value.gradeOf(question.id);
+    final Map<String, Object?>? gradingJson = grade?.toJson();
+
+    // 答案快照。
+    final AnswerNote? note = _regionSetOf().answers.forQuestion(
+      ordinal: question.ordinal,
+      label: question.label,
+    );
+    final Map<String, Object?>? answerJson = note?.toJson();
+
+    return FavoriteCapture(
+      questionId: question.id,
+      workbookId: widget.workbookId,
+      workbookTitle: handle.workbook.title,
+      label: question.label ?? '${question.ordinal}',
+      ordinal: question.ordinal,
+      kind: question.kind,
+      stemText: question.stemText ?? '',
+      pageIndex: slice.pageIndex,
+      rect: slice.rect,
+      verdict: grade?.verdict ?? AnswerVerdict.none,
+      stemPng: stemPng,
+      answerPng: answerPng,
+      chatJson: chatJson,
+      gradingJson: gradingJson,
+      answerJson: answerJson,
+    );
+  }
+
+  /// 「对答案」入口（按钮已放好，自动判题后续补）。
+  void _checkAnswer(QuestionBundle bundle) {
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    _showReaderTip('第 $label 题：先看右侧答案卡；自动判题会在后续补上。');
+  }
+
+  /// AI 面板用的载荷：图片权威、公式题只给图。
+  QuestionAiPayload _aiPayloadOf(QuestionBundle bundle) {
+    final QuestionSlice slice = bundle.slices.first;
+    final String? rawStem = bundle.question.stemText;
+    final String? text = rawStem != null && !formulaHeavyText(rawStem)
+        ? rawStem
+        : null;
+    return buildQuestionAiPayload(
+      questionId: bundle.question.id,
+      label: bundle.question.label ?? '${bundle.question.ordinal}',
+      pageIndex: slice.pageIndex,
+      rect: slice.rect,
+      text: text,
+      provenance: text == null
+          ? TextProvenance.none
+          : TextProvenance.pdfTextLayer,
+    );
+  }
+
+  /// 阅读器里的一句轻提示（统一 SnackBar 口径，避免每个入口各写一份）。
+  void _showReaderTip(String message) {
+    final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(
+      context,
+    );
+    if (messenger == null) {
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          duration: const Duration(milliseconds: 2200),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  void _selectAnchorOf(RegionSet set, String key) {
+    if (_answerQuestionId != null) {
+      setState(() => _answerQuestionId = null);
+    }
+    for (final QuestionBundle bundle in set.questions) {
+      if (bundle.anchorKey == key) {
+        _selectBundle(bundle);
+        return;
+      }
+    }
+  }
+
+  void _selectBundle(QuestionBundle bundle) {
+    if (bundle.slices.isEmpty) {
+      return;
+    }
+    setState(() {
+      _selected = (
+        label: bundle.question.label ?? '',
+        page: bundle.slices.first.pageIndex,
+        y: bundle.slices.first.rect.top,
+      );
+    });
+  }
+
+  /// 当前卷的切题结果（从 provider 的当前值取，拿不到给空集）。
+  RegionSet _regionSetOf() {
+    final RegionSet raw = ref
+        .read(regionSetProvider(widget.workbookId))
+        .maybeWhen<RegionSet>(
+          data: (RegionSet value) => value,
+          orElse: () => RegionSet.empty,
+        );
+    return _orderedSet(raw);
+  }
+
+  /// 套用用户手动顺序；没有手动顺序时原样返回。
+  RegionSet _orderedSet(RegionSet set) {
+    final QuestionOrderController? order = _questionOrder;
+    if (order == null ||
+        order.order.value.isEmpty ||
+        set.questions.length < 2) {
+      return set;
+    }
+    return RegionSet(order.apply(set.questions), answers: set.answers);
+  }
+
+  Future<void> _moveQuestion(RegionSet set, int oldIndex, int newIndex) async {
+    final QuestionOrderController? order = _questionOrder;
+    if (order == null) {
+      return;
+    }
+    await order.move(set.questions, oldIndex, newIndex);
+  }
+
+  /// 面板菜单的"选中题上移/下移一位"。
+  void _moveSelectedQuestion(int delta) {
+    final RegionSet set = _regionSetOf();
+    final String? key = _selectedKeyOf(set);
+    if (key == null) {
+      return;
+    }
+    final int index = set.questions.indexWhere(
+      (QuestionBundle bundle) => bundle.anchorKey == key,
+    );
+    if (index < 0) {
+      return;
+    }
+    final int target = index + delta;
+    if (target < 0 || target >= set.questions.length) {
+      return;
+    }
+    unawaited(_moveQuestion(set, index, target));
+  }
+
+  void _resetQuestionOrder() {
+    final QuestionOrderController? order = _questionOrder;
+    if (order != null) {
+      unawaited(order.reset());
+    }
+  }
+
+  /// 面板宽度：平板 320dp；窄屏按 42% 收窄（手机上 320 会占掉半个屏）。
+  /// 面板**当前**宽度：拖动中跟随手指，否则用记住的全局宽度。
+  ///
+  /// 2026-10-24 用户口径：最小 = 原来的宽度（宽屏 320dp / 窄屏 42%），
+  /// 最大 = 横向屏幕的一半，题目区域与问 AI 共用同一个值。
+  double _panelWidth(BuildContext context) {
+    final double screen = MediaQuery.sizeOf(context).width;
+    final double? drag = _dragPanelWidth;
+    if (drag != null) {
+      return PanelMetrics.clampWidth(drag, screen);
+    }
+    return PanelMetrics.clampWidth(_storedPanelWidth(screen), screen);
+  }
+
+  /// 阅读区要让出的宽度：拖动过程中**保持松手前的值**（见 [_dragPanelWidth]）。
+  double _panelInset(BuildContext context) {
+    if (_dragPanelWidth == null) {
+      return _panelWidth(context);
+    }
+    return PanelMetrics.clampWidth(
+      _storedPanelWidth(MediaQuery.sizeOf(context).width),
+      MediaQuery.sizeOf(context).width,
+    );
+  }
+
+  double _storedPanelWidth(double screen) {
+    return ref.read(panelWidthProvider) ?? PanelMetrics.defaultFor(screen);
+  }
+
+  /// 拖宽过程中的一步：只改内存状态，UI 立即跟随。
+  ///
+  /// [totalGrow] 是**自拖动起点以来的总变宽量**（不是每帧增量），
+  /// 所以夹到上下限之后手一反向就立刻跟手。
+  void _onPanelResize(double totalGrow) {
+    final double screen = MediaQuery.sizeOf(context).width;
+    setState(() {
+      _dragPanelWidth = PanelMetrics.clampWidth(
+        _dragStartPanelWidth + totalGrow,
+        screen,
+      );
+    });
+  }
+
+  /// 按下把手：记住当前宽度，作为这一轮拖动的基准。
+  void _onPanelResizeStart() {
+    _dragStartPanelWidth = _panelWidth(context);
+    setState(() => _dragPanelWidth = _dragStartPanelWidth);
+  }
+
+  /// 松手：把最终宽度交给全局状态（异步落盘），阅读区在此刻一次性让位。
+  void _onPanelResizeEnd() {
+    final double? width = _dragPanelWidth;
+    if (width == null) {
+      return;
+    }
+    setState(() => _dragPanelWidth = null);
+    ref.read(panelWidthProvider.notifier).commit(width);
+  }
+
+  /// 把框按页分组。只算一次（每次 build 重算也是 O(题数)，几十道题可忽略），
+  /// 换来的是 PageLayer 不用自己过滤——滚动模式每帧要建 3 个页面，别在那里做 O(n) 扫描。
+  static Map<int, List<RegionMark>> _marksByPage(
+    RegionSet set,
+    AnswerSheetData answerData, {
+    required bool showAllAnswers,
+    String? answerQuestionId,
+  }) {
+    final Map<int, List<RegionMark>> grouped = <int, List<RegionMark>>{};
+    for (final RegionMark mark in regionMarksOf(set)) {
+      grouped.putIfAbsent(mark.pageIndex, () => <RegionMark>[]).add(mark);
+    }
+    if (!showAllAnswers && answerQuestionId == null) {
+      return grouped;
+    }
+    for (final QuestionBundle bundle in set.questions) {
+      // 大题（level 1）是容器，不是可作答的单题；作答框只给小题。
+      if (bundle.question.level <= 1) {
+        continue;
+      }
+      if (!showAllAnswers && bundle.question.id != answerQuestionId) {
+        continue;
+      }
+      if (bundle.slices.isEmpty) {
+        continue;
+      }
+      final AnswerSheetEntry entry = answerData.regionFor(bundle);
+      if (entry.rect.isEmpty) {
+        continue;
+      }
+      grouped
+          .putIfAbsent(entry.pageIndex, () => <RegionMark>[])
+          .add(
+            RegionMark(
+              key: _answerMarkKey(bundle.question.id),
+              pageIndex: entry.pageIndex,
+              rect: entry.rect,
+              label: '答 ${bundle.question.label ?? bundle.question.ordinal}',
+              grade: 'green',
+              confidence: 1,
+              level: 2,
+              isAnswer: true,
+            ),
+          );
+    }
+    return grouped;
+  }
+
   void _openDisplaySheet() {
     unawaited(
       showPaperStyleSheet(
@@ -179,6 +3034,60 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     } else {
       _scrollKey.currentState?.jumpTo(index);
     }
+  }
+
+  /// 后台自动切题：**无感**——不弹窗、不转圈、不 await，用户可以直接翻页写字。
+  ///
+  /// 已经有结果（`layout_status` 是 auto/manual 且库里题目非空）时内部直接返回，
+  /// 所以哪怕每次打开都调一次也不会有额外开销。
+  void _ensureRegions(ReaderHandle handle) {
+    if (_regionEnsured) {
+      return;
+    }
+    _regionEnsured = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(
+        ref
+            .read(regionCutterProvider(widget.workbookId))
+            .ensure(source: handle.source, pages: handle.pages),
+      );
+      // 编辑控制器要记住 source/pages（改完框要整卷重算）。
+      unawaited(
+        ref
+            .read(regionEditProvider(widget.workbookId))
+            .attach(source: handle.source, pages: handle.pages),
+      );
+    });
+  }
+
+  /// 用户主动点"重新切题"：重抽文本层并覆盖自动结果。
+  Future<void> _recut(ReaderHandle handle) async {
+    final RegionBuildOutcome? outcome = await ref
+        .read(regionCutterProvider(widget.workbookId))
+        .cut(source: handle.source, pages: handle.pages, force: true);
+    if (!mounted || outcome == null) {
+      return;
+    }
+    final ScaffoldMessengerState? messenger = ScaffoldMessenger.maybeOf(
+      context,
+    );
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          // 三色统计是开发信息（用户 2026-10-23 明确不要在界面露出来）。
+          content: Text(
+            outcome.isEmpty
+                ? '没切出题目（这一页可能是整页图片，或题号样式特殊）'
+                : '已切出 ${outcome.regions} 道题',
+          ),
+          duration: const Duration(milliseconds: 2200),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
   }
 
   /// 落笔没被纸接住（落在纸外）时给一句提示。
@@ -221,6 +3130,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     final AsyncValue<ReaderHandle> async = ref.watch(
       readerHandleProvider(widget.workbookId),
     );
+    // 题目面板的「收藏」要显示实心/空心星：收藏夹变化后立刻重绘（invoke 已在收藏/取消后做）。
+    final Set<String> favoriteQuestionIds = ref
+        .watch(favoritesProvider)
+        .maybeWhen<Set<String>>(
+          data: (List<Favorite> items) => <String>{
+            for (final Favorite favorite in items)
+              if (favorite.workbookId == widget.workbookId)
+                favorite.questionId,
+          },
+          orElse: () => const <String>{},
+        );
+    _favoriteQuestionIds = favoriteQuestionIds;
     // 直接用 async 的当前值建 UI：不能"在 build 里偷偷赋值给字段，指望下一帧生效"，
     // 否则首帧的 AppBar 标题会一直是兜底文案（实测踩过）。
     // Riverpod 3 里没有 valueOrNull，用 maybeWhen 取安全值
@@ -250,6 +3171,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _prefs = loadedPrefs;
     }
 
+    // AI 配置：面板头部的模型标签、发送、快捷动作都读这一份。
+    final LlmConfig aiConfig = ref
+        .watch(aiConfigProvider)
+        .maybeWhen<LlmConfig>(
+          data: (LlmConfig value) => value,
+          orElse: () => LlmConfig.empty,
+        );
+
     // 撤销/重做看的是**当前页**的历史（滚到第 3 页撤的是第 3 页的笔）。
     final InkPageKey pageKey = InkPageKey(
       ready?.session.id ?? '',
@@ -268,94 +3197,232 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           inkEditProvider(pageKey).select((InkEditState s) => s.canRedo),
         );
 
-    return Scaffold(
-      key: _scaffoldKey,
-      appBar: AppBar(
-        title: Text(
-          ready?.workbook.title ?? '阅读器',
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        // 固定形态：工具带贴在顶栏下方（用户可在设置里切换形态）。
-        bottom: pinnedToolbar && ready != null
-            ? InkToolStrip(darkPaper: darkPaper)
-            : null,
-        actions: <Widget>[
-          // 撤销/重做放在顶栏：高频动作，必须一次点击可达，不藏进工具面板。
-          IconButton(
-            tooltip: '撤销',
-            onPressed: canUndo
-                ? () => ref.read(inkEditProvider(pageKey).notifier).undo()
-                : null,
-            icon: const Icon(Icons.undo),
-          ),
-          IconButton(
-            tooltip: '重做',
-            onPressed: canRedo
-                ? () => ref.read(inkEditProvider(pageKey).notifier).redo()
-                : null,
-            icon: const Icon(Icons.redo),
-          ),
-          const _ActionDivider(),
-          if (_mode == ViewMode.scroll && ready != null)
-            _ZoomPill(
-              value: _scrollZoom,
-              onSelected: (double value) =>
-                  _scrollKey.currentState?.setScale(value),
-            ),
-          IconButton(
-            tooltip: '显示设置',
-            onPressed: ready == null ? null : _openDisplaySheet,
-            icon: const Icon(Icons.palette_outlined),
-          ),
-          // 低频动作（切模式 / 缩略图）收进一个菜单：顶栏只留高频动作，
-          // 也避免窄屏上六个图标把标题挤没。
-          PopupMenuButton<String>(
-            tooltip: '更多',
-            icon: const Icon(Icons.more_horiz),
-            onSelected: (String value) {
-              switch (value) {
-                case 'mode':
-                  _switchMode();
-                  break;
-                case 'thumbnails':
-                  _scaffoldKey.currentState?.openEndDrawer();
-                  break;
+    // 切题结果 + 框的显示开关（默认关，开关全局记住）。
+    final RegionSet regionSet = _orderedSet(
+      ready == null
+          ? RegionSet.empty
+          : ref
+                .watch(regionSetProvider(widget.workbookId))
+                .maybeWhen<RegionSet>(
+                  data: (RegionSet value) => value,
+                  orElse: () => RegionSet.empty,
+                ),
+    );
+    // **框跟随面板**：面板是"看/改切题结果"的唯一入口。
+    // 面板关闭 = 只读态，叠加层完全不参与命中（写字/滚动/缩放零干扰）。
+    final bool showRegions = _panelOpen;
+    // 面板宽度是全局偏好：watch 一次，拖动/落盘后整棵树重建（面板与阅读区留白同源）。
+    ref.watch(panelWidthProvider);
+    final AnswerSheetData answerData =
+        _answerSheet?.data.value ?? AnswerSheetData.empty;
+    // 作答框在两种情况下出现：面板上部开关打开（全部），或当前展开了某题的
+    // 「答题情况」（只显示那一题）。两者都只在面板打开时参与叠加层。
+    final Map<int, List<RegionMark>> marksByPage = showRegions
+        ? _marksByPage(
+            regionSet,
+            answerData,
+            showAllAnswers: _showAnswers,
+            answerQuestionId: _answerQuestionId,
+          )
+        : const <int, List<RegionMark>>{};
+    final RegionEditController edit = ref.watch(
+      regionEditProvider(widget.workbookId),
+    );
+    // 框可见 = 可拖可缩（用户拍板的口径）。框内仍然透传给笔，只有框线与角标吃指针。
+    final String? selectedKey = _selectedKeyOf(regionSet);
+    final String? selectedAnswerKey = _answerQuestionId == null
+        ? null
+        : _answerMarkKey(_answerQuestionId!);
+    final RegionOverlayConfig? regionConfig = showRegions && ready != null
+        ? RegionOverlayConfig(
+            editable: true,
+            // 「显示作答情况」= 作答框编辑模式：所有作答框吃指针；
+            // 关闭时回到题目框编辑（两者默认重合，不能同时全量可点）。
+            answerEditing: _showAnswers,
+            // 作答框选中时把叠加层选中态切到它；否则保持题目框选中。
+            selectedKey: selectedAnswerKey ?? selectedKey,
+            onSelect: (String key) {
+              final String? answerId = _answerIdOfKey(key);
+              if (answerId != null) {
+                _selectAnswerById(regionSet, answerId);
+              } else {
+                _selectAnchorOf(regionSet, key);
               }
             },
-            itemBuilder: (BuildContext context) => <PopupMenuEntry<String>>[
-              PopupMenuItem<String>(
-                value: 'mode',
-                enabled: ready != null,
-                child: _MenuItem(
-                  icon: _mode == ViewMode.paged
-                      ? Icons.view_day_outlined
-                      : Icons.auto_stories_outlined,
-                  label: _mode == ViewMode.paged ? '切换到连续滚动' : '切换到分页',
+            onDeselect: () => setState(() {
+              _selected = null;
+              _answerQuestionId = null;
+            }),
+            // 贴框浮动条：选中就能看到"能做什么"，不用去猜长按。
+            actionsOf: (RegionMark mark) {
+              if (mark.isAnswer) {
+                // 虚线作答框：只给「加题」。它经常是"被识别成答案、其实是一道题"
+                // 的那一块，用户点一下就能扶正（2026-10-24 用户第 10 条）。
+                return const <RegionAction>{RegionAction.addQuestion};
+              }
+              final QuestionBundle? bundle = _bundleOf(regionSet, mark.key);
+              return bundle == null
+                  ? const <RegionAction>{}
+                  : _actionsFor(bundle, regionSet, ready);
+            },
+            onAction: (String key, RegionAction action) {
+              final String? answerId = _answerIdOfKey(key);
+              if (answerId != null) {
+                if (action == RegionAction.addQuestion) {
+                  unawaited(_promoteAnswerToQuestion(regionSet, answerId));
+                }
+                return;
+              }
+              final QuestionBundle? bundle = _bundleOf(regionSet, key);
+              if (bundle == null) {
+                return;
+              }
+              unawaited(_applyAction(bundle, action, ready, regionSet));
+            },
+            onMove: (String key, int page, double dx, double dy) {
+              if (_answerIdOfKey(key) != null) {
+                _moveAnswer(key, page, dx, dy);
+                return;
+              }
+              unawaited(
+                edit.run(
+                  MoveCorrection(
+                    id: Ulid.next(),
+                    key: key,
+                    page: page,
+                    dx: dx,
+                    dy: dy,
+                  ),
                 ),
-              ),
-              const PopupMenuDivider(),
-              PopupMenuItem<String>(
-                value: 'thumbnails',
-                enabled: _cache != null,
-                child: const _MenuItem(
-                  icon: Icons.grid_view_outlined,
-                  label: '缩略图',
+              );
+            },
+            onResize: (String key, int page, RegionRect rect) {
+              if (_answerIdOfKey(key) != null) {
+                _resizeAnswer(key, page, rect);
+                return;
+              }
+              unawaited(
+                edit.run(
+                  ResizeCorrection(
+                    id: Ulid.next(),
+                    key: key,
+                    page: page,
+                    rect: rect,
+                  ),
                 ),
-              ),
-            ],
+              );
+            },
+            onMenu: (String key, Offset position) {
+              final String? answerId = _answerIdOfKey(key);
+              if (answerId != null) {
+                final QuestionBundle? bundle = _bundleById(regionSet, answerId);
+                if (bundle != null) {
+                  unawaited(_showAnswerMenu(bundle));
+                }
+                return;
+              }
+              unawaited(_showRegionMenu(key, ready));
+            },
+          )
+        : null;
+    if (ready != null) {
+      _ensureRegions(ready);
+    }
+
+    // 「回看出处」：切题结果加载后，一次性跳到该题所在页并选中、打开面板。
+    if (ready != null && _pendingQuestionId != null && !regionSet.isEmpty) {
+      final QuestionBundle? target = _bundleById(regionSet, _pendingQuestionId!);
+      if (target != null && target.slices.isNotEmpty) {
+        final QuestionBundle bundle = target;
+        _pendingQuestionId = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) {
+            return;
+          }
+          setState(() => _panelOpen = true);
+          _selectBundle(bundle);
+          _jumpTo(bundle.slices.first.pageIndex);
+        });
+      }
+    }
+
+    return PopScope(
+      // 系统返回键先收面板：AI 打开时回题目区域，题目区域打开时才退出阅读器。
+      // 这是"右侧面板 = 阅读器内的一层"应有的返回语义。
+      canPop: !_panelOpen,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop || !_panelOpen) {
+          return;
+        }
+        if (_aiOpen) {
+          setState(() => _aiOpen = false);
+        } else {
+          _togglePanel();
+        }
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        appBar: AppBar(
+          title: Text(
+            ready?.workbook.title ?? '阅读器',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-        ],
+          // 固定形态：工具带贴在顶栏下方（用户可在设置里切换形态）。
+          bottom: pinnedToolbar && ready != null
+              ? InkToolStrip(darkPaper: darkPaper)
+              : null,
+          actions: buildReaderTopActions(
+            width: MediaQuery.sizeOf(context).width,
+            // 文字模式：宽度放得下 8 个带文字的动作才开，否则退回纯图标
+            // （AppBar 的 actions 压不动标题，溢出只会出黄黑条）。
+            showLabels: ref.watch(iconLabelsProvider) &&
+                labelsFitWidth(
+                  width: MediaQuery.sizeOf(context).width,
+                  actionCount: 8,
+                ),
+            canUndo: canUndo,
+            canRedo: canRedo,
+            onUndo: () => ref.read(inkEditProvider(pageKey).notifier).undo(),
+            onRedo: () => ref.read(inkEditProvider(pageKey).notifier).redo(),
+            onSave: () => unawaited(_saveNow()),
+            handTool: _handTool,
+            onToggleHandTool: _toggleHandTool,
+            mode: _mode,
+            onToggleMode: _switchMode,
+            scrollZoom: _scrollZoom,
+            onZoomSelected: (double value) =>
+                _scrollKey.currentState?.setScale(value),
+            onOpenDisplay: _openDisplaySheet,
+            panelOpen: _panelOpen,
+            onTogglePanel: _togglePanel,
+            onOpenThumbnails: () => _scaffoldKey.currentState?.openEndDrawer(),
+            hasThumbnails: _cache != null,
+            onOpenAnswerSheet: _openAnswerSheet,
+          ),
+        ),
+        endDrawer: (ready == null || _cache == null)
+            ? null
+            : ThumbDrawer(
+                pages: ready.pages,
+                cache: _cache!,
+                currentPage: _current,
+                onSelected: _jumpTo,
+              ),
+        body: _buildBody(
+          theme,
+          async,
+          ready,
+          brush,
+          darkPaper,
+          marksByPage,
+          regionConfig,
+          edit,
+          regionSet,
+          selectedKey,
+          aiConfig,
+        ),
       ),
-      endDrawer: (ready == null || _cache == null)
-          ? null
-          : ThumbDrawer(
-              pages: ready.pages,
-              cache: _cache!,
-              currentPage: _current,
-              onSelected: _jumpTo,
-            ),
-      body: _buildBody(theme, async, ready, brush, darkPaper),
     );
   }
 
@@ -365,6 +3432,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     ReaderHandle? ready,
     InkBrush brush,
     bool darkPaper,
+    Map<int, List<RegionMark>> marksByPage,
+    RegionOverlayConfig? regionConfig,
+    RegionEditController edit,
+    RegionSet regionSet,
+    String? selectedKey,
+    LlmConfig aiConfig,
   ) {
     if (async.hasError) {
       return Center(
@@ -388,6 +3461,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     final int initial = _initialPage ?? 0;
     // 走到这里 ready 一定非空（上面 guard 过），session 一定已建好
     final String sessionId = ready.session.id;
+    QuestionBundle? selectedBundle;
+    for (final QuestionBundle bundle in regionSet.questions) {
+      if (bundle.anchorKey == selectedKey) {
+        selectedBundle = bundle;
+        break;
+      }
+    }
     return Column(
       // 必须 stretch：Column 默认 center 会把阅读视图按"自身宽度"居中，
       // 阅读视图一旦不撑满宽度，它的裁剪边界就变成内容边界（实测会裁掉右侧内容）。
@@ -397,49 +3477,329 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           child: Stack(
             children: <Widget>[
               Positioned.fill(
-                child: _mode == ViewMode.paged
-                    ? PagedReaderView(
-                        key: _pagedKey,
-                        pages: ready.pages,
-                        cache: _cache!,
-                        initialPage: initial,
-                        onPageChanged: _onPageChanged,
-                        style: _style,
-                        intensity: _intensity,
-                        sessionId: sessionId,
-                        inkTool: brush.tool,
-                        inkColorIndex: brush.colorIndex,
-                        inkbrushWidth: brush.brushWidth,
-                      )
-                    : ScrollReaderView(
-                        key: _scrollKey,
-                        pages: ready.pages,
-                        cache: _cache!,
-                        initialPage: initial,
-                        onPageChanged: _onPageChanged,
-                        style: _style,
-                        intensity: _intensity,
-                        sessionId: sessionId,
-                        inkTool: brush.tool,
-                        inkColorIndex: brush.colorIndex,
-                        inkbrushWidth: brush.brushWidth,
-                        // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
-                        onPenMissed: _showPenMissed,
-                        // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
-                        onZoomChanged: (double value) => setState(() {
-                          _scrollZoom = value;
-                        }),
-                      ),
+                // 编辑态面板会占右侧：给阅读区留出同样的内边距，
+                // 否则正在调的框会被面板压住（一次重排，不做动画——动画会每帧
+                // 触发位图重取，见 2026-10-23 的位图缓存红线）。
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    right: _panelOpen ? _panelInset(context) : 0,
+                  ),
+                  child: _mode == ViewMode.paged
+                      ? PagedReaderView(
+                          key: _pagedKey,
+                          pages: ready.pages,
+                          cache: _cache!,
+                          initialPage: initial,
+                          onPageChanged: _onPageChanged,
+                          style: _style,
+                          intensity: _intensity,
+                          sessionId: sessionId,
+                          inkTool: brush.tool,
+                          inkColorIndex: brush.colorIndex,
+                          inkbrushWidth: brush.brushWidth,
+                          regionMarksByPage: marksByPage,
+                          regionConfig: regionConfig,
+                          // 打开题目区域 = 调框模式：墨迹层只画不收笔，
+                          // 手写笔专用于点选/拖动/缩放框（2026-10-23 用户口径）。
+                          regionEditing: _panelOpen,
+                          // 调框时虽然不写字，但单指仍应能平移页面看别的框；
+                          // 所以 fingerWrites 也关掉（= 浏览手势），不是书写手势。
+                          fingerWrites: !_handTool && !_panelOpen,
+                        )
+                      : ScrollReaderView(
+                          key: _scrollKey,
+                          pages: ready.pages,
+                          cache: _cache!,
+                          initialPage: initial,
+                          onPageChanged: _onPageChanged,
+                          style: _style,
+                          intensity: _intensity,
+                          sessionId: sessionId,
+                          inkTool: brush.tool,
+                          inkColorIndex: brush.colorIndex,
+                          inkbrushWidth: brush.brushWidth,
+                          regionMarksByPage: marksByPage,
+                          regionConfig: regionConfig,
+                          regionEditing: _panelOpen,
+                          // 调框时单指仍可平移页面；见 paged 分支同一理由。
+                          fingerWrites: !_handTool && !_panelOpen,
+                          // 这一笔没落在纸上：给一句明确的话，别让用户干瞪眼。
+                          onPenMissed: _showPenMissed,
+                          // 双指缩放改了倍率后，把 AppBar 的百分比同步过来
+                          onZoomChanged: (double value) => setState(() {
+                            _scrollZoom = value;
+                          }),
+                        ),
+                ),
               ),
               // 浮钮形态（默认）：收起时只有一个圆，展开才是完整笔刷面板。
               // 固定形态时工具带在 AppBar.bottom，这里就不画了。
-              if (!ref.watch(inkToolbarPinnedProvider))
+              // 调框模式不显示笔刷钮：这时笔用来调框，写字被禁用，留着只会误导。
+              // 手势模式下**仍然显示**：笔依旧书写，工具必须可用。
+              if (!ref.watch(inkToolbarPinnedProvider) && !_panelOpen)
                 Positioned(
                   right: ShqSpace.md,
                   bottom: ShqSpace.sm,
                   child: SafeArea(
                     top: false,
                     child: InkFab(darkPaper: darkPaper),
+                  ),
+                ),
+              // 检查面板（T3.5）：从右侧滑入，**不重建**阅读视图 → 书写帧率不受影响。
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: 0,
+                // 面板收起后仍在树里（保留动画与滚动位置），但不能让读屏
+                // 继续读到屏幕外的按钮；AI 打开时下面的题目面板同理。
+                child: ExcludeSemantics(
+                  excluding: !_panelOpen || _aiOpen,
+                  child: IgnorePointer(
+                    ignoring: !_panelOpen,
+                    child: AnimatedSlide(
+                      offset: _panelOpen ? Offset.zero : const Offset(1, 0),
+                      duration: ShqMotion.base,
+                      curve: ShqMotion.curveStandard,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.10),
+                              blurRadius: 18,
+                              offset: const Offset(-2, 0),
+                            ),
+                          ],
+                        ),
+                        child: ValueListenableBuilder<CorrectionLog>(
+                          valueListenable: edit.log,
+                          builder:
+                              (BuildContext context, CorrectionLog log, _) {
+                                // 数学/符号题多到整卷不适合文字转写时，面板只给题面预览。
+                                final bool showStemText = _showStemText(
+                                  regionSet,
+                                );
+                                return RegionPanel(
+                                  width: _panelWidth(context),
+                                  showLabels: ref.watch(iconLabelsProvider),
+                                  set: regionSet,
+                                  selectedKey: selectedKey,
+                                  editedCount: log.length,
+                                  questionDelta: questionDeltaOf(log),
+                                  saveTick: _saveTick,
+                                  verdictOf: (QuestionBundle bundle) =>
+                                      _grades?.verdictOf(bundle.question.id) ??
+                                      AnswerVerdict.none,
+                                  counts: _gradeCounts(regionSet),
+                                  grading: _grading,
+                                  onGradeAll: () => unawaited(_gradeAll()),
+                                  onFillAnswers: () =>
+                                      unawaited(_fillAnswersWithAi()),
+                                  fillingAi: _fillingAi,
+                                  fillDone: _fillDone,
+                                  fillTotal: _fillTotal,
+                                  onSetVerdict: (
+                                    QuestionBundle bundle,
+                                    AnswerVerdict verdict,
+                                  ) => unawaited(_setVerdict(bundle, verdict)),
+                                  multiSelecting: _multiSelecting,
+                                  selectedIds: _multiSelected,
+                                  favoriteQuestionIds: _favoriteQuestionIds,
+                                  onToggleMultiSelect: _toggleMultiSelect,
+                                  onToggleSelect: _toggleSelect,
+                                  onBatch: (RegionPanelBatch action) =>
+                                      unawaited(_runBatch(action)),
+                                  canUndo: log.ops.isNotEmpty,
+                                  canRedo: edit.canRedo,
+                                  onSelect: _selectFromPanel,
+                                  onAdd: () => unawaited(_addRegion(ready)),
+                                  onUndo: () => unawaited(edit.undo()),
+                                  onRedo: () => unawaited(edit.redo()),
+                                  onClearAll: () => unawaited(edit.clearAll()),
+                                  onRecut: () => unawaited(_recut(ready)),
+                                  onClose: _togglePanel,
+                                  preview: _previewFor(
+                                    ready,
+                                    regionSet,
+                                    context,
+                                    formulaPaper: !showStemText,
+                                  ),
+                                  showStemText: showStemText,
+                                  answers: regionSet.answers,
+                                  onFavorite: _favoriteQuestion,
+                                  onCheckAnswer: _checkAnswer,
+                                  onAskAi: (QuestionBundle bundle) =>
+                                      unawaited(_showAskAi(bundle)),
+                                  showAnswers: _showAnswers,
+                                  onToggleShowAnswers: _toggleShowAnswers,
+                                  onReorder: (int oldIndex, int newIndex) =>
+                                      unawaited(
+                                        _moveQuestion(
+                                          regionSet,
+                                          oldIndex,
+                                          newIndex,
+                                        ),
+                                      ),
+                                  onSave: () => unawaited(_saveEdits()),
+                                  saving: _savingEdits,
+                                  onMoveSelected: _moveSelectedQuestion,
+                                  onResetOrder: _resetQuestionOrder,
+                                  answerQuestionId: _answerQuestionId,
+                                  onToggleAnswer: _toggleAnswerFor,
+                                  answerPanel: selectedBundle == null
+                                      ? null
+                                      : _buildAnswerPanel(
+                                          selectedBundle,
+                                          regionSet.answers.forQuestion(
+                                            ordinal:
+                                                selectedBundle.question.ordinal,
+                                            label:
+                                                selectedBundle.question.label,
+                                          ),
+                                        ),
+                                  actionsOf: (QuestionBundle bundle) =>
+                                      _actionsFor(bundle, regionSet, ready),
+                                  onAction:
+                                      (
+                                        QuestionBundle bundle,
+                                        RegionAction action,
+                                      ) => unawaited(
+                                        _applyAction(
+                                          bundle,
+                                          action,
+                                          ready,
+                                          regionSet,
+                                        ),
+                                      ),
+                                );
+                              },
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // 问 AI（2026-10-24）：盖在题目区域上的一层右侧面板。
+              // 与题目区域同宽、同位置；返回 = 回到题目区域，收起 = 整个面板关闭。
+              // 用 AnimatedSlide 而不是 Navigator push：不打断阅读视图，
+              // 笔迹层与位图缓存都保持原状。
+              Positioned(
+                top: 0,
+                bottom: 0,
+                right: 0,
+                child: ExcludeSemantics(
+                  excluding: !_aiOpen,
+                  child: IgnorePointer(
+                    ignoring: !_aiOpen,
+                    child: AnimatedSlide(
+                      offset: _aiOpen ? Offset.zero : const Offset(1, 0),
+                      duration: ShqMotion.base,
+                      curve: ShqMotion.curveStandard,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          boxShadow: <BoxShadow>[
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.12),
+                              blurRadius: 22,
+                              offset: const Offset(-3, 0),
+                            ),
+                          ],
+                        ),
+                        child: _aiBundle == null
+                            ? const SizedBox.shrink()
+                            : AiChatPanel(
+                                // 换一道题就换一份输入状态：历史与附件都是按题的。
+                                key: ValueKey<String>(_aiBundle!.anchorKey),
+                                width: _panelWidth(context),
+                                payload: _aiPayloadOf(_aiBundle!),
+                                config: aiConfig,
+                                initialTurns: _aiTurns,
+                                attachments: _aiAttachments,
+                                referenceAnswer: _referenceAnswerOf(_aiBundle!),
+                                hasStudentAnswer: _hasStudentAnswerOf(
+                                  _aiBundle!,
+                                ),
+                                onOpenConfig: () =>
+                                    unawaited(_openAiConfig(aiConfig)),
+                                onSend:
+                                    (
+                                      String message,
+                                      List<ChatTurn> history,
+                                      List<AiImageAttachment> attachments,
+                                      bool deepThinking,
+                                    ) => _aiSend(
+                                      aiConfig,
+                                      _aiBundle!,
+                                      message,
+                                      history,
+                                      attachments,
+                                      deepThinking,
+                                    ),
+                                onQuick:
+                                    (
+                                      AiQuickAction action,
+                                      List<AiImageAttachment> attachments,
+                                    ) => _runAiQuick(
+                                      aiConfig,
+                                      _aiBundle!,
+                                      action,
+                                      attachments,
+                                    ),
+                                onPersist: (List<ChatTurn> turns) => ref
+                                    .read(
+                                      aiChatStoreProvider(widget.workbookId),
+                                    )
+                                    .save(
+                                      widget.workbookId,
+                                      _aiBundle!.question.id,
+                                      turns,
+                                    ),
+                                onBack: () => setState(() => _aiOpen = false),
+                                onClose: () {
+                                  setState(() {
+                                    _aiOpen = false;
+                                    _panelOpen = false;
+                                    _selected = null;
+                                  });
+                                },
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              // 面板宽度把手（2026-10-24）：贴在面板左缘，只在面板展开时存在。
+              //
+              // 单独一个 Positioned 而不是包进面板里，是为了不动面板既有的滑入结构；
+              // 放在 AI 面板之后 = 永远在最上层，题目区域与问 AI 共用同一个宽度、同一个把手。
+              if (_panelOpen)
+                Positioned(
+                  top: 0,
+                  bottom: 0,
+                  // 面板左缘在 `screen - panelWidth`。命中区 28dp：400dpi 平板上
+                  // 16dp 按不准，"按准"的收益远大于让出的 12dp；中心仍压在左缘上。
+                  right: _panelWidth(context) - 14,
+                  width: 28,
+                  child: PanelResizeHandle(
+                    onResizeStart: _onPanelResizeStart,
+                    onResize: _onPanelResize,
+                    onResizeEnd: _onPanelResizeEnd,
+                  ),
+                ),
+              // 「重框」浮窗（2026-10-24 用户第 3 条）：左上角，只有两个动作。
+              if (_adjustTarget != null)
+                Positioned(
+                  left: ShqSpace.sm,
+                  top: 0,
+                  child: SafeArea(
+                    child: AnswerAdjustBar(
+                      label:
+                          _adjustTarget!.question.label ??
+                          '${_adjustTarget!.question.ordinal}',
+                      onBack: () => unawaited(_backToAnswerSheet()),
+                      onStay: () => unawaited(_stayInReader()),
+                      savedAt: _lastSavedAt,
+                      saving: _savingEdits,
+                    ),
                   ),
                 ),
               // 开发期性能仪表盘（T2.5）：默认关，设置页可开；release 构建里不存在。
@@ -479,115 +3839,6 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             ],
           ),
         ),
-      ],
-    );
-  }
-}
-
-/// 顶栏里的分组细线：把"文档动作（撤销/重做）"与"视图动作"分开。
-class _ActionDivider extends StatelessWidget {
-  const _ActionDivider();
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: ShqSpace.xs),
-      child: Center(
-        child: Container(
-          width: 1,
-          height: 22,
-          color: Theme.of(context).colorScheme.outlineVariant,
-        ),
-      ),
-    );
-  }
-}
-
-/// 连续滚动模式的缩放胶囊：**当前倍率本身就是按钮**。
-///
-/// 之前是"图标 + 文字"直接塞在 actions 里，宽度大、和图标不成一组。
-/// 现在做成一颗有底色的胶囊，倍率一眼可见，点开是档位菜单。
-class _ZoomPill extends StatelessWidget {
-  const _ZoomPill({required this.value, required this.onSelected});
-
-  final double value;
-  final ValueChanged<double> onSelected;
-
-  static const List<double> _steps = <double>[0.6, 0.86, 1, 1.5, 2, 3];
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-    final ColorScheme scheme = theme.colorScheme;
-    // 窄屏（手机竖屏）只露图标：4 个顶栏动作 + 百分比会把标题挤没。
-    final bool compact = MediaQuery.sizeOf(context).width < 600;
-    return PopupMenuButton<double>(
-      tooltip: '缩放 ${(value * 100).round()}%',
-      initialValue: value,
-      onSelected: onSelected,
-      itemBuilder: (BuildContext context) => <PopupMenuEntry<double>>[
-        for (final double zoom in _steps)
-          PopupMenuItem<double>(
-            value: zoom,
-            child: Row(
-              children: <Widget>[
-                SizedBox(
-                  width: 22,
-                  child: (zoom - value).abs() < 0.01
-                      ? Icon(Icons.check, size: 16, color: scheme.primary)
-                      : null,
-                ),
-                Text('${(zoom * 100).round()}%'),
-              ],
-            ),
-          ),
-      ],
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: ShqSpace.xxs),
-        padding: const EdgeInsets.symmetric(
-          horizontal: ShqSpace.sm,
-          vertical: 5,
-        ),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(ShqRadius.pill),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Icon(Icons.zoom_in, size: 15, color: scheme.onSurfaceVariant),
-            if (!compact) ...<Widget>[
-              const SizedBox(width: 4),
-              Text(
-                '${(value * 100).round()}%',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MenuItem extends StatelessWidget {
-  const _MenuItem({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final ColorScheme scheme = Theme.of(context).colorScheme;
-    return Row(
-      children: <Widget>[
-        Icon(icon, size: 19, color: scheme.onSurfaceVariant),
-        const SizedBox(width: ShqSpace.md),
-        Text(label),
       ],
     );
   }

@@ -40,6 +40,8 @@ class LlmMessage {
 
   const LlmMessage.system(this.content) : role = LlmRole.system;
 
+  const LlmMessage.assistant(this.content) : role = LlmRole.assistant;
+
   const LlmMessage.user(this.content) : role = LlmRole.user;
 
   final LlmRole role;
@@ -59,6 +61,9 @@ class LlmImage {
   final int maxEdge;
 }
 
+/// 推理开关的服务端表达。只有 DeepSeek 这类明确支持 `thinking` 的端点才发。
+enum LlmThinkingMode { defaultMode, enabled, disabled }
+
 class LlmRequest {
   const LlmRequest({
     required this.model,
@@ -68,6 +73,8 @@ class LlmRequest {
     this.temperature = 0.7,
     this.maxTokens = 1024,
     this.timeout = const Duration(seconds: 60),
+    this.includeUsage = false,
+    this.thinkingMode = LlmThinkingMode.defaultMode,
   });
 
   /// 分析类请求：temperature 固定 0.3（§6.6）。
@@ -78,6 +85,8 @@ class LlmRequest {
     this.images = const <LlmImage>[],
     this.maxTokens = 2048,
     this.timeout = const Duration(seconds: 60),
+    this.includeUsage = false,
+    this.thinkingMode = LlmThinkingMode.defaultMode,
   }) : temperature = 0.3;
 
   final String model;
@@ -87,17 +96,29 @@ class LlmRequest {
   final int maxTokens;
   final Duration timeout;
   final LlmTaskTag taskTag;
+
+  /// 流式请求是否让服务端在末尾回一条 usage（`stream_options.include_usage`）。
+  /// 部分兼容端点不认这个字段，客户端会做一次无该字段的降级重试。
+  final bool includeUsage;
+
+  /// DeepSeek 等端点的 thinking 开关；默认不发，避免老网关 400。
+  final LlmThinkingMode thinkingMode;
 }
 
 class LlmResult {
   const LlmResult({
     required this.text,
+    this.reasoning = '',
     this.tokensIn = 0,
     this.tokensOut = 0,
     this.model = '',
   });
 
   final String text;
+
+  /// DeepSeek reasoner 等返回的推理内容（`reasoning_content`）。
+  final String reasoning;
+
   final int tokensIn;
   final int tokensOut;
 
@@ -106,8 +127,22 @@ class LlmResult {
 }
 
 class LlmChunk {
-  const LlmChunk({required this.delta, this.done = false});
+  const LlmChunk({
+    this.delta = '',
+    this.reasoning = '',
+    this.tokensIn = 0,
+    this.tokensOut = 0,
+    this.done = false,
+  });
 
   final String delta;
+
+  /// 推理增量；与 [delta] 分开，避免混进最终回答。
+  final String reasoning;
+
+  /// 服务端在流末尾回报的用量（需要 `stream_options.include_usage`）。
+  final int tokensIn;
+  final int tokensOut;
+
   final bool done;
 }

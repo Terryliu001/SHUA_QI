@@ -1,8 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- AI（BYOK）：release 构建也必须能直连用户填的 OpenAI 兼容端点。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="shuaqi"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

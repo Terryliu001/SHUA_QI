@@ -13,7 +13,7 @@ import 'migrations.dart';
 /// 2. 迁移只走 [kMigrations]，不许在 onCreate 里另写一份 DDL。
 /// 3. 时间一律 UTC 毫秒，转换只在 UI 层做。
 class AppDatabase {
-  AppDatabase._(this._db);
+  AppDatabase._(this._db, this.path);
 
   /// 打开（必要时创建/升级）数据库。
   ///
@@ -36,10 +36,16 @@ class AppDatabase {
         onUpgrade: _upgrade,
       ),
     );
-    return AppDatabase._(db);
+    return AppDatabase._(db, path);
   }
 
   final Database _db;
+
+  /// 数据库文件的绝对路径。
+  ///
+  /// 2026-10-26 起需要它做两件事：① 设置页的「缓存统计」要把库体积算进去；
+  /// ② 导出备份要把库文件和 Vault 一起打进 zip。之前只有 `raw`，取不到路径。
+  final String path;
 
   /// 底层句柄。DAO 构造要用它，业务代码不要直接碰。
   Database get raw => _db;

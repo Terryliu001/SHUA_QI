@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/bootstrap.dart';
 import 'package:shuaqi/app/import/import_workbook.dart';
 import 'package:shuaqi/domain/model/workbook.dart';
+import 'package:shuaqi/infra/db/dao/folder_dao.dart';
 import 'package:shuaqi/infra/db/dao/workbook_dao.dart';
 import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
@@ -29,6 +30,16 @@ final Provider<Vault> vaultProvider = Provider<Vault>(
 
 final Provider<WorkbookDao> workbookDaoProvider = Provider<WorkbookDao>(
   (Ref ref) => WorkbookDao(ref.watch(appDependenciesProvider).db.raw),
+);
+
+/// 文件夹（v4 起独立成表，支持嵌套）。
+final Provider<FolderDao> folderDaoProvider = Provider<FolderDao>(
+  (Ref ref) => FolderDao(ref.watch(appDependenciesProvider).db.raw),
+);
+
+/// 标签颜色（`tag` 表只有 name → color）。
+final Provider<TagDao> tagDaoProvider = Provider<TagDao>(
+  (Ref ref) => TagDao(ref.watch(appDependenciesProvider).db.raw),
 );
 
 final Provider<WorkbookImporter> workbookImporterProvider =

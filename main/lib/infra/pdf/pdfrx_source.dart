@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:pdfrx/pdfrx.dart';
+import 'package:shuaqi/domain/region/layout_blocks.dart';
 import 'package:shuaqi/infra/pdf/pdf_source.dart';
 
 /// 用 pdfrx 实现规格 §7 的 [PdfSource]（T0.4 已实测：首屏 28ms、翻页 3ms）。
@@ -126,6 +127,31 @@ class PdfrxSource implements PdfSource, PageBitmapSource {
       );
     }
     return runs;
+  }
+
+  /// 按**宽度**渲染成灰度位图（L2 版面切块用）。
+  ///
+  /// 直接用 `renderRaw` 的 BGRA 裸像素算亮度，**不经过 PNG / ui.Image**：
+  /// 扫描件整页 4 页也就 20ms 左右，而 PNG 编码一页就要 120ms。
+  @override
+  Future<GrayPage?> renderGray(int index, {required int widthPx}) async {
+    final PdfImage? image = await renderRaw(
+      index,
+      maxEdgePx: widthPx.toDouble(),
+    );
+    if (image == null) {
+      return null;
+    }
+    try {
+      final int pixels = image.width * image.height;
+      return GrayPage(
+        luma: bgraToLuma(image.pixels, pixels),
+        width: image.width,
+        height: image.height,
+      );
+    } finally {
+      image.dispose();
+    }
   }
 
   /// BGRA 裸像素 → ui.Image。

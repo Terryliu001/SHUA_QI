@@ -80,6 +80,14 @@ class Vault {
     }
   }
 
+  /// 删除一条收藏的全部快照文件（目录整棵）。
+  Future<void> deleteFavoriteDir(String favoriteId) async {
+    final Directory dir = this.dir(VaultPaths.favoriteDir(favoriteId));
+    if (dir.existsSync()) {
+      await dir.delete(recursive: true);
+    }
+  }
+
   /// 磁盘上现有的卷 id 列表（孤儿清理用）。
   Future<List<String>> workbookIdsOnDisk() async {
     final Directory root = dir(VaultPaths.workbooksRoot);

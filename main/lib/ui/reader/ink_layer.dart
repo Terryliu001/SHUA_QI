@@ -61,6 +61,7 @@ class InkLayer extends ConsumerStatefulWidget {
     this.colorIndex = 0,
     this.brushWidth = 1,
     this.enabled = true,
+    this.inkTouch = false,
     this.onPenDown,
   });
 
@@ -84,6 +85,12 @@ class InkLayer extends ConsumerStatefulWidget {
 
   /// false 时这一页不接受落笔（例如非当前页）。
   final bool enabled;
+
+  /// 是否接受**手指**落笔。
+  ///
+  /// 手形浏览模式关（书写模式）时为 true：单指写字；双指落下时本层会取消
+  /// 当前这一笔，把双指手势让给父层的平移/缩放。
+  final bool inkTouch;
 
   /// 笔落屏时回调一次（**不 await、不 setState**，只用来停惯性滚动）。
   ///
@@ -118,6 +125,13 @@ class _InkLayerState extends ConsumerState<InkLayer>
 
   /// 当前这笔的 pointer id；-1 表示没在写。
   int _activePointer = -1;
+
+  /// 正在屏幕上的手指 pointer（只跟踪 touch）。
+  ///
+  /// 第二根手指落下 = 用户要双指平移/缩放：**取消**当前手写笔迹（不落库），
+  /// 并让父层手势接管；直到所有手指抬起前不再起笔。
+  final Set<int> _touchPointers = <int>{};
+  bool _multiTouch = false;
 
   /// 这笔是不是橡皮（工具是橡皮，或笔尾倒过来）。
   bool _erasing = false;
@@ -188,7 +202,22 @@ class _InkLayerState extends ConsumerState<InkLayer>
   @override
   void didUpdateWidget(covariant InkLayer oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final bool changed = oldWidget.brushWidth != widget.brushWidth ||
+    // 切到浏览模式/调框模式时，手上这一笔不该继续落墨。
+    if ((!widget.enabled || !widget.inkTouch) &&
+        (oldWidget.enabled || oldWidget.inkTouch)) {
+      _touchPointers.clear();
+      _multiTouch = false;
+      if (_activePointer >= 0) {
+        if (_erasing) {
+          ref.read(inkEditProvider(widget.inkKey).notifier).abortErase();
+          _erasing = false;
+          _lastEraseAt = null;
+        }
+        _resetActive();
+      }
+    }
+    final bool changed =
+        oldWidget.brushWidth != widget.brushWidth ||
         oldWidget.tool != widget.tool;
     if (changed && _lastInkAt != null) {
       _flashHalo(_lastInkAt!);
@@ -201,8 +230,10 @@ class _InkLayerState extends ConsumerState<InkLayer>
       return Eraser.radiusOfWidth(widget.brushWidth);
     }
     // 笔迹的"大小"是线宽，圈画线宽半径更贴近"笔尖粗细"的直觉。
-    return InkWidth.baseOf(widget.tool.strokeStyle ?? InkStrokeStyle.pen,
-            widget.brushWidth) /
+    return InkWidth.baseOf(
+          widget.tool.strokeStyle ?? InkStrokeStyle.pen,
+          widget.brushWidth,
+        ) /
         2;
   }
 
@@ -222,7 +253,8 @@ class _InkLayerState extends ConsumerState<InkLayer>
 
   bool _accepts(PointerDeviceKind kind) =>
       kind == PointerDeviceKind.stylus ||
-      kind == PointerDeviceKind.invertedStylus;
+      kind == PointerDeviceKind.invertedStylus ||
+      (widget.inkTouch && kind == PointerDeviceKind.touch);
 
   Offset _toPagePt(Offset local) {
     final double scale = _scale;
@@ -276,6 +308,17 @@ class _InkLayerState extends ConsumerState<InkLayer>
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    // 手指：先记 pointer。第二根落下 → 这是双指平移/缩放，不是写字。
+    if (event.kind == PointerDeviceKind.touch && widget.inkTouch) {
+      _touchPointers.add(event.pointer);
+      if (_touchPointers.length >= 2) {
+        _cancelForMultiTouch();
+        return;
+      }
+    }
+    if (_multiTouch) {
+      return;
+    }
     if (!widget.enabled || !_accepts(event.kind)) {
       return;
     }
@@ -342,6 +385,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    _releaseTouchPointer(event);
     if (_activePointer != event.pointer) {
       return;
     }
@@ -353,6 +397,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
+    _releaseTouchPointer(event);
     if (_activePointer != event.pointer) {
       return;
     }
@@ -368,6 +413,36 @@ class _InkLayerState extends ConsumerState<InkLayer>
       return;
     }
     _commit(compressor.points.last);
+  }
+
+  /// 手指抬起/取消：维护多指集合；全部抬起后允许下一次单指起笔。
+  void _releaseTouchPointer(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.touch) {
+      return;
+    }
+    _touchPointers.remove(event.pointer);
+    if (_touchPointers.isEmpty) {
+      _multiTouch = false;
+    }
+  }
+
+  /// 第二根手指落下：取消当前手写/擦除，把双指手势让给父层。
+  ///
+  /// 手写：活跃 ribbon 清掉即可（从未 commit，不会进历史）。
+  /// 擦除：已经改过 doc，必须把 pending 的擦除步骤**反向还原**，
+  /// 否则一次"想缩放却擦掉半页"无法解释。
+  void _cancelForMultiTouch() {
+    _multiTouch = true;
+    if (_erasing) {
+      ref.read(inkEditProvider(widget.inkKey).notifier).abortErase();
+      _erasing = false;
+      _lastEraseAt = null;
+      _activePointer = -1;
+      _lastActiveEventMs = 0;
+      _activeTick.value++;
+      return;
+    }
+    _resetActive();
   }
 
   /// 收掉当前这笔（正常抬笔 / 僵死自愈 / 取消都走这里）。
@@ -496,9 +571,8 @@ class _InkLayerState extends ConsumerState<InkLayer>
     // 同时拿 doc / epoch / 载入问题：纯追加只要 doc，结构性改动（擦除/撤销）
     // 看 epoch；issue 用来给"已从备份恢复 / 文件损坏"一句明确提示。
     final (InkDoc doc, int epoch, InkLoadIssue issue) = ref.watch(
-      inkEditProvider(
-        widget.inkKey,
-      ).select((InkEditState s) => (s.doc, s.epoch, s.issue)),
+      inkEditProvider(widget.inkKey)
+          .select((InkEditState s) => (s.doc, s.epoch, s.issue)),
     );
     final double scale = _scale;
 
@@ -507,7 +581,8 @@ class _InkLayerState extends ConsumerState<InkLayer>
 
     // 正在写的那一笔用**它自己的** spec（切工具/换色不影响已落下的这一笔）；
     // 没在写时用当前设置（橡皮时画布上没有活跃笔，回落到钢笔只为复用同一条 ribbon）。
-    final InkBrushSpec spec = _activePointer >= 0 && !_erasing && _activeSpec != null
+    final InkBrushSpec spec =
+        _activePointer >= 0 && !_erasing && _activeSpec != null
         ? _activeSpec!
         : _specFor(widget.tool.strokeStyle ?? InkStrokeStyle.pen);
     final InkRibbon active = _ribbonFor(spec);
@@ -524,6 +599,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
                   cache: _cache,
                   doc: doc,
                   scale: scale,
+                  darkPaper: widget.darkPaper,
                 ),
               ),
             ),
@@ -558,8 +634,8 @@ class _InkLayerState extends ConsumerState<InkLayer>
                     color: widget.tool.isEraser
                         ? null
                         : previewColorOf(
-                            style: widget.tool.strokeStyle ??
-                                InkStrokeStyle.pen,
+                            style:
+                                widget.tool.strokeStyle ?? InkStrokeStyle.pen,
                             colorIndex: widget.colorIndex,
                             darkPaper: widget.darkPaper,
                           ),
@@ -573,9 +649,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
             Positioned(
               left: ShqSpace.md,
               top: ShqSpace.md,
-              child: IgnorePointer(
-                child: _LoadIssueBanner(issue: issue),
-              ),
+              child: IgnorePointer(child: _LoadIssueBanner(issue: issue)),
             ),
           // 输入层铺满整页：translucent 让 touch 继续穿透到父层手势
           // （滚动平移/缩放、分页缩放），stylus 由本层消费。
@@ -615,10 +689,7 @@ class _LoadIssueBanner extends StatelessWidget {
         ? scheme.onTertiaryContainer
         : scheme.onErrorContainer;
     return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: ShqSpace.sm,
-        vertical: 4,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: ShqSpace.sm, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(ShqRadius.pill),

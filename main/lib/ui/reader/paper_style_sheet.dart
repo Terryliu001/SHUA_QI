@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
+
 /// 显示设置底部浮层（T1.6）：纸感 + 强度。
 ///
 /// 设计取向（设计哲学：谷歌的灵动 + iOS 的优雅简练）：
@@ -153,6 +154,13 @@ class _PaperStyleSheetState extends State<_PaperStyleSheet> {
         Expanded(
           child: Slider(
             value: _prefs.intensity.toDouble(),
+            // 必须显式给 max：Slider 默认范围是 0..1，而强度是 0..100。
+            // 缺这一行会让 55 这样的正常值直接违反断言 —— 一打开「显示」浮层
+            // 就报错、整块设置点不动（2026-10-24 用户报的"暗色/其他形式无法设置"）。
+            min: 0,
+            max: 100,
+            divisions: 20,
+            label: '${_prefs.intensity}%',
             onChanged: enabled
                 ? (double v) => _update(_prefs.copyWith(intensity: v.round()))
                 : null,

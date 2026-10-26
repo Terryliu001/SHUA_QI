@@ -15,6 +15,7 @@ import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/ui/reader/page_image_cache.dart';
 import 'package:shuaqi/ui/reader/page_layer.dart';
+import 'package:shuaqi/ui/reader/region_overlay.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 分页模式：一屏一页 + 页内自由缩放（1.0–4.0）+ 左右边缘 15% 点击翻页 + 双击缩放。
@@ -37,6 +38,10 @@ class PagedReaderView extends StatefulWidget {
     this.inkTool = InkTool.pen,
     this.inkColorIndex = 0,
     this.inkbrushWidth = 1,
+    this.regionMarksByPage = const <int, List<RegionMark>>{},
+    this.regionConfig,
+    this.regionEditing = false,
+    this.fingerWrites = true,
   });
 
   final List<WbPage> pages;
@@ -55,6 +60,20 @@ class PagedReaderView extends StatefulWidget {
 
   /// 当前笔刷（工具栏选中项）。
   final InkTool inkTool;
+
+  /// 每页的题目区域框（T3.5 检查视角）。空 Map = 不画。
+  final Map<int, List<RegionMark>> regionMarksByPage;
+
+  /// 叠加层的编辑配置（null = 只读）。
+  final RegionOverlayConfig? regionConfig;
+
+  /// 正在调框（「题目区域」面板打开）：墨迹层只画不收笔，手写笔用来调框。
+  final bool regionEditing;
+
+  /// 书写模式：单指/笔写字，双指平移缩放。
+  /// false = 手势模式：**手指只平移缩放，笔仍然写字**（2026-10-24 用户口径）。
+  /// 两者的差别只在「手指算不算笔」；笔永远优先给墨迹层，除非正在调框。
+  final bool fingerWrites;
 
   @override
   State<PagedReaderView> createState() => PagedReaderViewState();
@@ -220,49 +239,70 @@ class PagedReaderViewState extends State<PagedReaderView> {
               supportedDevices: const <PointerDeviceKind>{
                 PointerDeviceKind.touch,
               },
-              // 双击：fit-width ↔ 2 倍
-              onDoubleTap: () {
-                if (index != _current) {
-                  return;
-                }
-                final double scale = controller.value.getMaxScaleOnAxis();
-                _setScale(scale > 1.5 ? 1.0 : 2.0);
-              },
-              child: StylusGestureGuard(
-                child: InteractiveViewer(
-                  minScale: 1,
-                  maxScale: 4,
-                  // 每页始终挂着自己的控制器，不再中途重挂
-                  transformationController: controller,
-                  // 缩放后单指平移才有意义；1x 时不开，避免和平移/翻页抢手势。
-                  // 当前页用 _zoomed（会随缩放触发重建），其它页用各自的静态状态。
-                  panEnabled: index == _current ? _zoomed : zoomed,
-                  scaleEnabled: true,
-                  onInteractionEnd: (ScaleEndDetails details) =>
-                      _commitScale(index),
-                  child: Center(
-                    child: PageLayer(
-                      cache: widget.cache,
-                      page: page,
-                      width: displayWidth,
-                      renderScale: index == _current
-                          ? _renderScale.toDouble()
-                          : 1,
-                      style: widget.style,
-                      intensity: widget.intensity,
-                      sessionId: widget.sessionId,
-                      // **放大状态下也允许书写**（2026-10-22 用户反馈推翻 T2.1 的取舍）：
-                      // 墨迹层在 IV 的变换子树里，指针事件的 localPosition 会被
-                      // IV 的矩阵自动逆变换到页面局部坐标，写哪儿落在哪儿；
-                      // stylus 不会平移页面——那由 [StylusGestureGuard] 挡住。
-                      // touch 仍走 IV 的平移/缩放（笔写、指滚，§6.9.1）。
-                      inkEnabled: widget.sessionId != null && index == _current,
-                      inkTool: widget.inkTool,
-                      inkColorIndex: widget.inkColorIndex,
-                      inkbrushWidth: widget.inkbrushWidth,
+              // 双击：fit-width ↔ 2 倍。书写模式关掉双击——单指点两下
+              // 会先落两个墨点再缩放，和"单指书写"冲突。
+              onDoubleTap: widget.fingerWrites
+                  ? null
+                  : () {
+                      if (index != _current) {
+                        return;
+                      }
+                      final double scale = controller.value.getMaxScaleOnAxis();
+                      _setScale(scale > 1.5 ? 1.0 : 2.0);
+                    },
+              child: _TouchPanGate(
+                fingerWrites: widget.fingerWrites,
+                builder: (bool panEnabled) {
+                  final Widget viewer = InteractiveViewer(
+                    minScale: 1,
+                    maxScale: 4,
+                    // 每页始终挂着自己的控制器，不再中途重挂
+                    transformationController: controller,
+                    // 缩放后单指平移才有意义；1x 时不开，避免和平移/翻页抢手势。
+                    // 书写模式下单指只写字：panEnabled 由 _TouchPanGate 按
+                    // "是否已有第二根手指"动态控制；双指才放行平移/缩放。
+                    panEnabled:
+                        panEnabled && (index == _current ? _zoomed : zoomed),
+                    scaleEnabled: true,
+                    onInteractionEnd: (ScaleEndDetails details) =>
+                        _commitScale(index),
+                    child: Center(
+                      child: PageLayer(
+                        cache: widget.cache,
+                        page: page,
+                        width: displayWidth,
+                        renderScale: index == _current
+                            ? _renderScale.toDouble()
+                            : 1,
+                        style: widget.style,
+                        intensity: widget.intensity,
+                        sessionId: widget.sessionId,
+                        // **放大状态下也允许书写**（2026-10-22 用户反馈推翻 T2.1 的取舍）：
+                        // 墨迹层在 IV 的变换子树里，指针事件的 localPosition 会被
+                        // IV 的矩阵自动逆变换到页面局部坐标，写哪儿落在哪儿；
+                        // stylus 不会平移页面——那由 [StylusGestureGuard] 挡住。
+                        inkEnabled:
+                            widget.sessionId != null && index == _current,
+                        // 手形/手势模式与书写模式都收笔：笔始终是笔。
+                        // 区别只在手指是否落墨（inkTouch）；调框模式才整层禁用。
+                        inkInteractive: !widget.regionEditing,
+                        inkTouch: !widget.regionEditing && widget.fingerWrites,
+                        inkTool: widget.inkTool,
+                        inkColorIndex: widget.inkColorIndex,
+                        inkbrushWidth: widget.inkbrushWidth,
+                        regionMarks:
+                            widget.regionMarksByPage[page.index] ??
+                            const <RegionMark>[],
+                        regionConfig: widget.regionConfig,
+                      ),
                     ),
-                  ),
-                ),
+                  );
+                  // 守卫拦的始终是"笔"：笔要写字，不能被 IV 的 pan/scale 抢走。
+                  // 调框模式是唯一例外——那时笔要优先给框。
+                  return !widget.regionEditing
+                      ? StylusGestureGuard(child: viewer)
+                      : viewer;
+                },
               ),
             );
           },
@@ -381,6 +421,66 @@ class PageIndicator extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// 单指书写、双指平移/缩放的"动态 panEnabled"门。
+///
+/// [InteractiveViewer] 的 `panEnabled` 是整段手势的布尔值，不会按 pointerCount
+/// 自己变。书写模式下：
+/// - 只有一根手指 → panEnabled=false：IV 不抢单指，墨迹层写字；
+/// - 第二根手指落下 → panEnabled=true：IV 接管双指平移/缩放。
+///
+/// 墨迹层在第二根手指落下时会取消当前笔画（见 `InkLayer._cancelForMultiTouch`），
+/// 所以不会出现"缩放时留下半条线"。
+class _TouchPanGate extends StatefulWidget {
+  const _TouchPanGate({required this.fingerWrites, required this.builder});
+
+  final bool fingerWrites;
+  final Widget Function(bool panEnabled) builder;
+
+  @override
+  State<_TouchPanGate> createState() => _TouchPanGateState();
+}
+
+class _TouchPanGateState extends State<_TouchPanGate> {
+  final Set<int> _touches = <int>{};
+
+  bool get _panEnabled => !widget.fingerWrites || _touches.length >= 2;
+
+  @override
+  void didUpdateWidget(covariant _TouchPanGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fingerWrites != widget.fingerWrites) {
+      _touches.clear();
+    }
+  }
+
+  void _down(PointerDownEvent event) {
+    if (event.kind != PointerDeviceKind.touch) {
+      return;
+    }
+    setState(() => _touches.add(event.pointer));
+  }
+
+  void _up(PointerEvent event) {
+    if (event.kind != PointerDeviceKind.touch) {
+      return;
+    }
+    if (_touches.remove(event.pointer)) {
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _down,
+      onPointerUp: _up,
+      onPointerCancel: _up,
+      child: widget.builder(_panEnabled),
     );
   }
 }

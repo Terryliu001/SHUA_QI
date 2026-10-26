@@ -161,4 +161,22 @@ void main() {
     expect(decoded.points[3].x, 0);
     expect(decoded.points[3].y, 0);
   });
+
+  /// 回归（2026-10-25）：`readPageSize` 曾用 ByteData 默认的大端读页宽高，
+  /// 1000×600 被读成 413.5×2869.5 → 答题卡/二刷每次载入都按错误比例缩放笔迹。
+  /// 结果不是抛错而是"字被拉扁"，属最隐蔽的一类数据事故。
+  test('readPageSize 与 header 同口径（little-endian），1000×600 读回 1000×600', () {
+    const SifPageSize canvas = SifPageSize(1000, 600);
+    final Uint8List bytes = SifCodec.encode(
+      InkDoc(revision: 0, strokes: <InkStroke>[stroke(0)]),
+      canvas,
+    );
+    final SifPageSize? size = SifCodec.readPageSize(bytes);
+    expect(size, isNotNull);
+    expect(size!.width, closeTo(1000, 0.05));
+    expect(size.height, closeTo(600, 0.05));
+    // 尺寸一致时 scaleInkDoc 必须原样返回（不做缩放）。
+    final InkDoc decoded = SifCodec.decode(bytes);
+    expect(decoded.strokes.first.points.first.x, closeTo(20, 0.5));
+  });
 }

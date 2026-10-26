@@ -76,6 +76,16 @@ class WorkbookDao {
   }
 
   /// 移动到文件夹。`''` = 未分类。
+  /// v4 起：卷归属用文件夹 id（空串 = 未分类）。
+  Future<void> setFolderId(String id, String folderId) async {
+    await _db.update(
+      'workbook',
+      <String, Object?>{'folder_id': folderId},
+      where: 'id = ?',
+      whereArgs: <Object?>[id],
+    );
+  }
+
   Future<void> setFolder(String id, String folder) async {
     await _db.update(
       'workbook',
