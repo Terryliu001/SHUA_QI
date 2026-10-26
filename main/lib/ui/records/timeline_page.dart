@@ -139,7 +139,7 @@ class _RecordsTimelinePageState extends ConsumerState<RecordsTimelinePage> {
         for (final TimelineWorkbook workbook in day.workbooks) {
           if (workbook.isRedo) {
             // 组卷 / 重刷：点开是"展开这条记录"，不跳去重刷答题卡。
-            final bool expanded = _expandedGroups.contains(workbook.workbookId);
+            final bool expanded = _expandedGroups.contains(workbook.groupKey);
             items.add(
               _RailItem(
                 child: _WorkbookCard(
@@ -147,9 +147,9 @@ class _RecordsTimelinePageState extends ConsumerState<RecordsTimelinePage> {
                   expanded: expanded,
                   onOpen: () => setState(() {
                     if (!expanded) {
-                      _expandedGroups.add(workbook.workbookId);
+                      _expandedGroups.add(workbook.groupKey);
                     } else {
-                      _expandedGroups.remove(workbook.workbookId);
+                      _expandedGroups.remove(workbook.groupKey);
                     }
                   }),
                   onMenu: () => unawaited(_openWorkbookMenu(workbook)),
@@ -201,7 +201,8 @@ class _RecordsTimelinePageState extends ConsumerState<RecordsTimelinePage> {
                   entry: entry,
                   sourceDeleted: workbook.sourceDeleted,
                   onTap: () => _openQuestion(entry, workbook),
-                  onLongPress: () => unawaited(_openQuestionMenu(entry, workbook)),
+                  onLongPress: () =>
+                      unawaited(_openQuestionMenu(entry, workbook)),
                 ),
               ),
             );
@@ -596,7 +597,9 @@ class _WorkbookCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: theme.textTheme.titleSmall?.copyWith(
                               fontWeight: FontWeight.w600,
-                              color: deleted ? scheme.outline : scheme.onSurface,
+                              color: deleted
+                                  ? scheme.outline
+                                  : scheme.onSurface,
                             ),
                           ),
                         ),
@@ -711,7 +714,9 @@ class _VerdictStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
-    final List<AnswerLogEntry> ordered = entries.reversed.toList(growable: false);
+    final List<AnswerLogEntry> ordered = entries.reversed.toList(
+      growable: false,
+    );
     return SizedBox(
       height: 16,
       child: Row(
@@ -855,7 +860,9 @@ class _QuestionRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: theme.textTheme.bodySmall?.copyWith(
                         fontWeight: FontWeight.w500,
-                        color: sourceDeleted ? scheme.outline : scheme.onSurface,
+                        color: sourceDeleted
+                            ? scheme.outline
+                            : scheme.onSurface,
                       ),
                     ),
                     const SizedBox(height: 1),

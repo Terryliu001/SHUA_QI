@@ -7,13 +7,15 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 科目/题型词云（自绘，不引第三方包）。
 ///
-/// ## 为什么自绘
-/// 白名单里没有词云库；而"按权重排字 + 不重叠"本质上是几十行几何，
-/// 引一个包反而多一份无法审计的布局黑箱（还常带一次性随机种子，每次刷新都跳）。
+/// ## 交互（2026-10-26 用户第 2 条，重做）
+/// 不是"整块词"能拖，而是**每一个字都是独立粒子**：手指按在任意一个字上，
+/// 它会跟着走，还会把旁边几个字轻轻推开；松手后所有字用弹性动画回到自己的
+/// 原位——字与字重新拼回原来的文件名/科目名，不会散成一地。
 ///
-/// ## 交互（2026-10-26 用户第 7 条）
-/// 词可以在框内拖动：拖动时放大、浮起；松手用一条**弹性回位**动画回到原位。
-/// 布局本身是确定性的（同数据同图），拖动只是"临时位移"，不会改变词的位置。
+/// ## 聚合逻辑
+/// 每个字有一个 home（由词云布局确定，同一个词的字紧挨着）。
+/// 拖动时只改变临时 offset；松手用 `elasticOut` 把所有 offset 归零。
+/// 因此"搅动"不会破坏词的可读性，也不会改变下一次布局。
 class RecordsWordCloud extends StatefulWidget {
   const RecordsWordCloud({
     super.key,
@@ -34,27 +36,25 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
     with SingleTickerProviderStateMixin {
   late final AnimationController _spring = AnimationController(
     vsync: this,
-    duration: const Duration(milliseconds: 620),
+    duration: const Duration(milliseconds: 640),
   );
 
-  /// 当前被拖动的词；null = 没有。
+  /// 当前被拖动的字；null = 没有。
   int? _active;
 
-  /// 正在回位的词与起点。
-  int? _settling;
-  Offset _settleFrom = Offset.zero;
-  Offset _dragOffset = Offset.zero;
-
-  /// 每个词的临时位移（拖动中）；回位动画只影响 [_settling]。
+  /// 每个字的临时位移。
   final Map<int, Offset> _offsets = <int, Offset>{};
+
+  /// 松手时所有字从哪里回位。
+  Map<int, Offset> _settleFrom = <int, Offset>{};
 
   @override
   void didUpdateWidget(covariant RecordsWordCloud oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.words != widget.words) {
       _offsets.clear();
+      _settleFrom.clear();
       _active = null;
-      _settling = null;
       _spring.stop();
     }
   }
@@ -69,71 +69,90 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
     _spring.stop();
     setState(() {
       _active = index;
-      _settling = null;
-      _dragOffset = _offsets[index] ?? Offset.zero;
+      _settleFrom = <int, Offset>{};
     });
   }
 
-  void _update(int index, Offset delta, Size size, _PlacedWord word) {
+  void _update(int index, Offset delta, Size size, _CloudLayout layout) {
+    final _Glyph glyph = layout.glyphs[index];
     final Offset current = _offsets[index] ?? Offset.zero;
-    final double width = word.painter.width;
-    final double height = word.painter.height;
-    // 允许在框内自由拖，但别拖出边界（留 4dp）。
-    final double minX = 4 - word.offset.dx;
-    final double maxX = size.width - width - 4 - word.offset.dx;
-    final double minY = 4 - word.offset.dy;
-    final double maxY = size.height - height - 4 - word.offset.dy;
     final Offset next = Offset(
       (current.dx + delta.dx).clamp(
-        math.min(minX, maxX),
-        math.max(minX, maxX),
+        0.0,
+        math.max(0, size.width - glyph.painter.width),
       ),
       (current.dy + delta.dy).clamp(
-        math.min(minY, maxY),
-        math.max(minY, maxY),
+        0.0,
+        math.max(0, size.height - glyph.painter.height),
       ),
     );
     setState(() {
       _offsets[index] = next;
-      _dragOffset = next;
+      _scatterAround(index, next, layout);
     });
   }
 
-  void _release(int index) {
-    final Offset from = _offsets[index] ?? Offset.zero;
-    if (from == Offset.zero) {
-      setState(() {
-        _active = null;
-        _offsets.remove(index);
-      });
+  /// 搅动：被拖的字经过时，把附近的字轻轻推开，像用手指搅一盘字。
+  /// 只是视觉位移，不改变 home；松手后统一回位。
+  void _scatterAround(
+    int activeIndex,
+    Offset activeOffset,
+    _CloudLayout layout,
+  ) {
+    const double radius = 78;
+    final _Glyph active = layout.glyphs[activeIndex];
+    final Offset activeCenter =
+        active.home +
+        activeOffset +
+        Offset(active.painter.width / 2, active.painter.height / 2);
+    for (int i = 0; i < layout.glyphs.length; i += 1) {
+      if (i == activeIndex) {
+        continue;
+      }
+      final _Glyph glyph = layout.glyphs[i];
+      final Offset homeCenter =
+          glyph.home +
+          Offset(glyph.painter.width / 2, glyph.painter.height / 2);
+      final Offset away = homeCenter - activeCenter;
+      final double distance = away.distance;
+      if (distance <= 0.01 || distance >= radius) {
+        _offsets.remove(i);
+        continue;
+      }
+      final double push = (1 - distance / radius) * 14;
+      _offsets[i] = away / distance * push;
+    }
+  }
+
+  void _release() {
+    final int? index = _active;
+    if (index == null) {
       return;
     }
-    setState(() {
-      _active = null;
-      _settling = index;
-      _settleFrom = from;
-    });
+    _active = null;
+    if (_offsets.isEmpty) {
+      setState(() {});
+      return;
+    }
+    _settleFrom = Map<int, Offset>.of(_offsets);
+    setState(() {});
     unawaited(
       _spring.forward(from: 0).whenComplete(() {
         if (!mounted) {
           return;
         }
         setState(() {
-          _settling = null;
-          _settleFrom = Offset.zero;
-          _offsets.remove(index);
+          _settleFrom = <int, Offset>{};
+          _offsets.clear();
         });
       }),
     );
   }
 
   Offset _offsetFor(int index) {
-    if (_active == index) {
-      return _dragOffset;
-    }
-    if (_settling == index) {
+    if (_settleFrom.isNotEmpty) {
       final double t = Curves.elasticOut.transform(_spring.value);
-      return _settleFrom * (1 - t);
+      return (_settleFrom[index] ?? Offset.zero) * (1 - t);
     }
     return _offsets[index] ?? Offset.zero;
   }
@@ -160,10 +179,7 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
       width: double.infinity,
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
-          final Size size = Size(
-            constraints.maxWidth,
-            constraints.maxHeight,
-          );
+          final Size size = Size(constraints.maxWidth, constraints.maxHeight);
           final _CloudLayout layout = _layoutFor(
             size: size,
             words: widget.words,
@@ -175,8 +191,7 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
             animation: _spring,
             builder: (BuildContext context, Widget? child) {
               final List<Offset> offsets = <Offset>[
-                for (int i = 0; i < layout.words.length; i += 1)
-                  _offsetFor(i),
+                for (int i = 0; i < layout.glyphs.length; i += 1) _offsetFor(i),
               ];
               return Stack(
                 children: <Widget>[
@@ -187,28 +202,23 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
                           layout: layout,
                           offsets: offsets,
                           active: _active,
-                          activeScale: _active == null ? 1 : 1.08,
                         ),
                       ),
                     ),
                   ),
-                  for (int i = 0; i < layout.words.length; i += 1)
+                  for (int i = 0; i < layout.glyphs.length; i += 1)
                     Positioned(
-                      left: layout.words[i].offset.dx + offsets[i].dx,
-                      top: layout.words[i].offset.dy + offsets[i].dy,
-                      width: layout.words[i].painter.width,
-                      height: layout.words[i].painter.height,
+                      left: layout.glyphs[i].home.dx + offsets[i].dx,
+                      top: layout.glyphs[i].home.dy + offsets[i].dy,
+                      width: layout.glyphs[i].painter.width,
+                      height: layout.glyphs[i].painter.height,
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
                         onPanStart: (_) => _start(i),
-                        onPanUpdate: (DragUpdateDetails details) => _update(
-                          i,
-                          details.delta,
-                          size,
-                          layout.words[i],
-                        ),
-                        onPanEnd: (_) => _release(i),
-                        onPanCancel: () => _release(i),
+                        onPanUpdate: (DragUpdateDetails details) =>
+                            _update(i, details.delta, size, layout),
+                        onPanEnd: (_) => _release(),
+                        onPanCancel: _release,
                       ),
                     ),
                 ],
@@ -221,21 +231,36 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
   }
 }
 
+class _Glyph {
+  const _Glyph({required this.painter, required this.home});
+
+  final TextPainter painter;
+
+  /// 字在词里的原始位置；松手回这里，字就重新拼成词。
+  final Offset home;
+
+  void dispose() => painter.dispose();
+}
+
 class _PlacedWord {
-  const _PlacedWord(this.painter, this.offset);
+  const _PlacedWord({required this.painter, required this.offset});
 
   final TextPainter painter;
   final Offset offset;
 }
 
 class _CloudLayout {
-  const _CloudLayout(this.words);
+  const _CloudLayout(this.words, this.glyphs);
 
   final List<_PlacedWord> words;
+  final List<_Glyph> glyphs;
 
   void dispose() {
     for (final _PlacedWord word in words) {
       word.painter.dispose();
+    }
+    for (final _Glyph glyph in glyphs) {
+      glyph.dispose();
     }
   }
 }
@@ -266,6 +291,7 @@ _CloudLayout _layoutFor({
 
   final double maxWeight = top.isEmpty ? 0 : top.first.weight;
   final List<_PlacedWord> placed = <_PlacedWord>[];
+  final List<_Glyph> glyphs = <_Glyph>[];
   final List<Rect> taken = <Rect>[];
   final Offset center = Offset(size.width / 2, size.height / 2);
 
@@ -280,17 +306,15 @@ _CloudLayout _layoutFor({
       final double t = maxWeight <= 0
           ? 0
           : math.sqrt((word.weight / maxWeight).clamp(0.0, 1.0));
+      final TextStyle style = TextStyle(
+        fontSize: font,
+        height: 1.06,
+        letterSpacing: ShqType.letterSpacingLabel * 0.5,
+        fontWeight: t > 0.72 ? FontWeight.w600 : FontWeight.w500,
+        color: Color.lerp(low, high, 0.25 + 0.75 * t),
+      );
       final TextPainter painter = TextPainter(
-        text: TextSpan(
-          text: word.label,
-          style: TextStyle(
-            fontSize: font,
-            height: 1.06,
-            letterSpacing: ShqType.letterSpacingLabel * 0.5,
-            fontWeight: t > 0.72 ? FontWeight.w600 : FontWeight.w500,
-            color: Color.lerp(low, high, 0.25 + 0.75 * t),
-          ),
-        ),
+        text: TextSpan(text: word.label, style: style),
         textDirection: TextDirection.ltr,
         textScaler: textScaler,
         maxLines: 1,
@@ -309,8 +333,15 @@ _CloudLayout _layoutFor({
           painter.width,
           painter.height,
         );
-        placed.add(_PlacedWord(painter, spot));
+        placed.add(_PlacedWord(painter: painter, offset: spot));
         taken.add(rect.inflate(2.5));
+        _splitGlyphs(
+          word: word.label,
+          style: style.copyWith(letterSpacing: 0),
+          wordRect: rect,
+          textScaler: textScaler,
+          out: glyphs,
+        );
         break;
       }
       painter.dispose();
@@ -321,13 +352,44 @@ _CloudLayout _layoutFor({
     }
   }
 
-  final _CloudLayout layout = _CloudLayout(placed);
+  final _CloudLayout layout = _CloudLayout(placed, glyphs);
   if (_layoutCache.length >= 3) {
     final String firstKey = _layoutCache.keys.first;
     _layoutCache.remove(firstKey)?.dispose();
   }
   _layoutCache[signature] = layout;
   return layout;
+}
+
+/// 把一个词拆成字；每个字的 home 紧挨着，合起来就是原来的词。
+void _splitGlyphs({
+  required String word,
+  required TextStyle style,
+  required Rect wordRect,
+  required TextScaler textScaler,
+  required List<_Glyph> out,
+}) {
+  final List<TextPainter> painters = <TextPainter>[];
+  final List<int> runes = word.runes.toList(growable: false);
+  double total = 0;
+  for (final int rune in runes) {
+    final TextPainter painter = TextPainter(
+      text: TextSpan(text: String.fromCharCode(rune), style: style),
+      textDirection: TextDirection.ltr,
+      textScaler: textScaler,
+      maxLines: 1,
+    )..layout();
+    painters.add(painter);
+    total += painter.width;
+  }
+  double x = wordRect.left + (wordRect.width - total) / 2;
+  final double y =
+      wordRect.top +
+      (wordRect.height - (painters.isEmpty ? 0 : painters.first.height)) / 2;
+  for (int i = 0; i < painters.length; i += 1) {
+    out.add(_Glyph(painter: painters[i], home: Offset(x, y)));
+    x += painters[i].width;
+  }
 }
 
 /// 从中心向外的阿基米德螺旋找一个不重叠的位置。找不到返回 null。
@@ -346,9 +408,11 @@ Offset? _findSpot({
       center.dy + math.sin(angle) * radius - wordSize.height / 2,
     );
     final double x = raw.dx.clamp(0, math.max(0, size.width - wordSize.width));
-    final double y = raw.dy.clamp(0, math.max(0, size.height - wordSize.height));
+    final double y = raw.dy.clamp(
+      0,
+      math.max(0, size.height - wordSize.height),
+    );
     if (x != raw.dx || y != raw.dy) {
-      // 越界后夹紧会产生大量"贴边堆叠"，直接跳过这一圈。
       if (radius > size.shortestSide) {
         break;
       }
@@ -374,47 +438,43 @@ class _CloudPainter extends CustomPainter {
     required this.layout,
     required this.offsets,
     required this.active,
-    required this.activeScale,
   });
 
   final _CloudLayout layout;
   final List<Offset> offsets;
   final int? active;
-  final double activeScale;
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (int i = 0; i < layout.words.length; i += 1) {
+    for (int i = 0; i < layout.glyphs.length; i += 1) {
       if (i == active) {
-        continue; // 被拖的词最后画，压在最上面。
+        continue; // 被拖的字最后画，压在最上面。
       }
-      _paintWord(canvas, i, scale: 1);
+      _paintGlyph(canvas, i, scale: 1);
     }
     final int? current = active;
-    if (current != null && current < layout.words.length) {
-      _paintWord(canvas, current, scale: activeScale);
+    if (current != null && current < layout.glyphs.length) {
+      _paintGlyph(canvas, current, scale: 1.12);
     }
   }
 
-  void _paintWord(Canvas canvas, int index, {required double scale}) {
-    final _PlacedWord word = layout.words[index];
+  void _paintGlyph(Canvas canvas, int index, {required double scale}) {
+    final _Glyph glyph = layout.glyphs[index];
     final Offset offset = offsets[index];
-    final Offset at = word.offset + offset;
+    final Offset at = glyph.home + offset;
     if (scale == 1) {
-      word.painter.paint(canvas, at);
+      glyph.painter.paint(canvas, at);
       return;
     }
-    final Offset center = at + Offset(word.painter.width / 2, word.painter.height / 2);
+    final Offset center =
+        at + Offset(glyph.painter.width / 2, glyph.painter.height / 2);
     canvas.save();
     canvas.translate(center.dx, center.dy);
     canvas.scale(scale);
     canvas.translate(-center.dx, -center.dy);
     // 轻微投影，让"拿起来"的感觉更明确。
-    word.painter.paint(
-      canvas,
-      at + const Offset(0, 2),
-    );
-    word.painter.paint(canvas, at);
+    glyph.painter.paint(canvas, at + const Offset(0, 2));
+    glyph.painter.paint(canvas, at);
     canvas.restore();
   }
 
@@ -422,7 +482,6 @@ class _CloudPainter extends CustomPainter {
   bool shouldRepaint(_CloudPainter old) =>
       !identical(old.layout, layout) ||
       old.active != active ||
-      old.activeScale != activeScale ||
       !_sameOffsets(old.offsets, offsets);
 
   static bool _sameOffsets(List<Offset> a, List<Offset> b) {

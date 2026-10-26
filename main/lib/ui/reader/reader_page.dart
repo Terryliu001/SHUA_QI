@@ -226,6 +226,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   int _fillDone = 0;
   int _fillTotal = 0;
 
+  /// 本轮刚补出来、还没被 provider 重新读到的 AI 答案。
+  ///
+  /// 2026-10-26 用户第 4 条：每补出一道就要能看见、且立刻落盘；
+  /// 不能等整批结束才写，否则中途退出会丢已补的答案。
+  /// 这里做一层"内存覆盖"，避免每补一道就 invalidate provider 导致页面跳。
+  AnswerSet _liveAiAnswers = AnswerSet.empty;
+
   /// 多选批量「AI 判」进行中。
   bool _batchAiRunning = false;
 
@@ -259,6 +266,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _pendingQuestionId = widget.initialQuestionId;
+    // 进卷时丢掉上一次的切题/答案缓存：AI 补答案可能刚写完文件，
+    // 而 provider 不是 autoDispose；不刷新的话退出再进会读到旧快照。
+    ref.invalidate(regionSetProvider(widget.workbookId));
     if (!kReleaseMode) {
       _frameStats = FrameStatsCollector();
     }
@@ -1116,9 +1126,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     if (!mounted) {
       return;
     }
-    _showReaderTip(
-      '改卷：本地对 $correct · 错 $wrong · 待判 $pending · 跳过 $skipped',
-    );
+    _showReaderTip('改卷：本地对 $correct · 错 $wrong · 待判 $pending · 跳过 $skipped');
     if (untrusted.isEmpty) {
       return;
     }
@@ -1142,10 +1150,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   }
 
   /// 弹窗询问是否把 N 道题交给 AI（不自动决定）。
-  Future<bool> _askAiGrade({
-    required int count,
-    required String reason,
-  }) async {
+  Future<bool> _askAiGrade({required int count, required String reason}) async {
     final bool? ok = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) => AlertDialog(
@@ -1334,15 +1339,25 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           if (answer.isEmpty) {
             skipped++;
           } else {
-            next = next.withNote(
-              AnswerNote(
-                label: _answerLabelOf(bundle),
-                text: answer,
-                source: 'ai',
-                pageIndex: bundle.slices.first.pageIndex,
-                ordinal: bundle.question.ordinal,
-              ),
+            final AnswerNote note = AnswerNote(
+              label: _answerLabelOf(bundle),
+              text: answer,
+              source: 'ai',
+              pageIndex: bundle.slices.first.pageIndex,
+              ordinal: bundle.question.ordinal,
             );
+            next = next.withNote(note);
+            // 逐题落盘 + 内存覆盖：中途退出/被杀，已补的答案也留得住。
+            // 不 invalidate provider（那会让整卷闪一下/跳一下），
+            // 用 _liveAiAnswers 先在当前页生效，重新进卷自然从文件读到。
+            await store.writeAiAnswers(widget.workbookId, next.toJson());
+            if (mounted) {
+              setState(() {
+                _liveAiAnswers = _liveAiAnswers.withNote(note);
+              });
+            } else {
+              _liveAiAnswers = _liveAiAnswers.withNote(note);
+            }
             filled++;
           }
         } on Object {
@@ -1353,20 +1368,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           }
         }
       }
-      // 一次性落盘：避免每补一题就重画一次卷面。
-      if (filled > 0) {
-        await store.writeAiAnswers(widget.workbookId, next.toJson());
-        ref.invalidate(regionSetProvider(widget.workbookId));
-      }
     } finally {
       if (mounted) {
         setState(() {
           _fillingAi = false;
           _fillTotal = 0;
         });
-        _showReaderTip(
-          '补答案完成：补了 $filled 道 · 跳过 $skipped 道（没题面或调用失败）',
-        );
+        // 实时阶段用 _liveAiAnswers 覆盖，避免每补一题就 invalidate 闪一下；
+        // 整批结束再同步 provider，保证退出/重进也读到已落盘的答案。
+        if (filled > 0) {
+          ref.invalidate(regionSetProvider(widget.workbookId));
+        }
+        _showReaderTip('补答案完成：补了 $filled 道 · 跳过 $skipped 道（没题面或调用失败）');
       }
     }
   }
@@ -1424,22 +1437,27 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           if (answer.isEmpty) {
             continue;
           }
-          next = next.withNote(
-            AnswerNote(
-              label: _answerLabelOf(bundle),
-              text: answer,
-              source: 'ai',
-              pageIndex: bundle.slices.first.pageIndex,
-              ordinal: bundle.question.ordinal,
-            ),
+          final AnswerNote note = AnswerNote(
+            label: _answerLabelOf(bundle),
+            text: answer,
+            source: 'ai',
+            pageIndex: bundle.slices.first.pageIndex,
+            ordinal: bundle.question.ordinal,
           );
+          next = next.withNote(note);
+          // 与「AI 补答案」同口径：逐题写盘 + 当前页内存覆盖。
+          await store.writeAiAnswers(widget.workbookId, next.toJson());
+          if (mounted) {
+            setState(() {
+              _liveAiAnswers = _liveAiAnswers.withNote(note);
+            });
+          } else {
+            _liveAiAnswers = _liveAiAnswers.withNote(note);
+          }
           filled++;
         } on Object {
           // 单题补答案失败不中断整批；判题阶段会按"没有参考答案"处理。
         }
-      }
-      if (filled > 0) {
-        await store.writeAiAnswers(widget.workbookId, next.toJson());
       }
 
       // 2) 逐题判 + 3) 写回对话。
@@ -1470,6 +1488,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     } finally {
       if (mounted) {
         setState(() => _batchAiRunning = false);
+        // 同补答案：实时靠 _liveAiAnswers，收尾再同步一次 provider。
         if (filled > 0) {
           ref.invalidate(regionSetProvider(widget.workbookId));
         }
@@ -1494,7 +1513,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     String asked = '批量 AI 判：帮我判一下这道作答。',
   }) async {
     try {
-      final AiChatStore store = ref.read(aiChatStoreProvider(widget.workbookId));
+      final AiChatStore store = ref.read(
+        aiChatStoreProvider(widget.workbookId),
+      );
       final List<ChatTurn> turns = await store.load(
         widget.workbookId,
         bundle.question.id,
@@ -1583,11 +1604,38 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     switch (action) {
       case RegionPanelBatch.favorite:
         final FavoriteStore store = ref.read(favoriteStoreProvider);
-        int added = 0;
+        // 先摸清这一批里哪些已经收藏、哪些没有：
+        // - 全都收藏过 → 再点一次是**取消收藏**（用户第 1 条）；
+        // - 全都没收藏 → 收藏；
+        // - 混合 → 只补没收藏的，已有收藏不动（不 silently 删除）。
+        final List<String> existingIds = <String>[];
+        final List<QuestionBundle> missing = <QuestionBundle>[];
         for (final QuestionBundle bundle in picked) {
-          if (await store.idOfQuestion(bundle.question.id) != null) {
-            continue;
+          final String? id = await store.idOfQuestion(bundle.question.id);
+          if (id == null) {
+            missing.add(bundle);
+          } else {
+            existingIds.add(id);
           }
+        }
+        if (existingIds.length == picked.length) {
+          int removed = 0;
+          for (final String id in existingIds) {
+            try {
+              await store.remove(id);
+              removed++;
+            } on Object {
+              // 单题失败不中断整批。
+            }
+          }
+          if (mounted) {
+            ref.invalidate(favoritesProvider);
+            _showReaderTip('已取消收藏 $removed 道题');
+          }
+          return;
+        }
+        int added = 0;
+        for (final QuestionBundle bundle in missing) {
           final FavoriteCapture? capture = await _buildFavoriteCapture(bundle);
           if (capture == null) {
             continue;
@@ -1601,7 +1649,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         }
         if (mounted) {
           ref.invalidate(favoritesProvider);
-          _showReaderTip('已收藏 $added 道题');
+          final int kept = existingIds.length;
+          _showReaderTip(
+            kept == 0 ? '已收藏 $added 道题' : '已收藏 $added 道题 · $kept 道本来就在收藏夹',
+          );
         }
       case RegionPanelBatch.aiGrade:
         // 2026-10-26 用户第 7 条：批量「对答案」换成「AI 判」——
@@ -2264,9 +2315,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         // 否则新题与虚线框叠在原处（用户 2026-10-25 第 4 条）。
         // 只删这个容器本身；它下面的小题不受影响（DeleteCorrection 只标记自己）。
         if (bundle.question.level == 1) {
-          await edit.run(
-            DeleteCorrection(id: Ulid.next(), key: key),
-          );
+          await edit.run(DeleteCorrection(id: Ulid.next(), key: key));
           if (mounted) {
             _showReaderTip('已把这一块加为题目，原来的虚线框已去掉');
           }
@@ -2838,20 +2887,26 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       await store.readAiAnswers(widget.workbookId),
     );
     final String label = bundle.question.label ?? '${bundle.question.ordinal}';
-    final AnswerSet next = existing.withNote(
-      AnswerNote(
-        label: label,
-        text: text,
-        source: 'ai',
-        pageIndex: bundle.slices.first.pageIndex,
-        ordinal: bundle.question.ordinal,
-      ),
+    final AnswerNote note = AnswerNote(
+      label: label,
+      text: text,
+      source: 'ai',
+      pageIndex: bundle.slices.first.pageIndex,
+      ordinal: bundle.question.ordinal,
     );
+    final AnswerSet next = existing.withNote(note);
     await store.writeAiAnswers(widget.workbookId, next.toJson());
-    ref.invalidate(regionSetProvider(widget.workbookId));
-    if (mounted) {
-      _showReaderTip('已写入参考答案（AI · 请自检）');
+    if (!mounted) {
+      _liveAiAnswers = _liveAiAnswers.withNote(note);
+      return;
     }
+    // 与批量补答案同口径：只更新当前页的内存覆盖，不 invalidate 整卷。
+    setState(() {
+      _liveAiAnswers = _liveAiAnswers.withNote(note);
+    });
+    // 单题快捷补答案：当前页用 live 立即显示，同时同步 provider 供重进读取。
+    ref.invalidate(regionSetProvider(widget.workbookId));
+    _showReaderTip('已写入参考答案（AI · 请自检）');
   }
 
   /// 顶栏「保存」：把**当前答题情况**立刻落盘。
@@ -3314,13 +3369,23 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
 
   /// 当前卷的切题结果（从 provider 的当前值取，拿不到给空集）。
   RegionSet _regionSetOf() {
-    final RegionSet raw = ref
-        .read(regionSetProvider(widget.workbookId))
-        .maybeWhen<RegionSet>(
-          data: (RegionSet value) => value,
-          orElse: () => RegionSet.empty,
-        );
-    return _orderedSet(raw);
+    final RegionSet raw =
+        ref.read(regionSetProvider(widget.workbookId)).value ?? RegionSet.empty;
+    return _withLiveAiAnswers(_orderedSet(raw));
+  }
+
+  /// 把本批刚补的 AI 答案叠到 provider 的旧快照上。
+  ///
+  /// `AnswerSet.mergeMissing` 让 PDF/已有答案优先，AI 只补缺；
+  /// 这样不 invalidate provider 也能立刻在面板/判题里读到新答案。
+  RegionSet _withLiveAiAnswers(RegionSet set) {
+    if (_liveAiAnswers.isEmpty) {
+      return set;
+    }
+    return RegionSet(
+      set.questions,
+      answers: set.answers.mergeMissing(_liveAiAnswers),
+    );
   }
 
   /// 套用用户手动顺序；没有手动顺序时原样返回。
@@ -3595,8 +3660,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         .maybeWhen<Set<String>>(
           data: (List<Favorite> items) => <String>{
             for (final Favorite favorite in items)
-              if (favorite.workbookId == widget.workbookId)
-                favorite.questionId,
+              if (favorite.workbookId == widget.workbookId) favorite.questionId,
           },
           orElse: () => const <String>{},
         );
@@ -3657,15 +3721,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         );
 
     // 切题结果 + 框的显示开关（默认关，开关全局记住）。
-    final RegionSet regionSet = _orderedSet(
-      ready == null
-          ? RegionSet.empty
-          : ref
-                .watch(regionSetProvider(widget.workbookId))
-                .maybeWhen<RegionSet>(
-                  data: (RegionSet value) => value,
-                  orElse: () => RegionSet.empty,
-                ),
+    final RegionSet regionSet = _withLiveAiAnswers(
+      _orderedSet(
+        ready == null
+            ? RegionSet.empty
+            : ref.watch(regionSetProvider(widget.workbookId)).value ??
+                  RegionSet.empty,
+      ),
     );
     // **框跟随面板**：面板是"看/改切题结果"的唯一入口。
     // 面板关闭 = 只读态，叠加层完全不参与命中（写字/滚动/缩放零干扰）。
@@ -3790,7 +3852,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
 
     // 「回看出处」：切题结果加载后，一次性跳到该题所在页并选中、打开面板。
     if (ready != null && _pendingQuestionId != null && !regionSet.isEmpty) {
-      final QuestionBundle? target = _bundleById(regionSet, _pendingQuestionId!);
+      final QuestionBundle? target = _bundleById(
+        regionSet,
+        _pendingQuestionId!,
+      );
       if (target != null && target.slices.isNotEmpty) {
         final QuestionBundle bundle = target;
         _pendingQuestionId = null;
@@ -3835,7 +3900,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
             width: MediaQuery.sizeOf(context).width,
             // 文字模式：宽度放得下 8 个带文字的动作才开，否则退回纯图标
             // （AppBar 的 actions 压不动标题，溢出只会出黄黑条）。
-            showLabels: ref.watch(iconLabelsProvider) &&
+            showLabels:
+                ref.watch(iconLabelsProvider) &&
                 labelsFitWidth(
                   width: MediaQuery.sizeOf(context).width,
                   actionCount: 8,
@@ -4335,12 +4401,7 @@ class _AiGradeBanner extends StatelessWidget {
         top: false,
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            ShqSpace.md,
-            6,
-            ShqSpace.sm,
-            6,
-          ),
+          padding: const EdgeInsets.fromLTRB(ShqSpace.md, 6, ShqSpace.sm, 6),
           child: Row(
             children: <Widget>[
               Icon(

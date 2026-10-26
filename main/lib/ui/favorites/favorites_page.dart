@@ -73,7 +73,9 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
   Future<void> _touchTagClock() async {
     await ref.read(favoriteStoreProvider).touchLastTagAt();
     if (mounted) {
-      setState(() => _lastTagAt = DateTime.now().toUtc().millisecondsSinceEpoch);
+      setState(
+        () => _lastTagAt = DateTime.now().toUtc().millisecondsSinceEpoch,
+      );
     }
   }
 
@@ -85,139 +87,152 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
     );
     final bool showSelectionEntry =
         _view != _FavoritesView.sets || _query.isNotEmpty;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(_selecting ? '选择题目' : '收藏夹'),
-        actions: <Widget>[
-          if (!_selecting && showSelectionEntry)
-            IconButton(
-              tooltip: '选择题目',
-              onPressed: () => setState(() => _selecting = true),
-              icon: const Icon(Icons.checklist_outlined),
-            ),
-          if (_selecting)
-            IconButton(
-              tooltip: '退出选择',
-              onPressed: () => setState(() {
-                _selecting = false;
-                _selectedIds.clear();
-              }),
-              icon: const Icon(Icons.close),
-            ),
-        ],
-      ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: <Widget>[
+    return PopScope(
+      // 2026-10-26 用户第 5 条：多选时按返回键只退出多选，不能退出 App。
+      canPop: !_selecting,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (didPop) {
+          return;
+        }
+        if (_selecting) {
+          setState(() {
+            _selecting = false;
+            _selectedIds.clear();
+          });
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(_selecting ? '选择题目' : '收藏夹'),
+          actions: <Widget>[
+            if (!_selecting && showSelectionEntry)
+              IconButton(
+                tooltip: '选择题目',
+                onPressed: () => setState(() => _selecting = true),
+                icon: const Icon(Icons.checklist_outlined),
+              ),
             if (_selecting)
-              _SelectionHeader(
-                count: _selectedIds.length,
-                onSelectAll: () {
-                  final List<Favorite> visible = _visibleQuestions(async);
-                  setState(() {
-                    _selectedIds
-                      ..clear()
-                      ..addAll(visible.map((Favorite f) => f.id));
-                  });
-                },
-                onCancel: () => setState(() {
+              IconButton(
+                tooltip: '退出选择',
+                onPressed: () => setState(() {
                   _selecting = false;
                   _selectedIds.clear();
                 }),
-              )
-            else ...<Widget>[
-              _SearchBar(
-                onChanged: (String value) => setState(() => _query = value),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  ShqSpace.lg,
-                  ShqSpace.xs,
-                  ShqSpace.lg,
-                  ShqSpace.sm,
-                ),
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SegmentedButton<_FavoritesView>(
-                    segments: const <ButtonSegment<_FavoritesView>>[
-                      ButtonSegment<_FavoritesView>(
-                        value: _FavoritesView.all,
-                        label: Text('全部'),
-                        icon: Icon(Icons.grid_view_outlined, size: 18),
-                      ),
-                      ButtonSegment<_FavoritesView>(
-                        value: _FavoritesView.byWorkbook,
-                        label: Text('按试卷'),
-                        icon: Icon(Icons.auto_stories_outlined, size: 18),
-                      ),
-                      ButtonSegment<_FavoritesView>(
-                        value: _FavoritesView.byKnowledge,
-                        label: Text('按知识点'),
-                        icon: Icon(Icons.sell_outlined, size: 18),
-                      ),
-                      ButtonSegment<_FavoritesView>(
-                        value: _FavoritesView.sets,
-                        label: Text('组卷'),
-                        icon: Icon(Icons.playlist_play, size: 18),
-                      ),
-                    ],
-                    selected: <_FavoritesView>{_view},
-                    onSelectionChanged: (Set<_FavoritesView> selection) {
-                      setState(() {
-                        _view = selection.first;
-                        if (_view != _FavoritesView.byKnowledge) {
-                          _selectedTag = null;
-                        }
-                      });
-                    },
-                    showSelectedIcon: false,
-                  ),
-                ),
-              ),
-            ],
-            Expanded(
-              child: async.when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (_, _) => EmptyState(
-                  icon: Icons.bookmarks_outlined,
-                  title: '收藏夹加载失败',
-                  message: '数据暂时读不出来，稍后再试。',
-                  actionLabel: '去书架',
-                  onAction: widget.onGoBookshelf,
-                ),
-                data: (List<Favorite> favorites) => _buildContent(
-                  favorites,
-                  setsAsync.maybeWhen(
-                    data: (List<FavoriteSet> value) => value,
-                    orElse: () => const <FavoriteSet>[],
-                  ),
-                ),
-              ),
-            ),
-            if (_selecting)
-              _SelectionBar(
-                count: _selectedIds.length,
-                onRemove: _selectedIds.isEmpty
-                    ? null
-                    : () => unawaited(_removeSelected()),
-                onSet: _selectedIds.isEmpty
-                    ? null
-                    : () => unawaited(_openSetPickerForSelection()),
-                onTag: _selectedIds.isEmpty
-                    ? null
-                    : () => unawaited(_openTagPickerForSelection()),
+                icon: const Icon(Icons.close),
               ),
           ],
+        ),
+        body: SafeArea(
+          top: false,
+          child: Column(
+            children: <Widget>[
+              if (_selecting)
+                _SelectionHeader(
+                  count: _selectedIds.length,
+                  onSelectAll: () {
+                    final List<Favorite> visible = _visibleQuestions(async);
+                    setState(() {
+                      _selectedIds
+                        ..clear()
+                        ..addAll(visible.map((Favorite f) => f.id));
+                    });
+                  },
+                  onCancel: () => setState(() {
+                    _selecting = false;
+                    _selectedIds.clear();
+                  }),
+                )
+              else ...<Widget>[
+                _SearchBar(
+                  onChanged: (String value) => setState(() => _query = value),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    ShqSpace.lg,
+                    ShqSpace.xs,
+                    ShqSpace.lg,
+                    ShqSpace.sm,
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SegmentedButton<_FavoritesView>(
+                      segments: const <ButtonSegment<_FavoritesView>>[
+                        ButtonSegment<_FavoritesView>(
+                          value: _FavoritesView.all,
+                          label: Text('全部'),
+                          icon: Icon(Icons.grid_view_outlined, size: 18),
+                        ),
+                        ButtonSegment<_FavoritesView>(
+                          value: _FavoritesView.byWorkbook,
+                          label: Text('按试卷'),
+                          icon: Icon(Icons.auto_stories_outlined, size: 18),
+                        ),
+                        ButtonSegment<_FavoritesView>(
+                          value: _FavoritesView.byKnowledge,
+                          label: Text('按知识点'),
+                          icon: Icon(Icons.sell_outlined, size: 18),
+                        ),
+                        ButtonSegment<_FavoritesView>(
+                          value: _FavoritesView.sets,
+                          label: Text('组卷'),
+                          icon: Icon(Icons.playlist_play, size: 18),
+                        ),
+                      ],
+                      selected: <_FavoritesView>{_view},
+                      onSelectionChanged: (Set<_FavoritesView> selection) {
+                        setState(() {
+                          _view = selection.first;
+                          if (_view != _FavoritesView.byKnowledge) {
+                            _selectedTag = null;
+                          }
+                        });
+                      },
+                      showSelectedIcon: false,
+                    ),
+                  ),
+                ),
+              ],
+              Expanded(
+                child: async.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (_, _) => EmptyState(
+                    icon: Icons.bookmarks_outlined,
+                    title: '收藏夹加载失败',
+                    message: '数据暂时读不出来，稍后再试。',
+                    actionLabel: '去书架',
+                    onAction: widget.onGoBookshelf,
+                  ),
+                  data: (List<Favorite> favorites) => _buildContent(
+                    favorites,
+                    setsAsync.maybeWhen(
+                      data: (List<FavoriteSet> value) => value,
+                      orElse: () => const <FavoriteSet>[],
+                    ),
+                  ),
+                ),
+              ),
+              if (_selecting)
+                _SelectionBar(
+                  count: _selectedIds.length,
+                  onRemove: _selectedIds.isEmpty
+                      ? null
+                      : () => unawaited(_removeSelected()),
+                  onSet: _selectedIds.isEmpty
+                      ? null
+                      : () => unawaited(_openSetPickerForSelection()),
+                  onTag: _selectedIds.isEmpty
+                      ? null
+                      : () => unawaited(_openTagPickerForSelection()),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildContent(
-    List<Favorite> favorites,
-    List<FavoriteSet> sets,
-  ) {
+  Widget _buildContent(List<Favorite> favorites, List<FavoriteSet> sets) {
     final bool searching = _query.trim().isNotEmpty;
     if (searching) {
       final List<Favorite> matchedQuestions = searchFavorites(
@@ -301,8 +316,7 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
               hasUnfiled: hasUnfiled(favorites),
               selected: _selectedTag,
               aiBusy: _aiTagging,
-              onSelected: (String? tag) =>
-                  setState(() => _selectedTag = tag),
+              onSelected: (String? tag) => setState(() => _selectedTag = tag),
               onAddTag: () => unawaited(_addTag(favorites)),
               onAiTag: () => unawaited(_openAiTagDialog()),
             ),
@@ -408,7 +422,6 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
     });
     _showTip('已取消 ${ids.length} 道题的收藏');
   }
-
 
   void _toggleSelected(String id) {
     setState(() {
@@ -967,10 +980,7 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
                     spacing: ShqSpace.sm,
                     runSpacing: ShqSpace.sm,
                     children: <Widget>[
-                      for (final String tag in <String>[
-                        ...existing,
-                        ...extra,
-                      ])
+                      for (final String tag in <String>[...existing, ...extra])
                         FilterChip(
                           label: Text(tag),
                           selected: selected.contains(tag),
@@ -1175,8 +1185,7 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
         ref.read(favoritesProvider).value ?? const <Favorite>[];
     final List<Favorite> targets = <Favorite>[
       for (final Favorite favorite in all)
-        if (favoriteIds.contains(favorite.id) &&
-            favorite.knowledgeTags.isEmpty)
+        if (favoriteIds.contains(favorite.id) && favorite.knowledgeTags.isEmpty)
           favorite,
     ];
     if (targets.isEmpty) {
@@ -1236,11 +1245,7 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
         await _touchTagClock();
       }
       if (mounted) {
-        _showTip(
-          applied == 0
-              ? 'AI 没有给出可用的标签，题目保持未归纳'
-              : '已为 $applied 道题归纳知识点',
-        );
+        _showTip(applied == 0 ? 'AI 没有给出可用的标签，题目保持未归纳' : '已为 $applied 道题归纳知识点');
       }
     } on AiFailure catch (error) {
       if (mounted) {
@@ -1269,157 +1274,152 @@ class _FavoritesPageState extends ConsumerState<FavoritesPage> {
     };
     final Map<String, List<String>> edited = <String, List<String>>{
       for (final MapEntry<String, List<String>> entry in tags.entries)
-        if (byId.containsKey(entry.key)) entry.key: List<String>.of(entry.value),
+        if (byId.containsKey(entry.key))
+          entry.key: List<String>.of(entry.value),
     };
     if (edited.isEmpty) {
       return <String, List<String>>{};
     }
     final Set<String> included = <String>{...edited.keys};
-    final Map<String, List<String>>? confirmed =
-        await showDialog<Map<String, List<String>>>(
-          context: context,
-          builder: (BuildContext context) => StatefulBuilder(
-            builder: (BuildContext context, StateSetter setState) {
-              Future<void> removeTag(String id, String tag) async {
-                setState(() {
-                  edited[id]?.remove(tag);
-                });
-              }
+    final Map<String, List<String>>?
+    confirmed = await showDialog<Map<String, List<String>>>(
+      context: context,
+      builder: (BuildContext context) => StatefulBuilder(
+        builder: (BuildContext context, StateSetter setState) {
+          Future<void> removeTag(String id, String tag) async {
+            setState(() {
+              edited[id]?.remove(tag);
+            });
+          }
 
-              Future<void> addTag(String id) async {
-                final String? name = await _promptTagName();
-                if (name == null || name.isEmpty) {
-                  return;
-                }
-                setState(() {
-                  final List<String> list =
-                      edited[id] ?? <String>[];
-                  if (!list.contains(name) && list.length < 5) {
-                    list.add(name);
-                  }
-                  edited[id] = list;
-                });
+          Future<void> addTag(String id) async {
+            final String? name = await _promptTagName();
+            if (name == null || name.isEmpty) {
+              return;
+            }
+            setState(() {
+              final List<String> list = edited[id] ?? <String>[];
+              if (!list.contains(name) && list.length < 5) {
+                list.add(name);
               }
+              edited[id] = list;
+            });
+          }
 
-              return AlertDialog(
-                title: const Text('AI 归纳结果'),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        '共 ${edited.length} 道题。可以删改标签，或取消勾选整题不采用。',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: ShqSpace.xs),
-                      Flexible(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxHeight: 420),
-                          child: ListView(
-                            shrinkWrap: true,
-                            children: <Widget>[
-                              for (final MapEntry<String, List<String>>
-                                  entry in edited.entries)
-                                if (byId[entry.key] != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(
-                                      bottom: ShqSpace.sm,
+          return AlertDialog(
+            title: const Text('AI 归纳结果'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    '共 ${edited.length} 道题。可以删改标签，或取消勾选整题不采用。',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: ShqSpace.xs),
+                  Flexible(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 420),
+                      child: ListView(
+                        shrinkWrap: true,
+                        children: <Widget>[
+                          for (final MapEntry<String, List<String>> entry
+                              in edited.entries)
+                            if (byId[entry.key] != null)
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  bottom: ShqSpace.sm,
+                                ),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    Checkbox(
+                                      value: included.contains(entry.key),
+                                      onChanged: (bool? value) => setState(() {
+                                        if (value == true) {
+                                          included.add(entry.key);
+                                        } else {
+                                          included.remove(entry.key);
+                                        }
+                                      }),
                                     ),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: <Widget>[
-                                        Checkbox(
-                                          value: included.contains(entry.key),
-                                          onChanged: (bool? value) =>
-                                              setState(() {
-                                                if (value == true) {
-                                                  included.add(entry.key);
-                                                } else {
-                                                  included.remove(entry.key);
-                                                }
-                                              }),
-                                        ),
-                                        Expanded(
-                                          child: Column(
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: <Widget>[
+                                          Text(
+                                            '第 ${byId[entry.key]!.label} 题 · '
+                                            '${byId[entry.key]!.workbookTitle}',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .labelSmall,
+                                          ),
+                                          Wrap(
+                                            spacing: ShqSpace.xs,
+                                            runSpacing: 2,
                                             crossAxisAlignment:
-                                                CrossAxisAlignment.start,
+                                                WrapCrossAlignment.center,
                                             children: <Widget>[
-                                              Text(
-                                                '第 ${byId[entry.key]!.label} 题 · '
-                                                '${byId[entry.key]!.workbookTitle}',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: Theme.of(
-                                                  context,
-                                                ).textTheme.labelSmall,
-                                              ),
-                                              Wrap(
-                                                spacing: ShqSpace.xs,
-                                                runSpacing: 2,
-                                                crossAxisAlignment:
-                                                    WrapCrossAlignment.center,
-                                                children: <Widget>[
-                                                  for (final String tag
-                                                      in entry.value)
-                                                    InputChip(
-                                                      label: Text(tag),
-                                                      onDeleted: () =>
-                                                          removeTag(
-                                                            entry.key,
-                                                            tag,
-                                                          ),
-                                                      visualDensity:
-                                                          VisualDensity.compact,
-                                                    ),
-                                                  ActionChip(
-                                                    avatar: const Icon(
-                                                      Icons.add,
-                                                      size: 14,
-                                                    ),
-                                                    label: const Text('标签'),
-                                                    onPressed: () =>
-                                                        addTag(entry.key),
-                                                    visualDensity:
-                                                        VisualDensity.compact,
-                                                  ),
-                                                ],
+                                              for (final String tag
+                                                  in entry.value)
+                                                InputChip(
+                                                  label: Text(tag),
+                                                  onDeleted: () =>
+                                                      removeTag(entry.key, tag),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                ),
+                                              ActionChip(
+                                                avatar: const Icon(
+                                                  Icons.add,
+                                                  size: 14,
+                                                ),
+                                                label: const Text('标签'),
+                                                onPressed: () =>
+                                                    addTag(entry.key),
+                                                visualDensity:
+                                                    VisualDensity.compact,
                                               ),
                                             ],
                                           ),
-                                        ),
-                                      ],
+                                        ],
+                                      ),
                                     ),
-                                  ),
-                            ],
-                          ),
-                        ),
+                                  ],
+                                ),
+                              ),
+                        ],
                       ),
-                    ],
-                  ),
-                ),
-                actions: <Widget>[
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('取消'),
-                  ),
-                  FilledButton(
-                    onPressed: included.isEmpty
-                        ? null
-                        : () => Navigator.pop(context, <String, List<String>>{
-                            for (final String id in included)
-                              if (edited[id] != null && edited[id]!.isNotEmpty)
-                                id: edited[id]!,
-                          }),
-                    child: Text('写入 ${included.length} 题'),
+                    ),
                   ),
                 ],
-              );
-            },
-          ),
-        );
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: included.isEmpty
+                    ? null
+                    : () => Navigator.pop(context, <String, List<String>>{
+                        for (final String id in included)
+                          if (edited[id] != null && edited[id]!.isNotEmpty)
+                            id: edited[id]!,
+                      }),
+                child: Text('写入 ${included.length} 题'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
     return confirmed ?? <String, List<String>>{};
   }
 
@@ -1634,9 +1634,8 @@ class _SelectionBar extends StatelessWidget {
           Expanded(
             child: Text(
               count == 0 ? '选择要处理的题' : '共 $count 题',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-              ),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           TextButton.icon(
@@ -1777,18 +1776,15 @@ class _FavoritesGrid extends StatelessWidget {
           crossAxisSpacing: ShqSpace.sm,
           childAspectRatio: 0.92,
         ),
-        delegate: SliverChildBuilderDelegate(
-          (BuildContext context, int index) {
-            final Favorite favorite = items[index];
-            return FavoriteCard(
-              favorite: favorite,
-              selected: selecting ? selectedIds.contains(favorite.id) : null,
-              onTap: () => onTap(favorite),
-              onLongPress: () => onLongPress(favorite),
-            );
-          },
-          childCount: items.length,
-        ),
+        delegate: SliverChildBuilderDelegate((BuildContext context, int index) {
+          final Favorite favorite = items[index];
+          return FavoriteCard(
+            favorite: favorite,
+            selected: selecting ? selectedIds.contains(favorite.id) : null,
+            onTap: () => onTap(favorite),
+            onLongPress: () => onLongPress(favorite),
+          );
+        }, childCount: items.length),
       ),
     );
   }
@@ -1919,11 +1915,7 @@ class _WorkbookWall extends StatelessWidget {
     return CustomScrollView(
       slivers: <Widget>[
         SliverToBoxAdapter(
-          child: _SectionHeader(
-            title: '按试卷',
-            count: groups.length,
-            unit: '卷',
-          ),
+          child: _SectionHeader(title: '按试卷', count: groups.length, unit: '卷'),
         ),
         SliverPadding(
           padding: const EdgeInsets.fromLTRB(
@@ -1939,24 +1931,25 @@ class _WorkbookWall extends StatelessWidget {
               crossAxisSpacing: ShqSpace.sm,
               childAspectRatio: 1.62,
             ),
-            delegate: SliverChildBuilderDelegate(
-              (BuildContext context, int index) {
-                final FavoriteGroup group = groups[index];
-                return _WorkbookFolderCard(
-                  group: group,
-                  now: now,
-                  selecting: selecting,
-                  selectedCount: group.items
-                      .where((Favorite favorite) => selectedIds.contains(favorite.id))
-                      .length,
-                  onTap: () => selecting ? onToggleGroup(group) : onOpen(group),
-                  onLongPress: () => selecting
-                      ? onToggleGroup(group)
-                      : onMenu(group),
-                );
-              },
-              childCount: groups.length,
-            ),
+            delegate: SliverChildBuilderDelegate((
+              BuildContext context,
+              int index,
+            ) {
+              final FavoriteGroup group = groups[index];
+              return _WorkbookFolderCard(
+                group: group,
+                now: now,
+                selecting: selecting,
+                selectedCount: group.items
+                    .where(
+                      (Favorite favorite) => selectedIds.contains(favorite.id),
+                    )
+                    .length,
+                onTap: () => selecting ? onToggleGroup(group) : onOpen(group),
+                onLongPress: () =>
+                    selecting ? onToggleGroup(group) : onMenu(group),
+              );
+            }, childCount: groups.length),
           ),
         ),
       ],
@@ -1993,7 +1986,8 @@ class _WorkbookFolderCard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final bool deleted = group.items.isNotEmpty && group.items.first.sourceDeleted;
+    final bool deleted =
+        group.items.isNotEmpty && group.items.first.sourceDeleted;
     final int latest = group.items.isEmpty ? 0 : group.items.first.updatedAt;
     final Vault vault = ref.watch(vaultProvider);
     return Pressable(
@@ -2145,11 +2139,7 @@ class _WorkbookFolderCard extends ConsumerWidget {
                       ),
                     )
                   else
-                    Icon(
-                      Icons.chevron_right,
-                      size: 18,
-                      color: scheme.outline,
-                    ),
+                    Icon(Icons.chevron_right, size: 18, color: scheme.outline),
                 ],
               ),
             ),
@@ -2193,11 +2183,7 @@ class _SearchResults extends StatelessWidget {
       slivers: <Widget>[
         if (sets.isNotEmpty) ...<Widget>[
           SliverToBoxAdapter(
-            child: _SectionHeader(
-              title: '组卷',
-              count: sets.length,
-              unit: '个',
-            ),
+            child: _SectionHeader(title: '组卷', count: sets.length, unit: '个'),
           ),
           SliverList(
             delegate: SliverChildBuilderDelegate(
@@ -2336,7 +2322,8 @@ class _SetsView extends StatelessWidget {
       return EmptyState(
         icon: Icons.playlist_add_outlined,
         title: '还没有组卷',
-        message: '把收藏的题排成一份连刷题集：多选题目后点「组卷」，'
+        message:
+            '把收藏的题排成一份连刷题集：多选题目后点「组卷」，'
             '或长按任意题目「组卷…」。',
         actionLabel: '新建题集',
         onAction: onCreate,
@@ -2606,11 +2593,7 @@ class _AddTagChip extends StatelessWidget {
               borderRadius: BorderRadius.circular(ShqRadius.pill),
               border: Border.all(color: scheme.outlineVariant),
             ),
-            child: Icon(
-              Icons.add,
-              size: 18,
-              color: scheme.onSurfaceVariant,
-            ),
+            child: Icon(Icons.add, size: 18, color: scheme.onSurfaceVariant),
           ),
         ),
       ),

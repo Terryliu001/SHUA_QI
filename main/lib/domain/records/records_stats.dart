@@ -99,7 +99,9 @@ List<HeatWeek> buildHeatWeeks({
     for (int d = 0; d < 7; d += 1) {
       final DateTime day = RecordTime.addDays(start, w * 7 + d);
       final bool future = day.isAfter(todayOnly);
-      final int count = future ? 0 : (stats[RecordTime.dayKey(day)]?.questions ?? 0);
+      final int count = future
+          ? 0
+          : (stats[RecordTime.dayKey(day)]?.questions ?? 0);
       days.add(
         HeatCell(
           day: day,
@@ -241,8 +243,12 @@ Map<String, DayStat> aggregateByDay(Iterable<AnswerLogEntry> entries) {
   final Map<String, Set<String>> questionsByDay = <String, Set<String>>{};
   final Map<String, Set<String>> workbooksByDay = <String, Set<String>>{};
   for (final AnswerLogEntry entry in entries) {
-    questionsByDay.putIfAbsent(entry.day, () => <String>{}).add(entry.questionId);
-    workbooksByDay.putIfAbsent(entry.day, () => <String>{}).add(entry.workbookId);
+    questionsByDay
+        .putIfAbsent(entry.day, () => <String>{})
+        .add(entry.questionId);
+    workbooksByDay
+        .putIfAbsent(entry.day, () => <String>{})
+        .add(entry.workbookId);
   }
   return <String, DayStat>{
     for (final MapEntry<String, Set<String>> e in questionsByDay.entries)
@@ -321,7 +327,8 @@ List<CloudWord> buildCloudWords(Iterable<CloudBucket> buckets) {
         label: bucket.label,
         questions: bucket.questions,
         workbooks: bucket.workbooks,
-        weight: bucket.questions * kQuestionWeight +
+        weight:
+            bucket.questions * kQuestionWeight +
             bucket.workbooks * kWorkbookWeight,
       ),
   ];
@@ -393,6 +400,7 @@ List<CloudWord> subjectWordsFrom({
 /// - `redo`：单题重刷（当天所有单题重刷归一张「重刷」卡，默认折叠）。
 class TimelineWorkbook {
   const TimelineWorkbook({
+    required this.groupKey,
     required this.workbookId,
     required this.title,
     required this.entries,
@@ -402,8 +410,13 @@ class TimelineWorkbook {
     this.attemptId = '',
   });
 
-  /// 分组键（内部用）：原卷是卷 id，组卷是 `set:<名>`，单题重刷是 `redo`；
-  /// v9 起带 attempt 的组用 `a:<attemptId>`，同一天多次重刷各一张卡。
+  /// 分组键（内部用）：原卷是 `w:<卷 id>`，组卷是 `set:<名>`，
+  /// 单题重刷是 `redo`；v9 起带 attempt 的组用 `a:<attemptId>`。
+  /// **只用于展开状态/去重，不能当真实卷 id 打开阅读器。**
+  final String groupKey;
+
+  /// 真实的来源卷 id。原卷组就是它自己的 id；组卷/重刷组是收藏题来源卷的 id，
+  /// 可能为空（旧数据）。打开原卷必须用这个，不能用 [groupKey]。
   final String workbookId;
 
   /// 显示名（活库优先，卷删了用快照）。
@@ -430,8 +443,7 @@ class TimelineWorkbook {
 
   int get questions => entries.length;
 
-  DateTime get firstAt =>
-      DateTime.fromMillisecondsSinceEpoch(entries.last.at);
+  DateTime get firstAt => DateTime.fromMillisecondsSinceEpoch(entries.last.at);
 
   DateTime get lastAt => DateTime.fromMillisecondsSinceEpoch(entries.first.at);
 
@@ -468,16 +480,19 @@ List<TimelineDay> groupTimeline(
   required Set<String> existingWorkbookIds,
   Map<String, String> liveTitles = const <String, String>{},
 }) {
-  final Map<String, List<AnswerLogEntry>> byDay = <String, List<AnswerLogEntry>>{};
+  final Map<String, List<AnswerLogEntry>> byDay =
+      <String, List<AnswerLogEntry>>{};
   for (final AnswerLogEntry entry in entries) {
     byDay.putIfAbsent(entry.day, () => <AnswerLogEntry>[]).add(entry);
   }
 
-  final List<String> days = byDay.keys.toList()..sort((String a, String b) => b.compareTo(a));
+  final List<String> days = byDay.keys.toList()
+    ..sort((String a, String b) => b.compareTo(a));
   final List<TimelineDay> out = <TimelineDay>[];
   for (final String day in days) {
     final List<AnswerLogEntry> dayEntries = byDay[day]!;
-    final Map<String, List<AnswerLogEntry>> byWorkbook = <String, List<AnswerLogEntry>>{};
+    final Map<String, List<AnswerLogEntry>> byWorkbook =
+        <String, List<AnswerLogEntry>>{};
     final Map<String, AnswerLogEntry> firstOf = <String, AnswerLogEntry>{};
     final List<String> order = <String>[];
     for (final AnswerLogEntry entry in dayEntries) {
@@ -500,16 +515,18 @@ List<TimelineDay> groupTimeline(
       final String live = liveTitles[first.workbookId] ?? '';
       workbooks.add(
         TimelineWorkbook(
-          workbookId: key,
+          groupKey: key,
+          workbookId: first.workbookId,
           title: switch (first.origin) {
-            RecordOrigin.set => '组卷 · ${first.originTitle.isEmpty ? '未命名组卷' : first.originTitle}',
+            RecordOrigin.set =>
+              '组卷 · ${first.originTitle.isEmpty ? '未命名组卷' : first.originTitle}',
             RecordOrigin.redo => '重刷',
-            RecordOrigin.workbook => live.isNotEmpty
-                ? live
-                : (snapshot.isEmpty ? '未命名试卷' : snapshot),
+            RecordOrigin.workbook =>
+              live.isNotEmpty ? live : (snapshot.isEmpty ? '未命名试卷' : snapshot),
           },
           entries: items,
-          sourceDeleted: first.origin == RecordOrigin.workbook &&
+          sourceDeleted:
+              first.origin == RecordOrigin.workbook &&
               !existingWorkbookIds.contains(first.workbookId),
           origin: first.origin,
           originTitle: first.originTitle,

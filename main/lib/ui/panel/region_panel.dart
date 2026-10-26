@@ -503,7 +503,9 @@ class _RegionPanelState extends State<RegionPanel> {
                   selectedCount: widget.selectedIds.length,
                   allFavorited:
                       widget.selectedIds.isNotEmpty &&
-                      widget.selectedIds.every(widget.favoriteQuestionIds.contains),
+                      widget.selectedIds.every(
+                        widget.favoriteQuestionIds.contains,
+                      ),
                   onBatch: widget.onBatch,
                   onDone: widget.onToggleMultiSelect,
                 ),
@@ -895,9 +897,7 @@ class _ToolsBar extends StatelessWidget {
             child: _BarButton(
               icon: Icons.auto_awesome,
               label: fillingAi
-                  ? (fillTotal > 0
-                        ? '补 $fillDone/$fillTotal'
-                        : '补答案…')
+                  ? (fillTotal > 0 ? '补 $fillDone/$fillTotal' : '补答案…')
                   : '补答案',
               busy: fillingAi,
               onTap: (grading || fillingAi) ? null : onFillAnswers,
@@ -1074,7 +1074,8 @@ class _BatchBar extends StatelessWidget {
           const Spacer(),
           _BatchAction(
             icon: allFavorited ? Icons.star : Icons.star_outline,
-            label: allFavorited ? '已收藏' : '收藏',
+            // 全收藏时再点=取消收藏；混合时只补没收藏的（见 reader_page._runBatch）。
+            label: allFavorited ? '取消收藏' : '收藏',
             enabled: enabled,
             onTap: () => onBatch?.call(RegionPanelBatch.favorite),
           ),
@@ -1319,8 +1320,10 @@ class _QuestionAction extends StatelessWidget {
               AnimatedSwitcher(
                 duration: ShqMotion.fast,
                 switchInCurve: ShqMotion.curveEmphasized,
-                transitionBuilder: (Widget child, Animation<double> animation) =>
-                    ScaleTransition(scale: animation, child: child),
+                transitionBuilder: (
+                  Widget child,
+                  Animation<double> animation,
+                ) => ScaleTransition(scale: animation, child: child),
                 child: Icon(
                   icon,
                   key: ValueKey<IconData>(icon),
