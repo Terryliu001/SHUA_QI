@@ -45,6 +45,9 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
   /// 页首实际宽度（含壳层侧栏占位）；裁封面按它算比例，不能用整块屏幕宽。
   final GlobalKey _headerKey = GlobalKey();
 
+  /// 头像/封面写入后 +1：文件路径不变，必须换 Image Key 才会重新解码。
+  int _profileImageEpoch = 0;
+
   /// 词云维度：默认按科目（文件夹），可切到题型。
   bool _cloudByKind = false;
 
@@ -82,6 +85,7 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
                   onMenu: () => unawaited(_openMenu(profile)),
                   onEditText: () => unawaited(_editText(profile)),
                   onAvatarTap: () => unawaited(_openAvatarSheet(profile)),
+                  imageEpoch: _profileImageEpoch,
                 ),
                 orElse: () => const SizedBox(height: 178),
               ),
@@ -468,6 +472,9 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
       PaintingBinding.instance.imageCache
         ..clear()
         ..clearLiveImages();
+      if (mounted) {
+        setState(() => _profileImageEpoch++);
+      }
       ref.invalidate(profileProvider);
       if (mounted) {
         _toast('已更新');

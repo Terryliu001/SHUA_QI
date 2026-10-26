@@ -26,6 +26,7 @@ class RecordsProfileHeader extends StatelessWidget {
     required this.onMenu,
     required this.onEditText,
     required this.onAvatarTap,
+    this.imageEpoch = 0,
   });
 
   final ProfileData profile;
@@ -33,6 +34,10 @@ class RecordsProfileHeader extends StatelessWidget {
   final File coverFile;
   final VoidCallback onMenu;
   final VoidCallback onEditText;
+
+  /// 头像/封面文件路径不变，ImageCache 清掉后 Image widget 仍可能复用旧
+  /// ImageStream；用 epoch 换 Key，强制重新解码（2026-10-26 用户：裁完不立刻生效）。
+  final int imageEpoch;
 
   /// 点头像 = 换头像（2026-10-25 用户第 2 条：要有提示、要能换）。
   final VoidCallback onAvatarTap;
@@ -63,7 +68,11 @@ class RecordsProfileHeader extends StatelessWidget {
                   end: Alignment.bottomCenter,
                   // 顶部压一点（让 ⋯ 按钮在亮封面上也看得清），底部压深
                   // （昵称/格言压在图上，必须保证对比度）。
-                  colors: <Color>[Color(0x33000000), Color(0x00000000), Color(0xCC000000)],
+                  colors: <Color>[
+                    Color(0x33000000),
+                    Color(0x00000000),
+                    Color(0xCC000000),
+                  ],
                   stops: <double>[0, 0.34, 1],
                 ),
               ),
@@ -104,9 +113,7 @@ class RecordsProfileHeader extends StatelessWidget {
                         if (profile.name.isNotEmpty)
                           const SizedBox(height: ShqSpace.xxs),
                         Text(
-                          profile.motto.isEmpty
-                              ? '点这里写一句给自己的话'
-                              : profile.motto,
+                          profile.motto.isEmpty ? '点这里写一句给自己的话' : profile.motto,
                           maxLines: 3,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodyMedium?.copyWith(
@@ -137,10 +144,7 @@ class RecordsProfileHeader extends StatelessWidget {
                 child: IconButton(
                   tooltip: '个人空间设置',
                   onPressed: onMenu,
-                  icon: Icon(
-                    Icons.more_horiz,
-                    color: onCover,
-                  ),
+                  icon: Icon(Icons.more_horiz, color: onCover),
                   style: IconButton.styleFrom(
                     backgroundColor: hasCover
                         ? Colors.black.withValues(alpha: 0.22)
@@ -173,12 +177,15 @@ class RecordsProfileHeader extends StatelessWidget {
       color: theme.colorScheme.surfaceContainerHighest,
       child: Image.file(
         coverFile,
+        key: ValueKey<String>('cover-$imageEpoch'),
         fit: BoxFit.cover,
         // 只解码到屏幕像素宽（上限 1600），不做重编码。
         cacheWidth: (width * dpr).clamp(320, 1600).round(),
-        errorBuilder:
-            (BuildContext context, Object error, StackTrace? stackTrace) =>
-                const SizedBox.shrink(),
+        errorBuilder: (
+          BuildContext context,
+          Object error,
+          StackTrace? stackTrace,
+        ) => const SizedBox.shrink(),
       ),
     );
   }
@@ -209,11 +216,14 @@ class RecordsProfileHeader extends StatelessWidget {
       child: profile.hasAvatar
           ? Image.file(
               avatarFile,
+              key: ValueKey<String>('avatar-$imageEpoch'),
               fit: BoxFit.cover,
               cacheWidth: 320,
-              errorBuilder:
-                  (BuildContext context, Object error, StackTrace? stackTrace) =>
-                      _avatarFallback(theme),
+              errorBuilder: (
+                BuildContext context,
+                Object error,
+                StackTrace? stackTrace,
+              ) => _avatarFallback(theme),
             )
           : _avatarFallback(theme),
     );

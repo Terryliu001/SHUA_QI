@@ -28,20 +28,23 @@ class CropKind {
     required this.aspectRatio,
     required this.outWidth,
     this.outHeight,
+    this.circular = false,
   });
 
-  /// 头像：正方形。
+  /// 头像：正方形；最终显示是圆形，所以取景框也画圆。
   const CropKind.avatar()
     : title = '裁剪头像',
       aspectRatio = 1,
       outWidth = 512,
-      outHeight = 512;
+      outHeight = 512,
+      circular = true;
 
   /// 封面：横幅。比例由调用方按页首实宽算（`宽 / 230`）。
   const CropKind.cover({required this.aspectRatio})
     : title = '裁剪封面',
       outWidth = 1600,
-      outHeight = null;
+      outHeight = null,
+      circular = false;
 
   final String title;
 
@@ -52,6 +55,9 @@ class CropKind {
 
   /// 显式输出高度；null = 按宽与比例算。
   final int? outHeight;
+
+  /// 头像最终显示为圆形；预览框也画圆形，避免"方框裁完变圆"的错觉。
+  final bool circular;
 
   /// 输出高度：显式给了就用；否则按比例算（封面不再被压扁）。
   int get outputHeight => outHeight ?? (outWidth / aspectRatio).round();
@@ -359,7 +365,9 @@ class _CropPageState extends State<_CropPage> {
             // 它盖在输入层上方，否则会吃掉拖动/双指手势（真机踩到）。
             Positioned.fill(
               child: IgnorePointer(
-                child: CustomPaint(painter: _FramePainter(frame)),
+                child: CustomPaint(
+                  painter: _FramePainter(frame, circular: widget.kind.circular),
+                ),
               ),
             ),
             // 提示语放在最上层：压在图上时图可能把它盖住（真机踩到）。
@@ -380,9 +388,8 @@ class _CropPageState extends State<_CropPage> {
                     ),
                     child: Text(
                       '拖动或双指缩放，把要留下的部分放进框里',
-                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        color: ShqScrim.foreground,
-                      ),
+                      style: Theme.of(context).textTheme.labelSmall
+                          ?.copyWith(color: ShqScrim.foreground),
                     ),
                   ),
                 ),
@@ -559,9 +566,10 @@ class _CropPageState extends State<_CropPage> {
 
 /// 取景框画笔：框内不遮，框外压暗；带三分线与四角标记。
 class _FramePainter extends CustomPainter {
-  const _FramePainter(this.frame);
+  const _FramePainter(this.frame, {required this.circular});
 
   final Rect frame;
+  final bool circular;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -569,52 +577,62 @@ class _FramePainter extends CustomPainter {
       ..color = ShqScrim.backdrop.withValues(alpha: 0.58);
     final Path outside = Path()
       ..addRect(Offset.zero & size)
-      ..addRRect(RRect.fromRectAndRadius(frame, const Radius.circular(8)))
       ..fillType = PathFillType.evenOdd;
+    if (circular) {
+      outside.addOval(frame);
+    } else {
+      outside.addRect(frame);
+    }
     canvas.drawPath(outside, shade);
 
-    final Paint thin = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 0.8
-      ..color = ShqScrim.foreground.withValues(alpha: 0.28);
-    for (int i = 1; i <= 2; i += 1) {
-      final double x = frame.left + frame.width * i / 3;
-      final double y = frame.top + frame.height * i / 3;
-      canvas.drawLine(Offset(x, frame.top), Offset(x, frame.bottom), thin);
-      canvas.drawLine(Offset(frame.left, y), Offset(frame.right, y), thin);
+    if (!circular) {
+      final Paint thin = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.8
+        ..color = ShqScrim.foreground.withValues(alpha: 0.28);
+      for (int i = 1; i <= 2; i += 1) {
+        final double x = frame.left + frame.width * i / 3;
+        final double y = frame.top + frame.height * i / 3;
+        canvas.drawLine(Offset(x, frame.top), Offset(x, frame.bottom), thin);
+        canvas.drawLine(Offset(frame.left, y), Offset(frame.right, y), thin);
+      }
     }
 
     final Paint border = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2
       ..color = ShqScrim.foreground;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(frame, const Radius.circular(8)),
-      border,
-    );
+    if (circular) {
+      canvas.drawOval(frame, border);
+    } else {
+      canvas.drawRect(frame, border);
+    }
 
-    // 四角短粗线：让"框在哪"更明确，同时不盖住内容。
-    final Paint corner = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 4
-      ..strokeCap = StrokeCap.round
-      ..color = ShqScrim.foreground;
-    const double len = 18;
-    final List<(Offset, Offset)> corners = <(Offset, Offset)>[
-      (frame.topLeft, frame.topLeft + const Offset(len, 0)),
-      (frame.topLeft, frame.topLeft + const Offset(0, len)),
-      (frame.topRight, frame.topRight - const Offset(len, 0)),
-      (frame.topRight, frame.topRight + const Offset(0, len)),
-      (frame.bottomLeft, frame.bottomLeft + const Offset(len, 0)),
-      (frame.bottomLeft, frame.bottomLeft - const Offset(0, len)),
-      (frame.bottomRight, frame.bottomRight - const Offset(len, 0)),
-      (frame.bottomRight, frame.bottomRight - const Offset(0, len)),
-    ];
-    for (final (Offset a, Offset b) in corners) {
-      canvas.drawLine(a, b, corner);
+    if (!circular) {
+      // 四角短粗线：让"框在哪"更明确，同时不盖住内容。
+      final Paint corner = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4
+        ..strokeCap = StrokeCap.round
+        ..color = ShqScrim.foreground;
+      const double len = 18;
+      final List<(Offset, Offset)> corners = <(Offset, Offset)>[
+        (frame.topLeft, frame.topLeft + const Offset(len, 0)),
+        (frame.topLeft, frame.topLeft + const Offset(0, len)),
+        (frame.topRight, frame.topRight - const Offset(len, 0)),
+        (frame.topRight, frame.topRight + const Offset(0, len)),
+        (frame.bottomLeft, frame.bottomLeft + const Offset(len, 0)),
+        (frame.bottomLeft, frame.bottomLeft - const Offset(0, len)),
+        (frame.bottomRight, frame.bottomRight - const Offset(len, 0)),
+        (frame.bottomRight, frame.bottomRight - const Offset(0, len)),
+      ];
+      for (final (Offset a, Offset b) in corners) {
+        canvas.drawLine(a, b, corner);
+      }
     }
   }
 
   @override
-  bool shouldRepaint(_FramePainter old) => old.frame != frame;
+  bool shouldRepaint(_FramePainter old) =>
+      old.frame != frame || old.circular != circular;
 }
