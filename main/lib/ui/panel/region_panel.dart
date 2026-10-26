@@ -533,7 +533,8 @@ class _RegionPanelState extends State<RegionPanel> {
                       onFavorite: widget.onFavorite == null
                           ? null
                           : () => widget.onFavorite!(selected!),
-                      onCheckAnswer: widget.onCheckAnswer == null
+                      onCheckAnswer:
+                          widget.onCheckAnswer == null || selectedAnswer == null
                           ? null
                           : () => widget.onCheckAnswer!(selected!),
                       onAskAi: widget.onAskAi == null
@@ -1019,7 +1020,9 @@ class _SelectionActions extends StatelessWidget {
           child: _QuestionAction(
             icon: Icons.fact_check_outlined,
             label: '对答案',
-            tooltip: '看参考答案并给出判定',
+            tooltip: onCheckAnswer == null
+                ? '这题还没有参考答案：先补答案或用多选 AI 判'
+                : '有参考答案时判这道题，并在指示灯上显示对/错/待判',
             onTap: onCheckAnswer,
           ),
         ),

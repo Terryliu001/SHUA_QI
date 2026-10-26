@@ -6,12 +6,17 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/favorite/favorite_store.dart';
+import 'package:shuaqi/app/favorite/redo_attempt_store.dart';
 import 'package:shuaqi/domain/answer/answer_paper.dart';
+import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_palette.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/model/favorite.dart';
 import 'package:shuaqi/domain/model/favorite_set_plan.dart';
+import 'package:shuaqi/domain/model/redo_attempt.dart';
 import 'package:shuaqi/domain/reader/panel_metrics.dart';
+import 'package:shuaqi/domain/util/ulid.dart';
+import 'package:shuaqi/infra/db/dao/answer_log_dao.dart';
 import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/state/app_providers.dart';
 import 'package:shuaqi/state/favorite_providers.dart';
@@ -45,12 +50,25 @@ class RedoArgs {
     required this.title,
     this.setId,
     this.initialIndex = 0,
+    this.attemptId,
+    this.startNew = false,
+    this.isSet = false,
   });
 
   final List<String> favoriteIds;
   final String title;
   final String? setId;
   final int initialIndex;
+
+  /// 打开某一次已保存的重刷；null = 新一次。
+  final String? attemptId;
+
+  /// 明确"点重刷开空白新答题卡"。attemptId 为空时默认就是新一次。
+  final bool startNew;
+
+  /// 这次重刷是否属于组卷（从时间线打开某次组卷 attempt 时 setId 可能拿不到，
+  /// 但打点仍要按 `origin=set` + 组卷名记）。
+  final bool isSet;
 }
 
 /// 收藏题「二刷」：题面在上、答题纸在下，就地重写一遍（T8.3b / T8.4）。
@@ -94,6 +112,21 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
   bool _collapsed = false;
   bool _aiOpen = false;
 
+  /// 这一次重刷的 attempt（一个组卷 run 共用一个）。
+  late String _attemptId;
+
+  /// true = 还没保存过（退出时要问「保存这次重刷记录吗」）。
+  bool _isNew = true;
+
+  bool get _setRun =>
+      (widget.args.setId ?? '').isNotEmpty || widget.args.isSet;
+
+  /// 这一次打开过哪些收藏（退出时逐个落 meta / 丢弃）。
+  final Set<String> _visited = <String>{};
+
+  /// 防止系统返回与按钮重复触发保存询问。
+  bool _exiting = false;
+
   /// 拖动中的面板宽度（null = 用全局记忆值）。
   double? _dragPanelWidth;
   double _dragStartPanelWidth = 0;
@@ -108,18 +141,28 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     return _papers[favorite.id] ?? AnswerPaper.defaults;
   }
 
-  InkPageKey _inkKeyOf(Favorite favorite) =>
-      InkPageKey(favoriteRedoSessionId(favorite.id), _paperIndex);
+  InkPageKey _inkKeyOf(Favorite favorite) => InkPageKey(
+    favoriteRedoSessionId(favorite.id, _attemptId),
+    _paperIndex,
+  );
 
   @override
   void initState() {
     super.initState();
+    _attemptId = (widget.args.attemptId ?? '').trim().isEmpty
+        ? Ulid.next()
+        : widget.args.attemptId!.trim();
     // 告诉记录层"这次重刷是从哪儿进来的"（组卷 / 单题），
-    // 打点时据此写 origin 与组卷名（2026-10-26 用户第 9/16 条）。
+    // 打点时据此写 origin、组卷名与 attempt id（2026-10-26 用户第 9/16 条）。
     ref
         .read(redoContextProvider.notifier)
         .enter(
-          RedoContext(title: widget.args.title, setId: widget.args.setId),
+          RedoContext(
+            title: widget.args.title,
+            setId: widget.args.setId ??
+                (widget.args.isSet ? 'set-existing' : null),
+            attemptId: _attemptId,
+          ),
         );
     unawaited(_load());
   }
@@ -139,6 +182,16 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     final int index = items.isEmpty
         ? 0
         : widget.args.initialIndex.clamp(0, items.length - 1);
+    if (items.isNotEmpty) {
+      _visited.add(items[index].id);
+      final RedoAttempt? meta = await ref
+          .read(redoAttemptStoreProvider)
+          .load(items[index].id, _attemptId);
+      _isNew = meta == null || !meta.saved;
+    }
+    if (!mounted) {
+      return;
+    }
     setState(() {
       _items = items;
       _index = index;
@@ -146,6 +199,7 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     });
     if (items.isNotEmpty) {
       await _loadPaperOf(items[index]);
+      await _ensureAttemptMeta(items[index]);
       unawaited(_ensureStem(items[index]));
     }
   }
@@ -174,8 +228,8 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
       return;
     }
     final AnswerPaper paper = await ref
-        .read(favoriteRedoPaperStoreProvider)
-        .load(favorite.id);
+        .read(redoAttemptStoreProvider)
+        .loadPaper(favorite.id, _attemptId);
     if (!mounted) {
       return;
     }
@@ -183,6 +237,27 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
       _papers[favorite.id] = paper;
       _paperIndex = _paperIndex.clamp(0, paper.pages - 1);
     });
+  }
+
+  /// 新 attempt：第一次进入某道收藏时先落一个 draft meta（App 被杀也能恢复）。
+  Future<void> _ensureAttemptMeta(Favorite favorite) async {
+    if (!_isNew) {
+      return;
+    }
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    final RedoAttempt? existing = await store.load(favorite.id, _attemptId);
+    if (existing != null) {
+      return;
+    }
+    final AnswerPaper paper = _papers[favorite.id] ?? AnswerPaper.defaults;
+    await store.create(
+      favoriteId: favorite.id,
+      attemptId: _attemptId,
+      now: DateTime.now(),
+      setId: widget.args.setId ?? '',
+      setTitle: _setRun ? widget.args.title : '',
+      paper: paper,
+    );
   }
 
   /// 先显示已有题面图，再后台补一张高清的（老收藏可能只有 1024px 宽）。
@@ -233,7 +308,9 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     });
     _zoom.value = Matrix4.identity();
     final Favorite favorite = _items[index];
+    _visited.add(favorite.id);
     await _loadPaperOf(favorite);
+    await _ensureAttemptMeta(favorite);
     unawaited(_ensureStem(favorite));
   }
 
@@ -269,7 +346,18 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
       return;
     }
     final AnswerPaper next = paper.copyWith(pages: paper.pages + 1);
-    await ref.read(favoriteRedoPaperStoreProvider).save(favorite.id, next);
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    await store.savePaper(favorite.id, _attemptId, next);
+    final RedoAttempt? meta = await store.load(favorite.id, _attemptId);
+    if (meta != null) {
+      await store.saveMeta(
+        meta.copyWith(
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+          paperPages: next.pages,
+          paperSummary: next.summary,
+        ),
+      );
+    }
     if (!mounted) {
       return;
     }
@@ -310,9 +398,18 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     if (!mounted) {
       return;
     }
-    await ref
-        .read(favoriteRedoPaperStoreProvider)
-        .save(favorite.id, change.paper);
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    await store.savePaper(favorite.id, _attemptId, change.paper);
+    final RedoAttempt? meta = await store.load(favorite.id, _attemptId);
+    if (meta != null) {
+      await store.saveMeta(
+        meta.copyWith(
+          updatedAt: DateTime.now().millisecondsSinceEpoch,
+          paperPages: change.paper.pages,
+          paperSummary: change.paper.summary,
+        ),
+      );
+    }
     if (!mounted) {
       return;
     }
@@ -325,7 +422,7 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
   }
 
   void _invalidateInk(Favorite favorite) {
-    final String session = favoriteRedoSessionId(favorite.id);
+    final String session = favoriteRedoSessionId(favorite.id, _attemptId);
     for (int i = 0; i < AnswerPaper.maxPages; i++) {
       final InkPageKey key = InkPageKey(session, i);
       ref.invalidate(inkStoreForKeyProvider(key));
@@ -333,37 +430,186 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     }
   }
 
-  Future<void> _finish() async {
-    await _flushCurrent();
+  Future<void> _finish() => _confirmExit();
+
+  /// 退出：新 attempt 询问保存；已保存的 attempt 自动落盘后退出。
+  Future<void> _confirmExit() async {
+    if (_exiting) {
+      return;
+    }
+    _exiting = true;
+    try {
+      if (!_isNew) {
+        await _flushCurrent();
+        await _markMetaSaved();
+        await _pop();
+        return;
+      }
+      final bool anyInk = await _anyInk();
+      if (!anyInk) {
+        await _discardAttempt();
+        await _pop();
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      final String? action = await showDialog<String>(
+        context: context,
+        builder: (BuildContext context) => AlertDialog(
+          title: const Text('保存这次重刷记录？'),
+          content: Text(
+            widget.args.setId == null
+                ? '这次重刷的笔迹会单独留一份，原作答不受影响；之后可以在收藏题下按列表打开继续改。'
+                : '这次组卷连刷会作为一条「${widget.args.title}」重刷记录保存；原作答不受影响。',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.65),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'discard'),
+              child: const Text('不保存'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'later'),
+              child: const Text('继续写'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, 'save'),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) {
+        return;
+      }
+      switch (action) {
+        case 'save':
+          await _saveAttempt();
+          await _pop();
+        case 'discard':
+          await _discardAttempt();
+          await _pop();
+        default:
+          // 继续写 / 点外面关闭：留在页面。
+          _exiting = false;
+      }
+    } finally {
+      if (mounted && _exiting && !_allowPop) {
+        _exiting = false;
+      }
+    }
+  }
+
+  bool _allowPop = false;
+
+  Future<void> _pop() async {
     if (!mounted) {
       return;
     }
-    final NavigatorState navigator = Navigator.of(context);
-    final int total = _items.length;
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext context) => AlertDialog(
-        title: const Text('本轮刷完'),
-        content: Text(
-          total <= 1
-              ? '这道题的重刷已保存。原作答不受影响，回去还能接着写。'
-              : '本轮 $total 道题都翻过了，重刷笔迹已逐题保存。原作答不受影响。',
+    setState(() => _allowPop = true);
+    await Future<void>.delayed(Duration.zero);
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _saveAttempt() async {
+    await _flushCurrent();
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    for (final String favoriteId in _visited) {
+      final AnswerPaper paper =
+          _papers[favoriteId] ?? AnswerPaper.defaults;
+      RedoAttempt? meta = await store.load(favoriteId, _attemptId);
+      meta ??= await store.create(
+        favoriteId: favoriteId,
+        attemptId: _attemptId,
+        now: DateTime.now(),
+        setId: widget.args.setId ?? '',
+        setTitle: _setRun ? widget.args.title : '',
+        paper: paper,
+      );
+      await store.saveMeta(
+        meta.copyWith(
+          saved: true,
+          updatedAt: now,
+          paperPages: paper.pages,
+          paperSummary: paper.summary,
         ),
-        actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('再看看'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(context);
-              navigator.maybePop();
-            },
-            child: const Text('完成'),
-          ),
-        ],
-      ),
-    );
+      );
+      await store.savePaper(favoriteId, _attemptId, paper);
+      ref.invalidate(redoAttemptsProvider(favoriteId));
+    }
+    _isNew = false;
+  }
+
+  Future<void> _markMetaSaved() async {
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    final int now = DateTime.now().millisecondsSinceEpoch;
+    for (final String favoriteId in _visited) {
+      final RedoAttempt? meta = await store.load(favoriteId, _attemptId);
+      if (meta == null) {
+        continue;
+      }
+      final AnswerPaper paper = _papers[favoriteId] ?? AnswerPaper.defaults;
+      await store.saveMeta(
+        meta.copyWith(
+          saved: true,
+          updatedAt: now,
+          paperPages: paper.pages,
+          paperSummary: paper.summary,
+        ),
+      );
+      await store.savePaper(favoriteId, _attemptId, paper);
+      ref.invalidate(redoAttemptsProvider(favoriteId));
+    }
+  }
+
+  Future<void> _discardAttempt() async {
+    final RedoAttemptStore store = ref.read(redoAttemptStoreProvider);
+    for (final String favoriteId in _visited) {
+      await store.delete(favoriteId, _attemptId);
+      ref.invalidate(redoAttemptsProvider(favoriteId));
+    }
+    try {
+      await AnswerLogDao(
+        ref.read(appDependenciesProvider).db.raw,
+      ).deleteAttempt(_attemptId);
+    } on Object {
+      // 记录是旁路；删不掉也不影响丢弃笔迹。
+    }
+  }
+
+  Future<bool> _anyInk() async {
+    for (final String favoriteId in _visited) {
+      if (await _hasInkFor(favoriteId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<bool> _hasInkFor(String favoriteId) async {
+    final AnswerPaper paper = _papers[favoriteId] ?? AnswerPaper.defaults;
+    for (int i = 0; i < paper.pages; i += 1) {
+      final InkPageKey key = InkPageKey(
+        favoriteRedoSessionId(favoriteId, _attemptId),
+        i,
+      );
+      try {
+        await ref.read(inkEditProvider(key).notifier).flushSave();
+        final InkDoc doc = await ref
+            .read(inkStoreForKeyProvider(key))
+            .load(key.sessionId, i);
+        if (doc.strokes.isNotEmpty) {
+          return true;
+        }
+      } on Object {
+        // 单页读失败不影响判断其他纸。
+      }
+    }
+    return false;
   }
 
   Future<void> _clearCurrent() async {
@@ -553,10 +799,12 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
     ref.watch(panelWidthProvider);
     final double panelWidth = exists && _aiOpen ? _panelWidth(context) : 0;
     return PopScope(
-      // 返回前把当前笔迹落盘：500ms 防抖还没到就退出去也不会丢。
+      // 新 attempt：退出前询问"保存这次重刷记录吗"；已保存的 attempt 自动落盘。
+      // `_allowPop` 在保存/丢弃后置 true，避免自己的 Navigator.pop 再次触发询问。
+      canPop: _allowPop,
       onPopInvokedWithResult: (bool didPop, Object? result) {
-        if (didPop) {
-          unawaited(_flushCurrent());
+        if (!didPop) {
+          unawaited(_confirmExit());
         }
       },
       child: Scaffold(
@@ -736,6 +984,7 @@ class _FavoriteRedoPageState extends ConsumerState<FavoriteRedoPage> {
                           key: ValueKey<String>('redo-ai-${favorite.id}'),
                           favorite: favorite,
                           width: panelWidth,
+                          attemptId: _attemptId,
                           onClose: () => setState(() => _aiOpen = false),
                         ),
                       ),

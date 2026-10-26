@@ -4,16 +4,16 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/favorite/favorite_store.dart';
-import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/model/favorite.dart';
 import 'package:shuaqi/domain/model/grading.dart';
+import 'package:shuaqi/domain/model/redo_attempt.dart';
 import 'package:shuaqi/domain/reader/panel_metrics.dart';
 import 'package:shuaqi/domain/region/answer.dart';
+import 'package:shuaqi/infra/db/dao/answer_log_dao.dart';
 import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
 import 'package:shuaqi/state/app_providers.dart';
 import 'package:shuaqi/state/favorite_providers.dart';
-import 'package:shuaqi/state/ink_providers.dart';
 import 'package:shuaqi/state/panel_width_provider.dart';
 import 'package:shuaqi/ui/favorites/favorite_ai_panel.dart';
 import 'package:shuaqi/ui/favorites/favorite_card.dart';
@@ -22,7 +22,6 @@ import 'package:shuaqi/ui/favorites/favorite_redo_page.dart';
 import 'package:shuaqi/ui/favorites/favorite_tag_editor.dart';
 import 'package:shuaqi/ui/panel/grade_dot.dart';
 import 'package:shuaqi/ui/panel/panel_resize_handle.dart';
-import 'package:shuaqi/ui/reader/answer_crop_renderer.dart';
 import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
@@ -53,7 +52,7 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
   AnswerNote? _note;
   FavoriteImage? _stem;
   FavoriteImage? _answer;
-  FavoriteImage? _redo;
+  List<RedoAttempt> _attempts = const <RedoAttempt>[];
   bool _loading = true;
   bool _aiOpen = false;
 
@@ -87,6 +86,9 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
     final FavoriteImage? answer = await loadFavoriteImage(
       vault.file(VaultPaths.favoriteAnswerImg(favorite.id)),
     );
+    final List<RedoAttempt> attempts = await ref
+        .read(redoAttemptStoreProvider)
+        .list(favorite.id);
     if (!mounted) {
       return;
     }
@@ -96,39 +98,21 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
       _note = note;
       _stem = stem;
       _answer = answer;
+      _attempts = attempts;
       _loading = false;
     });
     // 老收藏的题面图只有 1024px 宽（平板铺满会发虚），迁移来的干脆没有。
     // 原卷还在就后台补一张高清的，补好直接换图、不打断阅读。
     unawaited(_upgradeStem(favorite));
-    unawaited(_loadRedo(favorite));
   }
 
-  /// 读这份收藏的「二刷」笔迹并渲染成图（有重刷才显示这一段）。
-  Future<void> _loadRedo(Favorite favorite) async {
-    final InkPageKey key = InkPageKey(
-      favoriteRedoSessionId(favorite.id),
-      0,
-    );
-    final InkDoc doc = await ref
-        .read(inkStoreForKeyProvider(key))
-        .load(key.sessionId, key.pageIndex);
-    if (!mounted) {
-      return;
-    }
-    if (doc.strokes.isEmpty) {
-      if (_redo != null) {
-        setState(() => _redo = null);
-      }
-      return;
-    }
-    final Uint8List? bytes = await renderInkDocPng(doc: doc);
-    if (bytes == null || !mounted) {
-      return;
-    }
-    final FavoriteImage? image = await decodeFavoriteImage(bytes);
-    if (image != null && mounted) {
-      setState(() => _redo = image);
+  /// 重新读重刷记录列表（新建/保存/删除后调用）。
+  Future<void> _reloadAttempts(Favorite favorite) async {
+    final List<RedoAttempt> attempts = await ref
+        .read(redoAttemptStoreProvider)
+        .list(favorite.id);
+    if (mounted) {
+      setState(() => _attempts = attempts);
     }
   }
 
@@ -171,17 +155,68 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
       arguments: RedoArgs(
         favoriteIds: <String>[favorite.id],
         title: '第 ${favorite.label} 题',
+        startNew: true,
       ),
     );
-    // 回来时把新写的重刷笔迹刷出来（同一份 SIF，可能刚改过）。
     if (mounted) {
-      await _loadRedo(favorite);
+      await _reloadAttempts(favorite);
     }
+  }
+
+  Future<void> _openAttempt(Favorite favorite, RedoAttempt attempt) async {
+    await Navigator.of(context).pushNamed(
+      AppRoutes.favoriteRedo,
+      arguments: RedoArgs(
+        favoriteIds: <String>[favorite.id],
+        title: attempt.isSet
+            ? '组卷 · ${attempt.setTitle}'
+            : '第 ${favorite.label} 题 · 重刷',
+        attemptId: attempt.id,
+        isSet: attempt.isSet,
+      ),
+    );
+    if (mounted) {
+      await _reloadAttempts(favorite);
+    }
+  }
+
+  Future<void> _deleteAttempt(Favorite favorite, RedoAttempt attempt) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('删除这次重刷？'),
+        content: const Text('只删这一次重刷的笔迹与记录；收藏本身和原作答不受影响。'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) {
+      return;
+    }
+    await ref.read(redoAttemptStoreProvider).delete(favorite.id, attempt.id);
+    try {
+      await AnswerLogDao(
+        ref.read(appDependenciesProvider).db.raw,
+      ).deleteAttempt(attempt.id);
+    } on Object {
+      // 记录是旁路；删不掉也不影响删笔迹。
+    }
+    ref.invalidate(redoAttemptsProvider(favorite.id));
+    await _reloadAttempts(favorite);
   }
 
   @override
   Widget build(BuildContext context) {
     final Favorite? favorite = _favorite;
+    final String? latestAttemptId = _attempts.isEmpty ? null : _attempts.first.id;
     final double panelWidth = favorite != null && _aiOpen
         ? _panelWidth(context)
         : 0;
@@ -233,10 +268,14 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
                       favorite: favorite!,
                       stem: _stem,
                       answer: _answer,
-                      redo: _redo,
+                      attempts: _attempts,
                       grade: _grade,
                       note: _note,
                       onRedo: () => _startRedo(favorite),
+                      onOpenAttempt: (RedoAttempt attempt) =>
+                          _openAttempt(favorite, attempt),
+                      onDeleteAttempt: (RedoAttempt attempt) =>
+                          _deleteAttempt(favorite, attempt),
                       onEditTags: () => _editTags(favorite),
                     ),
                   ),
@@ -261,6 +300,7 @@ class _QuestionViewPageState extends ConsumerState<QuestionViewPage> {
                         key: ValueKey<String>('view-ai-${favorite.id}'),
                         favorite: favorite,
                         width: panelWidth,
+                        attemptId: latestAttemptId,
                         onClose: () => setState(() => _aiOpen = false),
                         onGraded: () => unawaited(_reloadGrading()),
                       ),
@@ -444,20 +484,24 @@ class _Body extends StatelessWidget {
     required this.favorite,
     required this.stem,
     required this.answer,
-    required this.redo,
+    required this.attempts,
     required this.grade,
     required this.note,
     required this.onRedo,
+    required this.onOpenAttempt,
+    required this.onDeleteAttempt,
     required this.onEditTags,
   });
 
   final Favorite favorite;
   final FavoriteImage? stem;
   final FavoriteImage? answer;
-  final FavoriteImage? redo;
+  final List<RedoAttempt> attempts;
   final QuestionGrade? grade;
   final AnswerNote? note;
   final VoidCallback onRedo;
+  final ValueChanged<RedoAttempt> onOpenAttempt;
+  final ValueChanged<RedoAttempt> onDeleteAttempt;
   final VoidCallback onEditTags;
 
   @override
@@ -500,15 +544,13 @@ class _Body extends StatelessWidget {
                 : '收藏时没有作答笔迹，点「重刷」可以现在写一遍',
           ),
         ),
-        if (redo != null)
-          _Section(
-            title: '重刷（原作答不受影响）',
-            child: FavoriteImageView(
-              image: redo,
-              title: '第 ${favorite.label} 题重刷',
-              maxWidth: 760,
-            ),
-          ),
+        _RedoHistorySection(
+          favorite: favorite,
+          attempts: attempts,
+          onRedo: onRedo,
+          onOpen: onOpenAttempt,
+          onDelete: onDeleteAttempt,
+        ),
         _Section(
           title: '判定与参考答案',
           child: _VerdictCard(
@@ -520,6 +562,224 @@ class _Body extends StatelessWidget {
       ],
     );
   }
+}
+
+class _RedoHistorySection extends StatelessWidget {
+  const _RedoHistorySection({
+    required this.favorite,
+    required this.attempts,
+    required this.onRedo,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  final Favorite favorite;
+  final List<RedoAttempt> attempts;
+  final VoidCallback onRedo;
+  final ValueChanged<RedoAttempt> onOpen;
+  final ValueChanged<RedoAttempt> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: ShqSpace.lg),
+      child: Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            ShqSpace.md,
+            ShqSpace.md,
+            ShqSpace.md,
+            ShqSpace.sm,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Text(
+                    '重刷记录',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(width: ShqSpace.sm),
+                  Text(
+                    '${attempts.length} 次',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: onRedo,
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(0, 32),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    icon: const Icon(Icons.add, size: 16),
+                    label: const Text('重刷这道题'),
+                  ),
+                ],
+              ),
+              if (attempts.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: ShqSpace.md,
+                    horizontal: ShqSpace.xs,
+                  ),
+                  child: Text(
+                    '还没有重刷记录。点「重刷这道题」会打开空白答题卡，'
+                    '退出时问你是否保存这一次；原作答与收藏都不受影响。',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      height: 1.6,
+                    ),
+                  ),
+                )
+              else
+                for (final RedoAttempt attempt in attempts)
+                  _AttemptRow(
+                    attempt: attempt,
+                    onOpen: () => onOpen(attempt),
+                    onDelete: () => onDelete(attempt),
+                  ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AttemptRow extends StatelessWidget {
+  const _AttemptRow({
+    required this.attempt,
+    required this.onOpen,
+    required this.onDelete,
+  });
+
+  final RedoAttempt attempt;
+  final VoidCallback onOpen;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final String title = attempt.isDraft
+        ? '未保存的重刷'
+        : attempt.isSet
+        ? '组卷 · ${attempt.setTitle.isEmpty ? '未命名组卷' : attempt.setTitle}'
+        : '单题重刷';
+    final String time = _formatAttemptTime(attempt.updatedAtTime);
+    return InkWell(
+      onTap: onOpen,
+      borderRadius: BorderRadius.circular(ShqRadius.sm),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: ShqSpace.xs,
+          vertical: ShqSpace.sm,
+        ),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 32,
+              height: 32,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: attempt.isDraft
+                    ? scheme.tertiaryContainer
+                    : scheme.surfaceContainerHigh,
+                borderRadius: BorderRadius.circular(ShqRadius.sm),
+              ),
+              child: Icon(
+                attempt.isDraft ? Icons.edit_note : Icons.history,
+                size: 18,
+                color: attempt.isDraft
+                    ? scheme.onTertiaryContainer
+                    : scheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(width: ShqSpace.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Flexible(
+                        child: Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      if (attempt.isDraft) ...<Widget>[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 5,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: scheme.tertiary.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(ShqRadius.pill),
+                          ),
+                          child: Text(
+                            '未保存',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: scheme.tertiary,
+                              fontSize: 9.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$time · ${attempt.paperPages} 张纸'
+                    '${attempt.paperSummary.isEmpty ? '' : ' · ${attempt.paperSummary}'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: '这一次重刷',
+              onSelected: (String value) {
+                if (value == 'delete') {
+                  onDelete();
+                }
+              },
+              itemBuilder: (BuildContext context) => const <PopupMenuEntry<String>>[
+                PopupMenuItem<String>(
+                  value: 'delete',
+                  child: Text('删除这次记录'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _formatAttemptTime(DateTime at) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${at.year}-${two(at.month)}-${two(at.day)} '
+      '${two(at.hour)}:${two(at.minute)}';
 }
 
 /// 顶部元信息：题号/题型/卷名/知识点 + 重刷入口，一眼知道"这是什么题、从哪来"。

@@ -1,0 +1,13 @@
+name = "shuaqi-feedback"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[vars]
+GITHUB_OWNER = "your-github-name"
+GITHUB_REPO = "shuaqi-feedback-private"
+GITHUB_BRANCH = "main"
+# 可选：和 App 的 --dart-define=FEEDBACK_APP_TOKEN 保持一致。
+# APP_TOKEN = "change-me"
+
+# 不要把 GITHUB_TOKEN 写在这里；用：
+#   npx wrangler secret put GITHUB_TOKEN

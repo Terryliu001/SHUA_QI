@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart' show PointerDeviceKind, PointerEvent;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/domain/ink/eraser.dart';
 import 'package:shuaqi/domain/ink/ink_compress.dart';
@@ -10,6 +11,7 @@ import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_store.dart';
 import 'package:shuaqi/domain/ink/ink_tool.dart';
 import 'package:shuaqi/domain/ink/ink_width.dart';
+import 'package:shuaqi/domain/ink/shape_recognition.dart';
 import 'package:shuaqi/domain/ink/undo_stack.dart';
 import 'package:shuaqi/domain/util/ulid.dart';
 import 'package:shuaqi/state/ink_providers.dart';
@@ -122,6 +124,12 @@ class _InkLayerState extends ConsumerState<InkLayer>
 
   /// 当前这笔最近一次**有效**压力。DOWN / UP 的 0 读数用它兜底。
   double _lastPressure = InkWidth.neutralPressure;
+
+  /// 图形吸附：停笔 500ms 后尝试识别，预览到抬笔才确认。
+  Timer? _shapeTimer;
+  ShapeSnap? _snapPreview;
+
+  static const Duration _shapeHold = Duration(milliseconds: 500);
 
   /// 当前这笔的 pointer id；-1 表示没在写。
   int _activePointer = -1;
@@ -243,6 +251,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
   @override
   void dispose() {
     _haloHoldTimer?.cancel();
+    _shapeTimer?.cancel();
     _haloAnim.dispose();
     _halo.dispose();
     _activeTick.dispose();
@@ -307,6 +316,56 @@ class _InkLayerState extends ConsumerState<InkLayer>
     return current;
   }
 
+  // ── 图形吸附（2026-10-26 用户第 6 条）──────────────────────────────
+
+  bool get _shapeSnapAllowed {
+    if (widget.tool.isEraser) {
+      return false;
+    }
+    final InkStrokeStyle style =
+        widget.tool.strokeStyle ?? InkStrokeStyle.pen;
+    return style != InkStrokeStyle.highlighter;
+  }
+
+  void _scheduleShapeSnap() {
+    _shapeTimer?.cancel();
+    if (!_shapeSnapAllowed || _activePointer < 0 || _erasing) {
+      return;
+    }
+    _shapeTimer = Timer(_shapeHold, _tryShapeSnap);
+  }
+
+  void _tryShapeSnap() {
+    if (!mounted || _activePointer < 0 || _erasing || !_shapeSnapAllowed) {
+      return;
+    }
+    final InkCompressor? compressor = _compressor;
+    if (compressor == null || compressor.points.length < 6) {
+      return;
+    }
+    final ShapeSnap? snap = recognizeShape(compressor.points);
+    if (snap == null || snap.confidence < 0.72) {
+      return;
+    }
+    setState(() => _snapPreview = snap);
+    _activeTick.value++;
+    unawaited(HapticFeedback.selectionClick());
+  }
+
+  void _clearShapeSnap({bool notify = true}) {
+    _shapeTimer?.cancel();
+    _shapeTimer = null;
+    if (_snapPreview == null) {
+      return;
+    }
+    if (notify && mounted) {
+      setState(() => _snapPreview = null);
+    } else {
+      _snapPreview = null;
+    }
+    _activeTick.value++;
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     // 手指：先记 pointer。第二根落下 → 这是双指平移/缩放，不是写字。
     if (event.kind == PointerDeviceKind.touch && widget.inkTouch) {
@@ -333,6 +392,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
     }
     _activePointer = event.pointer;
     _lastActiveEventMs = DateTime.now().millisecondsSinceEpoch;
+    _clearShapeSnap(notify: false);
     // 落笔即停：惯性/甩动必须立刻停，否则字画在"还在飘的纸"上（也适用于橡皮）。
     widget.onPenDown?.call();
 
@@ -357,6 +417,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
     _compressor!.add(first);
     ribbon.addPoint(first);
     _activeTick.value++;
+    _scheduleShapeSnap();
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -382,6 +443,23 @@ class _InkLayerState extends ConsumerState<InkLayer>
         _activeTick.value++;
       }
     }
+    if (_snapPreview != null) {
+      final List<InkPoint> kept = compressor.points;
+      if (kept.length >= 2) {
+        final InkPoint previous = kept[kept.length - 2];
+        final double moved = math.sqrt(
+          math.pow(point.x - previous.x, 2) +
+              math.pow(point.y - previous.y, 2),
+        );
+        if (moved > 8) {
+          // 用户又动笔了：取消吸附，保留原笔迹。
+          _clearShapeSnap();
+        }
+      }
+    }
+    if (_snapPreview == null) {
+      _scheduleShapeSnap();
+    }
   }
 
   void _onPointerUp(PointerUpEvent event) {
@@ -393,7 +471,12 @@ class _InkLayerState extends ConsumerState<InkLayer>
       _finishActive();
       return;
     }
-    _commit(_pointOf(event, pressure: _lastPressure));
+    final ShapeSnap? snap = _snapPreview;
+    _clearShapeSnap(notify: false);
+    _commit(
+      _pointOf(event, pressure: _lastPressure),
+      overridePoints: snap?.points,
+    );
   }
 
   void _onPointerCancel(PointerCancelEvent event) {
@@ -463,6 +546,9 @@ class _InkLayerState extends ConsumerState<InkLayer>
     _compressor = null;
     _lastPressure = InkWidth.neutralPressure;
     _ribbon?.clear();
+    _shapeTimer?.cancel();
+    _shapeTimer = null;
+    _snapPreview = null;
     _activeTick.value++;
   }
 
@@ -524,18 +610,21 @@ class _InkLayerState extends ConsumerState<InkLayer>
   /// 单点笔画保留（点一下是一个"点"，比如选择题打钩打点）。
   /// 收尾点的压力与时间戳必须取**真实值**：早先这里硬编码 `pressure: 0.5, t: 0`，
   /// 结果每一笔的尾巴都被强行拉成中粗（就是"抬笔粗细突变"的第二个来源）。
-  void _commit(InkPoint endPoint) {
+  void _commit(InkPoint endPoint, {List<InkPoint>? overridePoints}) {
     final InkCompressor? compressor = _compressor;
     final InkRibbon? ribbon = _ribbon;
     final InkBrushSpec? spec = _activeSpec;
     _activePointer = -1;
     _compressor = null;
     _lastActiveEventMs = 0;
+    _shapeTimer?.cancel();
+    _shapeTimer = null;
+    _snapPreview = null;
     if (compressor == null || spec == null) {
       _resetActive();
       return;
     }
-    final List<InkPoint> points = compressor.finish(endPoint);
+    final List<InkPoint> points = overridePoints ?? compressor.finish(endPoint);
     // 活动层与已提交层几何相同：清掉活动层不会闪——下一次 build 里
     // InkEditController.commit 已经把这一笔同步写进 state（同一帧内完成）。
     ribbon?.endStroke();
@@ -586,6 +675,7 @@ class _InkLayerState extends ConsumerState<InkLayer>
         ? _activeSpec!
         : _specFor(widget.tool.strokeStyle ?? InkStrokeStyle.pen);
     final InkRibbon active = _ribbonFor(spec);
+    final ShapeSnap? snap = _snapPreview;
 
     return ClipRect(
       child: Stack(
@@ -607,14 +697,44 @@ class _InkLayerState extends ConsumerState<InkLayer>
           Positioned.fill(
             child: RepaintBoundary(
               child: CustomPaint(
-                painter: ActiveStrokePainter(
-                  ribbon: active,
-                  scale: scale,
-                  repaint: _activeTick,
-                ),
+                painter: snap == null
+                    ? ActiveStrokePainter(
+                        ribbon: active,
+                        scale: scale,
+                        repaint: _activeTick,
+                      )
+                    : _ShapeSnapPainter(
+                        snap: snap,
+                        spec: _activeSpec ?? spec,
+                        scale: scale,
+                      ),
               ),
             ),
           ),
+          if (snap != null)
+            Positioned(
+              left: (snap.bounds.left * scale).clamp(4.0, 4000.0),
+              top: (snap.bounds.top * scale - 30).clamp(4.0, 4000.0),
+              child: IgnorePointer(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: ShqSpace.sm,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.inverseSurface,
+                    borderRadius: BorderRadius.circular(ShqRadius.pill),
+                  ),
+                  child: Text(
+                    '${snap.label} · 松手确认',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onInverseSurface,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // 大小参考圈：在最后一次落笔处浮一个"真实大小"的标记。
           // 淡入 160ms / 停留 1.1s / 淡出 260ms（见 _flashHalo），IgnorePointer 不挡落笔。
           Positioned.fill(
@@ -630,6 +750,9 @@ class _InkLayerState extends ConsumerState<InkLayer>
                     scale: scale,
                     radiusPt: _brushRadiusPt,
                     animation: _haloAnim,
+                    valueText: widget.tool.isEraser
+                        ? '橡皮 ${widget.brushWidth}'
+                        : '笔尖 ${widget.brushWidth}',
                     // 笔尖的"点"用当前颜色，橡皮用中性色（见 _BrushHalo）
                     color: widget.tool.isEraser
                         ? null
@@ -728,6 +851,7 @@ class _HaloLayer extends StatelessWidget {
     required this.radiusPt,
     required this.animation,
     required this.color,
+    required this.valueText,
   });
 
   /// 页面坐标（pt）。
@@ -744,6 +868,9 @@ class _HaloLayer extends StatelessWidget {
 
   /// 笔尖点的颜色；橡皮为 null（用中性色）。
   final Color? color;
+
+  /// 数值标签（如「笔尖 42」/「橡皮 18」）。
+  final String valueText;
 
   @override
   Widget build(BuildContext context) {
@@ -795,8 +922,77 @@ class _HaloLayer extends StatelessWidget {
               ),
             ),
           ),
+          // 数值标签：只有圆圈时用户看不出"这是几"；带一句「笔尖 42」更直观。
+          Positioned(
+            left: at.dx * scale - 40,
+            top: at.dy * scale + ring / 2 + 4,
+            width: 80,
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: ShqSpace.sm,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.inverseSurface,
+                  borderRadius: BorderRadius.circular(ShqRadius.pill),
+                ),
+                child: Text(
+                  valueText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onInverseSurface,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// 图形吸附预览：用当前笔的颜色/粗细画理想形状，抬笔前不落库。
+class _ShapeSnapPainter extends CustomPainter {
+  const _ShapeSnapPainter({
+    required this.snap,
+    required this.spec,
+    required this.scale,
+  });
+
+  final ShapeSnap snap;
+  final InkBrushSpec spec;
+  final double scale;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (snap.points.isEmpty) {
+      return;
+    }
+    final Path path = Path();
+    final Offset first = Offset(
+      snap.points.first.x * scale,
+      snap.points.first.y * scale,
+    );
+    path.moveTo(first.dx, first.dy);
+    for (int i = 1; i < snap.points.length; i += 1) {
+      path.lineTo(snap.points[i].x * scale, snap.points[i].y * scale);
+    }
+    final double width = InkWidth.baseOf(spec.style, spec.brushWidth) * scale;
+    final Paint paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = math.max(1.2, width)
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..color = spec.color.withValues(alpha: 0.92);
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ShapeSnapPainter old) =>
+      old.snap != snap || old.spec != spec || old.scale != scale;
 }

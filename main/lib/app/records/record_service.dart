@@ -19,6 +19,8 @@ abstract interface class AnswerRecorder {
     String? workbookTitle,
     RecordOrigin origin = RecordOrigin.workbook,
     String? originTitle,
+    String attemptId = '',
+    String favoriteId = '',
   });
 
   Future<void> syncVerdict({
@@ -84,6 +86,8 @@ class RecordService implements AnswerRecorder {
     String? workbookTitle,
     RecordOrigin origin = RecordOrigin.workbook,
     String? originTitle,
+    String attemptId = '',
+    String favoriteId = '',
   }) async {
     if (workbookId.isEmpty || questionId.isEmpty) {
       return;
@@ -107,6 +111,8 @@ class RecordService implements AnswerRecorder {
         verdict: verdict,
         origin: origin,
         originTitle: originTitle ?? '',
+        attemptId: attemptId,
+        favoriteId: favoriteId,
       );
       await AnswerLogDao(db.raw).touch(entry);
       onChanged?.call();

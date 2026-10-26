@@ -54,18 +54,58 @@ void main() {
     expect(ExportOptions.originalOnly.matches(ExportOptions.withInk), isFalse);
   });
 
-  test('文件名：去掉非法字符、限长、带时间戳', () {
+  test('文件内容段：四种常用组合有短名字，非标准组合用 + 拼', () {
+    expect(ExportOptions.originalOnly.fileTag, '纯试卷');
+    expect(ExportOptions.withInk.fileTag, '试卷+笔迹');
+    expect(ExportOptions.full.fileTag, '完整存档');
+    expect(ExportOptions.answerOnly.fileTag, '答题卡');
+    expect(
+      const ExportOptions(original: true, ink: false, answer: true).fileTag,
+      '原题+答题卡',
+    );
+  });
+
+  test('文件名：卷名 + 内容 + 时间戳，清理非法字符', () {
     final DateTime at = DateTime(2026, 10, 25, 22, 5);
-    final String name = exportFileName('2019–2020/线性代数:期末*试题', at);
-    expect(name.startsWith('SHUAQI_'), isTrue);
+    final String name = exportFileName(
+      '2019–2020/线性代数:期末*试题',
+      at,
+      options: ExportOptions.full,
+    );
+    expect(name.startsWith('2019–2020 线性代数 期末 试题'), isTrue);
+    expect(name.contains('完整存档'), isTrue);
     expect(name.endsWith('_20261025-2205.pdf'), isTrue);
     expect(name.contains('/'), isFalse);
     expect(name.contains(':'), isFalse);
     expect(name.contains('*'), isFalse);
+  });
 
+  test('文件名：可手改；自动补 .pdf；空名字回退默认', () {
+    final DateTime at = DateTime(2026, 10, 25, 22, 5);
+    expect(
+      exportFileName('原卷', at, customName: '我的 错题 整理'),
+      '我的 错题 整理.pdf',
+    );
+    expect(
+      exportFileName('原卷', at, customName: '我的整理.pdf'),
+      '我的整理.pdf',
+    );
+    // 只有非法字符时回退到标题命名。
+    expect(
+      exportFileName('原卷', at, customName: '///'),
+      startsWith('原卷_试卷+笔迹_20261025-2205.pdf'),
+    );
+    // 标题过长时截断，给内容与时间戳留位置。
     final String long = exportFileName('题' * 80, at);
-    // SHUAQI_ + 40 字 + _时间戳 + .pdf
-    expect(long.length, lessThan(40 + 30));
-    expect(exportFileName('   ', at).startsWith('SHUAQI_试卷_'), isTrue);
+    expect(long.length, lessThan(32 + 30));
+    expect(long.contains('试卷+笔迹'), isTrue);
+  });
+
+  test('文件名：空白标题回退「试卷」', () {
+    final DateTime at = DateTime(2026, 10, 25, 22, 5);
+    expect(
+      exportFileName('   ', at),
+      '试卷_试卷+笔迹_20261025-2205.pdf',
+    );
   });
 }

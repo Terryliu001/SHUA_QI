@@ -371,18 +371,18 @@ class _BrushWidthSlider extends StatelessWidget {
   final ValueChanged<int> onChanged;
   final bool compact;
 
-  /// 参考圈直径（dp）：按真实宽度换算，但压在 4..22dp 之间保证看得见。
-  double get _dot {
+  /// 真实笔触的显示线宽（dp）：按实际宽度换算，但压到一个看得见的区间。
+  double get _sampleWidth {
     final double pt = brush.isEraser
         ? Eraser.radiusOfWidth(brush.brushWidth) * 2
         : InkWidth.baseOf(brush.strokeStyle, brush.brushWidth);
-    // 1pt ≈ 1.9dp 的观感系数：面板很小，按物理尺寸画会细到看不见。
-    return (pt * 1.9).clamp(4.0, compact ? 18.0 : 26.0);
+    return (pt * 1.9).clamp(1.5, compact ? 8.0 : 14.0);
   }
 
   @override
   Widget build(BuildContext context) {
     final ColorScheme scheme = Theme.of(context).colorScheme;
+    final ThemeData theme = Theme.of(context);
     final Color color = brush.isEraser
         ? scheme.onSurfaceVariant
         : previewColorOf(
@@ -410,25 +410,85 @@ class _BrushWidthSlider extends StatelessWidget {
           ),
         ),
         const SizedBox(width: ShqSpace.xs),
-        // 参考圈：真实大小的可视化
+        // 2026-10-26 用户："大小提示小圆圈不直观"——改成**真实笔触样本 + 数值**。
+        // 圆圈只能看"大概多粗"，一条按真实线宽画的线段更接近落笔后的样子。
         SizedBox(
-          width: (compact ? 18 : 26) + 4,
-          height: (compact ? 18 : 26) + 4,
-          child: Center(
-            child: Container(
-              width: _dot,
-              height: _dot,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.22),
-                shape: BoxShape.circle,
-                border: Border.all(color: color, width: 1.4),
-              ),
+          width: compact ? 26 : 34,
+          height: 26,
+          child: CustomPaint(
+            painter: _BrushSamplePainter(
+              color: color,
+              strokeWidth: _sampleWidth,
+              eraser: brush.isEraser,
+            ),
+          ),
+        ),
+        SizedBox(
+          width: compact ? 18 : 22,
+          child: Text(
+            '${brush.brushWidth}',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+              fontFeatures: const <FontFeature>[
+                FontFeature.tabularFigures(),
+              ],
             ),
           ),
         ),
       ],
     );
   }
+}
+
+/// 笔触样本：钢笔/圆珠笔画一条真实粗细的线段；橡皮画真实直径的圆。
+class _BrushSamplePainter extends CustomPainter {
+  const _BrushSamplePainter({
+    required this.color,
+    required this.strokeWidth,
+    required this.eraser,
+  });
+
+  final Color color;
+  final double strokeWidth;
+  final bool eraser;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final Offset center = Offset(size.width / 2, size.height / 2);
+    if (eraser) {
+      final double diameter = strokeWidth.clamp(4.0, size.height - 4);
+      canvas.drawCircle(
+        center,
+        diameter / 2,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4
+          ..color = color,
+      );
+      canvas.drawCircle(
+        center,
+        diameter / 2,
+        Paint()..color = color.withValues(alpha: 0.12),
+      );
+      return;
+    }
+    final Paint paint = Paint()
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round
+      ..color = color;
+    canvas.drawLine(
+      Offset(3, center.dy),
+      Offset(size.width - 3, center.dy),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_BrushSamplePainter old) =>
+      old.color != color ||
+      old.strokeWidth != strokeWidth ||
+      old.eraser != eraser;
 }
 
 /// 面板里的小动作按钮（"固定到顶栏"这类形态切换）。

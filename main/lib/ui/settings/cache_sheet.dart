@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/storage/cache_service.dart';
 import 'package:shuaqi/domain/app/cache_report.dart';
+import 'package:shuaqi/state/bookshelf_providers.dart';
 import 'package:shuaqi/state/settings_providers.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
@@ -87,7 +88,11 @@ class _CacheSheetState extends ConsumerState<_CacheSheet> {
     final CacheService service = ref.read(cacheServiceProvider);
     final CacheClearResult result = await service.clear();
     // 内存里的图片缓存也顺手清掉（缩略图与作答原图都缓存在内存里）。
-    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache
+      ..clear()
+      ..clearLiveImages();
+    // 缩略图被删了：让书架重新取图（缺图会走懒重建）。
+    ref.read(thumbnailEpochProvider.notifier).bump();
     await _scan();
     if (!mounted) {
       return;

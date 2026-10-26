@@ -12,11 +12,11 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 ///
 /// 开关与预设是同一份数据（[ExportOptions]），点预设 = 把三个开关拨到那个组合，
 /// 所以底部"将导出：原题 + 笔迹"永远和开关一致，不会出现"选了预设但实际没变"。
-Future<ExportOptions?> showExportOptionsSheet(
+Future<ExportRequest?> showExportOptionsSheet(
   BuildContext context, {
   required Workbook workbook,
 }) {
-  return showModalBottomSheet<ExportOptions>(
+  return showModalBottomSheet<ExportRequest>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
@@ -41,12 +41,47 @@ class _ExportOptionsSheet extends StatefulWidget {
 class _ExportOptionsSheetState extends State<_ExportOptionsSheet> {
   ExportOptions _options = ExportOptions.withInk;
 
+  /// 打开面板的时刻：文件名里的时间戳固定成这一刻，用户改选项时不跳。
+  final DateTime _at = DateTime.now();
+
+  late final TextEditingController _name = TextEditingController(
+    text: _defaultName,
+  );
+
+  /// 用户手改过文件名后，切换选项不再覆盖他的输入。
+  bool _nameDirty = false;
+
+  String get _defaultName =>
+      exportFileName(widget.title, _at, options: _options);
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  void _setOptions(ExportOptions next) {
+    setState(() {
+      _options = next;
+      if (!_nameDirty) {
+        _name.text = _defaultName;
+      }
+    });
+  }
+
+  void _restoreName() {
+    setState(() {
+      _nameDirty = false;
+      _name.text = _defaultName;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(
           ShqSpace.xl,
           ShqSpace.xs,
@@ -82,7 +117,7 @@ class _ExportOptionsSheetState extends State<_ExportOptionsSheet> {
                   _PresetChip(
                     label: preset.label,
                     active: _options.matches(preset.options),
-                    onTap: () => setState(() => _options = preset.options),
+                    onTap: () => _setOptions(preset.options),
                   ),
               ],
             ),
@@ -126,12 +161,34 @@ class _ExportOptionsSheetState extends State<_ExportOptionsSheet> {
                     child: _PresetChip(
                       label: quality.label,
                       active: _options.quality == quality,
-                      onTap: () => setState(
-                        () => _options = _options.copyWith(quality: quality),
+                      onTap: () => _setOptions(
+                        _options.copyWith(quality: quality),
                       ),
                     ),
                   ),
               ],
+            ),
+            const SizedBox(height: ShqSpace.md),
+            // 文件名（2026-10-26 用户：导出名要能看出导的是什么，且可改）。
+            TextField(
+              controller: _name,
+              maxLength: 90,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: '文件名',
+                helperText: '默认带「内容 + 时间」；可改，.pdf 会自动补',
+                counterText: '',
+                isDense: true,
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  tooltip: '恢复默认文件名',
+                  onPressed: _restoreName,
+                  icon: const Icon(Icons.restart_alt, size: 18),
+                ),
+              ),
+              onChanged: (String value) {
+                _nameDirty = value.trim() != _defaultName;
+              },
             ),
             const SizedBox(height: ShqSpace.sm),
             Container(
@@ -178,7 +235,13 @@ class _ExportOptionsSheetState extends State<_ExportOptionsSheet> {
                   flex: 2,
                   child: FilledButton.icon(
                     onPressed: _options.canExport
-                        ? () => Navigator.pop(context, _options)
+                        ? () => Navigator.pop(
+                            context,
+                            ExportRequest(
+                              options: _options,
+                              fileName: _name.text.trim(),
+                            ),
+                          )
                         : null,
                     icon: const Icon(Icons.file_download_outlined, size: 18),
                     label: const Text('导出到下载'),
@@ -192,9 +255,7 @@ class _ExportOptionsSheetState extends State<_ExportOptionsSheet> {
     );
   }
 
-  void _toggle(ExportPart part) {
-    setState(() => _options = _options.toggle(part));
-  }
+  void _toggle(ExportPart part) => _setOptions(_options.toggle(part));
 }
 
 class _PresetChip extends StatelessWidget {

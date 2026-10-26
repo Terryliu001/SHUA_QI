@@ -769,6 +769,46 @@ class _RegionPainter extends CustomPainter {
       // 理由：手柄是编辑器的语言，而这里是"读卷子"的场景——四个方块会盖住题面、
       // 也和卷面上的圈号/句号混淆。选中这件事，一条更粗更实的圆角边已经说清楚了。
     }
+    _drawOverlaps(canvas, size);
+  }
+
+  /// 框重叠提示（T8 边界用例）：同页两个题目框相交时，在交集画斜纹。
+  ///
+  /// 只提示、不阻止：重叠有时是跨页题/嵌套大题的合理形态；但用户得看见，
+  /// 否则切题/判题会悄悄串题。
+  void _drawOverlaps(Canvas canvas, Size size) {
+    final List<Rect> rects = <Rect>[
+      for (final RegionMark mark in marks)
+        if (!mark.isAnswer && mark.level > 1)
+          Rect.fromLTWH(
+            mark.rect.left * scale,
+            mark.rect.top * scale,
+            mark.rect.width * scale,
+            mark.rect.height * scale,
+          ).intersect(Offset.zero & size),
+    ];
+    final Paint hatch = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2
+      ..color = ShqPalette.unclear.withValues(alpha: 0.62);
+    for (int i = 0; i < rects.length; i += 1) {
+      for (int j = i + 1; j < rects.length; j += 1) {
+        final Rect overlap = rects[i].intersect(rects[j]);
+        if (overlap.width < 4 || overlap.height < 4) {
+          continue;
+        }
+        canvas.save();
+        canvas.clipRect(overlap);
+        for (double d = -overlap.height; d < overlap.width; d += 9) {
+          canvas.drawLine(
+            Offset(overlap.left + d, overlap.top),
+            Offset(overlap.left + d + overlap.height, overlap.bottom),
+            hatch,
+          );
+        }
+        canvas.restore();
+      }
+    }
   }
 
   Color _colorOf(RegionMark mark) {

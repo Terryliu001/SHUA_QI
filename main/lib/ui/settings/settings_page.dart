@@ -20,6 +20,7 @@ import 'package:shuaqi/ui/settings/ai_usage_sheet.dart';
 import 'package:shuaqi/ui/settings/backup_actions.dart';
 import 'package:shuaqi/ui/settings/cache_sheet.dart';
 import 'package:shuaqi/ui/settings/feedback_page.dart';
+import 'package:shuaqi/ui/settings/guide_page.dart';
 import 'package:shuaqi/ui/settings/settings_subpage.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 import 'package:shuaqi/ui/widgets/pressable.dart';
@@ -136,6 +137,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Widget _subBody(SettingsSubPage sub) {
     switch (sub) {
+      case SettingsSubPage.guide:
+        return GuidePage(onClose: () => setState(() => _sub = null));
       case SettingsSubPage.releaseNotes:
         return ReleaseNotesPage(onClose: () => setState(() => _sub = null));
       case SettingsSubPage.userNotice:
@@ -1085,6 +1088,12 @@ class _AboutEntries extends StatelessWidget {
     entries =
         <({SettingsSubPage page, IconData icon, String title, String hint})>[
           (
+            page: SettingsSubPage.guide,
+            icon: Icons.explore_outlined,
+            title: '使用指南',
+            hint: '从导入到导出，一页看完',
+          ),
+          (
             page: SettingsSubPage.releaseNotes,
             icon: Icons.new_releases_outlined,
             title: '版本说明',
@@ -1094,7 +1103,7 @@ class _AboutEntries extends StatelessWidget {
             page: SettingsSubPage.userNotice,
             icon: Icons.menu_book_outlined,
             title: '用户须知',
-            hint: '权限与数据说明',
+            hint: '权限、数据与 API 调度',
           ),
           (
             page: SettingsSubPage.feedback,
@@ -1146,45 +1155,27 @@ class _AboutEntries extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: ShqSpace.md),
-          LayoutBuilder(
-            builder: (BuildContext context, BoxConstraints constraints) {
-              final bool wide = constraints.maxWidth >= 420;
-              final List<Widget> tiles = <Widget>[
-                for (final entry in entries)
-                  _AboutTile(
-                    icon: entry.icon,
-                    title: entry.title,
-                    hint: entry.hint,
-                    onTap: () => onOpen(entry.page),
+          const SizedBox(height: ShqSpace.sm),
+          // 2026-10-26 收尾：四个入口统一成**条形行**（用户口径），
+          // 比三栏卡片更好扫、也和设置页其它行同一套语言。
+          Column(
+            children: <Widget>[
+              for (int i = 0; i < entries.length; i += 1) ...<Widget>[
+                if (i > 0)
+                  Divider(
+                    height: 1,
+                    thickness: 1,
+                    indent: 48,
+                    color: scheme.outlineVariant,
                   ),
-              ];
-              if (wide) {
-                // IntrinsicHeight：Column 里的 Row 高度是**无界**的，
-                // 直接 `CrossAxisAlignment.stretch` 会让整块渲染失败
-                // （2026-10-26 真机才发现：三个入口整块消失）。
-                // IntrinsicHeight 先把高度定下来，stretch 才有意义。
-                return IntrinsicHeight(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: <Widget>[
-                      for (int i = 0; i < tiles.length; i += 1) ...<Widget>[
-                        if (i > 0) const SizedBox(width: ShqSpace.sm),
-                        Expanded(child: tiles[i]),
-                      ],
-                    ],
-                  ),
-                );
-              }
-              return Column(
-                children: <Widget>[
-                  for (int i = 0; i < tiles.length; i += 1) ...<Widget>[
-                    if (i > 0) const SizedBox(height: ShqSpace.sm),
-                    tiles[i],
-                  ],
-                ],
-              );
-            },
+                _AboutRow(
+                  icon: entries[i].icon,
+                  title: entries[i].title,
+                  hint: entries[i].hint,
+                  onTap: () => onOpen(entries[i].page),
+                ),
+              ],
+            ],
           ),
           const SizedBox(height: ShqSpace.md),
           Row(
@@ -1227,8 +1218,8 @@ class _AboutEntries extends StatelessWidget {
   }
 }
 
-class _AboutTile extends StatelessWidget {
-  const _AboutTile({
+class _AboutRow extends StatelessWidget {
+  const _AboutRow({
     required this.icon,
     required this.title,
     required this.hint,
@@ -1246,38 +1237,40 @@ class _AboutTile extends StatelessWidget {
     final ColorScheme scheme = theme.colorScheme;
     return InkWell(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(ShqRadius.md),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: ShqSpace.md,
-          vertical: ShqSpace.md,
-        ),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(ShqRadius.md),
-          border: Border.all(color: scheme.outlineVariant),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.center,
+      borderRadius: BorderRadius.circular(ShqRadius.sm),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: ShqSpace.sm),
+        child: Row(
           children: <Widget>[
-            Icon(icon, size: 20, color: scheme.primary),
-            const SizedBox(height: ShqSpace.sm),
-            Text(
-              title,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
+            SoftIcon(icon: icon, size: 36, iconSize: 18),
+            const SizedBox(width: ShqSpace.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Text(
+                    title,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    hint,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              hint,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: scheme.onSurfaceVariant,
-                height: 1.4,
-              ),
+            Icon(
+              Icons.chevron_right,
+              size: 18,
+              color: scheme.outline,
             ),
           ],
         ),

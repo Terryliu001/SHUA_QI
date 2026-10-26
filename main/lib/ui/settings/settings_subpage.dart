@@ -11,6 +11,7 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 /// 代价：不参与路由栈。系统返回键由设置页的 `PopScope` 拦一次
 /// （有二级页时先回设置，而不是退出应用）。
 enum SettingsSubPage {
+  guide('使用指南'),
   releaseNotes('版本说明'),
   userNotice('用户须知'),
   feedback('用户反馈');

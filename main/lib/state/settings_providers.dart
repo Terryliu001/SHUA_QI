@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/app_info.dart';
 import 'package:shuaqi/app/backup/backup_service.dart';
+import 'package:shuaqi/app/feedback/http_feedback_gateway.dart';
 import 'package:shuaqi/app/feedback/local_feedback_gateway.dart';
 import 'package:shuaqi/app/storage/cache_service.dart';
 import 'package:shuaqi/domain/feedback/feedback.dart';
@@ -29,10 +30,16 @@ final Provider<BackupService> backupServiceProvider = Provider<BackupService>((
   );
 });
 
-/// 反馈通道。**当前实现是本机暂存**（`LocalFeedbackGateway`）：
-/// 界面、校验、图片选择全是真的，只是"发送"这一步还没接通后端。
-/// 接通后只换这里的实现，界面与表单模型都不用动。
+/// 反馈通道：配了 `FEEDBACK_ENDPOINT` 走远端；否则本机暂存并明说"未接通"。
+/// 远端失败时 [HttpFeedbackGateway] 会落本机草稿，不假装成功。
 final Provider<FeedbackGateway> feedbackGatewayProvider =
     Provider<FeedbackGateway>((Ref ref) {
-      return LocalFeedbackGateway(vault: ref.watch(vaultProvider));
+      final String endpoint = kFeedbackEndpoint.trim();
+      if (endpoint.isEmpty) {
+        return LocalFeedbackGateway(vault: ref.watch(vaultProvider));
+      }
+      return HttpFeedbackGateway(
+        endpoint: endpoint,
+        vault: ref.watch(vaultProvider),
+      );
     });

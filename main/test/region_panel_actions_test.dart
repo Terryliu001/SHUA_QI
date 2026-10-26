@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shuaqi/domain/model/question.dart';
 import 'package:shuaqi/domain/model/region_set.dart';
+import 'package:shuaqi/domain/region/answer.dart';
 import 'package:shuaqi/domain/region/region_rect.dart';
 import 'package:shuaqi/ui/panel/region_panel.dart';
 import 'package:shuaqi/ui/region/region_action.dart';
@@ -53,11 +54,12 @@ void main() {
     bool saving = false,
     void Function(int, int)? onReorder,
     Widget? preview,
+    AnswerSet answers = AnswerSet.empty,
   }) async {
-    final RegionSet set = RegionSet(<QuestionBundle>[
-      bundle('q1', '1.', 100),
-      bundle('q2', '2.', 260),
-    ]);
+    final RegionSet set = RegionSet(
+      <QuestionBundle>[bundle('q1', '1.', 100), bundle('q2', '2.', 260)],
+      answers: answers,
+    );
     tester.view.physicalSize = Size(width * 3, 900 * 3);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.resetPhysicalSize);
@@ -69,6 +71,7 @@ void main() {
           body: RegionPanel(
             width: width,
             set: set,
+            answers: answers,
             selectedKey: selected ? set.questions.first.anchorKey : null,
             editedCount: 0,
             canUndo: false,
@@ -144,8 +147,13 @@ void main() {
 
   testWidgets('选中之后才出现收藏 / 对答案 / 问 AI，回调带当前题', (WidgetTester tester) async {
     final List<String> calls = <String>[];
+    const AnswerNote note = AnswerNote(label: '1.', text: 'A', ordinal: 100);
     await pumpPanel(
       tester,
+      answers: const AnswerSet(
+        <String, AnswerNote>{'1.': note},
+        byOrdinal: <int, AnswerNote>{100: note},
+      ),
       onFavorite: (QuestionBundle b) => calls.add('fav:${b.question.id}'),
       onCheck: (QuestionBundle b) => calls.add('check:${b.question.id}'),
       onAsk: (QuestionBundle b) => calls.add('ai:${b.question.id}'),
@@ -157,6 +165,18 @@ void main() {
     await tester.tap(find.text('对答案'));
     await tester.tap(find.text('问 AI'));
     expect(calls, <String>['fav:q1', 'check:q1', 'ai:q1']);
+    expect(tester.takeException(), isNull);
+  });
+
+  // 2026-10-26 收尾：对答案必须有参考答案才可用，不能点了只弹一句提示。
+  testWidgets('没有参考答案时「对答案」不可点', (WidgetTester tester) async {
+    int checks = 0;
+    await pumpPanel(
+      tester,
+      onCheck: (_) => checks++,
+    );
+    await tester.tap(find.text('对答案'));
+    expect(checks, 0);
     expect(tester.takeException(), isNull);
   });
 

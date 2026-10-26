@@ -81,6 +81,31 @@ class ExportOptions {
     return parts.isEmpty ? '什么也没选' : parts.join(' + ');
   }
 
+  /// 文件名里的“内容”一段（用户 2026-10-26：导出名要能看出导的是什么）。
+  ///
+  /// 与 [summary] 分开：summary 是给人看的「原题 + 笔迹」，
+  /// 文件名用更短、更常见的四种叫法；非标准组合才退回 `+` 拼接。
+  String get fileTag {
+    if (original && effectiveInk && answer) {
+      return '完整存档';
+    }
+    if (original && !effectiveInk && !answer) {
+      return '纯试卷';
+    }
+    if (original && effectiveInk && !answer) {
+      return '试卷+笔迹';
+    }
+    if (!original && answer) {
+      return '答题卡';
+    }
+    final List<String> parts = <String>[
+      if (original) '原题',
+      if (effectiveInk) '笔迹',
+      if (answer) '答题卡',
+    ];
+    return parts.isEmpty ? '未选择' : parts.join('+');
+  }
+
   ExportOptions copyWith({
     bool? original,
     bool? ink,
@@ -143,19 +168,21 @@ class ExportOptions {
       answer == other.answer;
 }
 
-/// 导出文件名：`SHUAQI_卷名_20261025-2215.pdf`。
+/// 导出文件名：`卷名_内容_20261025-2215.pdf`。
+///
+/// 2026-10-26 用户口径：文件名要能看出导的是什么组合，并且**允许用户改**。
+/// - 默认：`卷名_内容_时间戳.pdf`（内容见 [ExportOptions.fileTag]）；
+/// - [customName] 非空：按用户输入（自动补 `.pdf`，去非法字符）；
+/// - 标题过长时截断到 32 字，给内容与时间戳留位置。
 ///
 /// 去掉文件系统不接受的字符（`/ \ : * ? " < > |`）与控制字符；
-/// 标题过长时截断到 40 字，避免某些文件管理器显示成 `…`。
-String exportFileName(String title, DateTime at) {
-  String safe = title.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), ' ');
-  safe = safe.replaceAll(RegExp(r'\s+'), ' ').trim();
-  if (safe.isEmpty) {
-    safe = '试卷';
-  }
-  if (safe.length > 40) {
-    safe = safe.substring(0, 40).trim();
-  }
+/// 时间戳固定 `yyyyMMdd-HHmm`，与本项目其它导出命名一致。
+String exportFileName(
+  String title,
+  DateTime at, {
+  ExportOptions options = const ExportOptions(),
+  String? customName,
+}) {
   final String stamp =
       '${at.year}'
       '${at.month.toString().padLeft(2, '0')}'
@@ -163,5 +190,49 @@ String exportFileName(String title, DateTime at) {
       '-'
       '${at.hour.toString().padLeft(2, '0')}'
       '${at.minute.toString().padLeft(2, '0')}';
-  return 'SHUAQI_${safe}_$stamp.pdf';
+
+  final String typed = _safeFilePart(customName ?? '');
+  if (typed.isNotEmpty) {
+    final String withoutExt = typed.toLowerCase().endsWith('.pdf')
+        ? typed.substring(0, typed.length - 4).trim()
+        : typed;
+    final String name = withoutExt.isEmpty
+        ? _safeFilePart(title)
+        : withoutExt;
+    return '${_limit(name, 80)}.pdf';
+  }
+
+  String safeTitle = _safeFilePart(title);
+  if (safeTitle.isEmpty) {
+    safeTitle = '试卷';
+  }
+  safeTitle = _limit(safeTitle, 32);
+  final String tag = _safeFilePart(options.fileTag);
+  return '${safeTitle}_${tag}_$stamp.pdf';
+}
+
+String _safeFilePart(String raw) {
+  String safe = raw.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1F]'), ' ');
+  safe = safe.replaceAll(RegExp(r'\s+'), ' ').trim();
+  return safe;
+}
+
+String _limit(String text, int max) {
+  if (text.length <= max) {
+    return text;
+  }
+  return text.substring(0, max).trim();
+}
+
+/// 导出面板返回给书架的一次请求：选项 + 可选的自定义文件名。
+///
+/// 为什么单独一个对象：文件名不是 [ExportOptions] 的一部分（它不该影响
+/// “导什么”的组合规则，也不该进预设高亮）；但 UI 必须把两者一起带回。
+class ExportRequest {
+  const ExportRequest({required this.options, this.fileName});
+
+  final ExportOptions options;
+
+  /// null / 空 = 用默认命名。
+  final String? fileName;
 }

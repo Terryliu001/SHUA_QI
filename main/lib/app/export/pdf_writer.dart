@@ -46,19 +46,29 @@ class SimplePdfWriter {
   /// 写进 `/Info /Title`（中文用 UTF-16BE 十六进制串，避免 PDFDocEncoding 丢字）。
   final String title;
 
-  final List<PdfImagePage> _pages = <PdfImagePage>[];
+  final List<_EncodedPage> _pages = <_EncodedPage>[];
 
   int get pageCount => _pages.length;
 
   bool get isEmpty => _pages.isEmpty;
 
+  /// 加入一页。**当场压缩并释放整页 RGB**。
+  ///
+  /// 2026-10-26 收尾：20 页 2400px 的原始 RGB 约 500MB；如果等 build 时
+  /// 才逐页编码，内存会爆。这里把"编码"提前到 addPage，之后只留压缩流。
   void addPage(PdfImagePage page) {
     if (page.rgb.length != page.width * page.height * 3) {
       throw ArgumentError(
         'RGB 长度不匹配：${page.rgb.length} != ${page.width * page.height * 3}',
       );
     }
-    _pages.add(page);
+    _pages.add(
+      _EncodedPage(
+        body: _imageStream(page),
+        widthPt: page.widthPt,
+        heightPt: page.heightPt,
+      ),
+    );
   }
 
   /// 生成完整的 PDF 字节。调用方负责把它落盘/交给系统。
@@ -88,7 +98,7 @@ class SimplePdfWriter {
     }
 
     for (int i = 0; i < count; i += 1) {
-      final PdfImagePage page = _pages[i];
+      final _EncodedPage page = _pages[i];
       final int pageObj = firstPageObj + i * 3;
       final String w = _num(page.widthPt);
       final String h = _num(page.heightPt);
@@ -100,7 +110,7 @@ class SimplePdfWriter {
       objects[pageObj + 1] = _stream(
         _ascii('q\n$w 0 0 $h 0 0 cm\n/Im0 Do\nQ\n'),
       );
-      objects[pageObj + 2] = _imageStream(page);
+      objects[pageObj + 2] = page.body;
     }
 
     final BytesBuilder out = BytesBuilder(copy: false);
@@ -180,9 +190,21 @@ class SimplePdfWriter {
   }
 }
 
+/// 已压缩的一页：只保留 PDF 图片对象体（含字典与 stream），不再持有 RGB。
+class _EncodedPage {
+  const _EncodedPage({
+    required this.body,
+    required this.widthPt,
+    required this.heightPt,
+  });
+
+  final Uint8List body;
+  final double widthPt;
+  final double heightPt;
+}
+
 /// 把 `ui.Image` 的 `rawRgba` 去掉 alpha（我们的合成页永不透明）。
-Uint8List rgbFromRgba(Uint8List rgba, int width, int height) {
-  final int pixels = width * height;
+Uint8List rgbFromRgba(Uint8List rgba, int width, int height) {  final int pixels = width * height;
   if (rgba.length < pixels * 4) {
     throw ArgumentError('RGBA 长度不足：${rgba.length} < ${pixels * 4}');
   }

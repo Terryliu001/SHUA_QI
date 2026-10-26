@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -10,14 +11,10 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 /// 白名单里没有词云库；而"按权重排字 + 不重叠"本质上是几十行几何，
 /// 引一个包反而多一份无法审计的布局黑箱（还常带一次性随机种子，每次刷新都跳）。
 ///
-/// ## 三个确定性约束
-/// 1. **排序确定**：`buildCloudWords` 已按权重/题数/名字排好，同数据两次绘制完全一样；
-/// 2. **布局确定**：阿基米德螺旋 + 固定角度步长，没有 `Random`；
-/// 3. **放不下就缩小/丢弃**：先缩 15% 再试，仍不行就跳过——绝不叠字。
-///
-/// 只画不响应点击：词云是"结构概览"，点一个词跳转到哪里都会是猜的
-/// （科目对应书架文件夹，题型没有对应页面）。宁可不可点，也不做假按钮。
-class RecordsWordCloud extends StatelessWidget {
+/// ## 交互（2026-10-26 用户第 7 条）
+/// 词可以在框内拖动：拖动时放大、浮起；松手用一条**弹性回位**动画回到原位。
+/// 布局本身是确定性的（同数据同图），拖动只是"临时位移"，不会改变词的位置。
+class RecordsWordCloud extends StatefulWidget {
   const RecordsWordCloud({
     super.key,
     required this.words,
@@ -30,15 +27,127 @@ class RecordsWordCloud extends StatelessWidget {
   final String emptyLabel;
 
   @override
+  State<RecordsWordCloud> createState() => _RecordsWordCloudState();
+}
+
+class _RecordsWordCloudState extends State<RecordsWordCloud>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spring = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 620),
+  );
+
+  /// 当前被拖动的词；null = 没有。
+  int? _active;
+
+  /// 正在回位的词与起点。
+  int? _settling;
+  Offset _settleFrom = Offset.zero;
+  Offset _dragOffset = Offset.zero;
+
+  /// 每个词的临时位移（拖动中）；回位动画只影响 [_settling]。
+  final Map<int, Offset> _offsets = <int, Offset>{};
+
+  @override
+  void didUpdateWidget(covariant RecordsWordCloud oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.words != widget.words) {
+      _offsets.clear();
+      _active = null;
+      _settling = null;
+      _spring.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _spring.dispose();
+    super.dispose();
+  }
+
+  void _start(int index) {
+    _spring.stop();
+    setState(() {
+      _active = index;
+      _settling = null;
+      _dragOffset = _offsets[index] ?? Offset.zero;
+    });
+  }
+
+  void _update(int index, Offset delta, Size size, _PlacedWord word) {
+    final Offset current = _offsets[index] ?? Offset.zero;
+    final double width = word.painter.width;
+    final double height = word.painter.height;
+    // 允许在框内自由拖，但别拖出边界（留 4dp）。
+    final double minX = 4 - word.offset.dx;
+    final double maxX = size.width - width - 4 - word.offset.dx;
+    final double minY = 4 - word.offset.dy;
+    final double maxY = size.height - height - 4 - word.offset.dy;
+    final Offset next = Offset(
+      (current.dx + delta.dx).clamp(
+        math.min(minX, maxX),
+        math.max(minX, maxX),
+      ),
+      (current.dy + delta.dy).clamp(
+        math.min(minY, maxY),
+        math.max(minY, maxY),
+      ),
+    );
+    setState(() {
+      _offsets[index] = next;
+      _dragOffset = next;
+    });
+  }
+
+  void _release(int index) {
+    final Offset from = _offsets[index] ?? Offset.zero;
+    if (from == Offset.zero) {
+      setState(() {
+        _active = null;
+        _offsets.remove(index);
+      });
+      return;
+    }
+    setState(() {
+      _active = null;
+      _settling = index;
+      _settleFrom = from;
+    });
+    unawaited(
+      _spring.forward(from: 0).whenComplete(() {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _settling = null;
+          _settleFrom = Offset.zero;
+          _offsets.remove(index);
+        });
+      }),
+    );
+  }
+
+  Offset _offsetFor(int index) {
+    if (_active == index) {
+      return _dragOffset;
+    }
+    if (_settling == index) {
+      final double t = Curves.elasticOut.transform(_spring.value);
+      return _settleFrom * (1 - t);
+    }
+    return _offsets[index] ?? Offset.zero;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    if (words.isEmpty) {
+    if (widget.words.isEmpty) {
       return SizedBox(
-        height: height,
+        height: widget.height,
         child: Center(
           child: Text(
-            emptyLabel,
+            widget.emptyLabel,
             style: theme.textTheme.bodySmall?.copyWith(
               color: scheme.onSurfaceVariant,
             ),
@@ -47,7 +156,7 @@ class RecordsWordCloud extends StatelessWidget {
       );
     }
     return SizedBox(
-      height: height,
+      height: widget.height,
       width: double.infinity,
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
@@ -57,12 +166,55 @@ class RecordsWordCloud extends StatelessWidget {
           );
           final _CloudLayout layout = _layoutFor(
             size: size,
-            words: words,
+            words: widget.words,
             low: scheme.onSurfaceVariant,
             high: scheme.primary,
             textScaler: MediaQuery.textScalerOf(context),
           );
-          return CustomPaint(painter: _CloudPainter(layout));
+          return AnimatedBuilder(
+            animation: _spring,
+            builder: (BuildContext context, Widget? child) {
+              final List<Offset> offsets = <Offset>[
+                for (int i = 0; i < layout.words.length; i += 1)
+                  _offsetFor(i),
+              ];
+              return Stack(
+                children: <Widget>[
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        painter: _CloudPainter(
+                          layout: layout,
+                          offsets: offsets,
+                          active: _active,
+                          activeScale: _active == null ? 1 : 1.08,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (int i = 0; i < layout.words.length; i += 1)
+                    Positioned(
+                      left: layout.words[i].offset.dx + offsets[i].dx,
+                      top: layout.words[i].offset.dy + offsets[i].dy,
+                      width: layout.words[i].painter.width,
+                      height: layout.words[i].painter.height,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onPanStart: (_) => _start(i),
+                        onPanUpdate: (DragUpdateDetails details) => _update(
+                          i,
+                          details.delta,
+                          size,
+                          layout.words[i],
+                        ),
+                        onPanEnd: (_) => _release(i),
+                        onPanCancel: () => _release(i),
+                      ),
+                    ),
+                ],
+              );
+            },
+          );
         },
       ),
     );
@@ -218,17 +370,70 @@ Offset? _findSpot({
 }
 
 class _CloudPainter extends CustomPainter {
-  const _CloudPainter(this.layout);
+  const _CloudPainter({
+    required this.layout,
+    required this.offsets,
+    required this.active,
+    required this.activeScale,
+  });
 
   final _CloudLayout layout;
+  final List<Offset> offsets;
+  final int? active;
+  final double activeScale;
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final _PlacedWord word in layout.words) {
-      word.painter.paint(canvas, word.offset);
+    for (int i = 0; i < layout.words.length; i += 1) {
+      if (i == active) {
+        continue; // 被拖的词最后画，压在最上面。
+      }
+      _paintWord(canvas, i, scale: 1);
+    }
+    final int? current = active;
+    if (current != null && current < layout.words.length) {
+      _paintWord(canvas, current, scale: activeScale);
     }
   }
 
+  void _paintWord(Canvas canvas, int index, {required double scale}) {
+    final _PlacedWord word = layout.words[index];
+    final Offset offset = offsets[index];
+    final Offset at = word.offset + offset;
+    if (scale == 1) {
+      word.painter.paint(canvas, at);
+      return;
+    }
+    final Offset center = at + Offset(word.painter.width / 2, word.painter.height / 2);
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.scale(scale);
+    canvas.translate(-center.dx, -center.dy);
+    // 轻微投影，让"拿起来"的感觉更明确。
+    word.painter.paint(
+      canvas,
+      at + const Offset(0, 2),
+    );
+    word.painter.paint(canvas, at);
+    canvas.restore();
+  }
+
   @override
-  bool shouldRepaint(_CloudPainter old) => !identical(old.layout, layout);
+  bool shouldRepaint(_CloudPainter old) =>
+      !identical(old.layout, layout) ||
+      old.active != active ||
+      old.activeScale != activeScale ||
+      !_sameOffsets(old.offsets, offsets);
+
+  static bool _sameOffsets(List<Offset> a, List<Offset> b) {
+    if (a.length != b.length) {
+      return false;
+    }
+    for (int i = 0; i < a.length; i += 1) {
+      if (a[i] != b[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
 }

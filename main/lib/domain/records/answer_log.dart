@@ -119,6 +119,8 @@ class AnswerLogEntry {
     this.hits = 1,
     this.origin = RecordOrigin.workbook,
     this.originTitle = '',
+    this.attemptId = '',
+    this.favoriteId = '',
   });
 
   factory AnswerLogEntry.fromRow(Map<String, Object?> row) => AnswerLogEntry(
@@ -136,6 +138,8 @@ class AnswerLogEntry {
     hits: (row['hits'] as num?)?.toInt() ?? 1,
     origin: RecordOrigin.decode(row['origin'] as String?),
     originTitle: (row['origin_title'] as String?) ?? '',
+    attemptId: (row['attempt_id'] as String?) ?? '',
+    favoriteId: (row['favorite_id'] as String?) ?? '',
   );
 
   /// 自增主键；插入前为 null。
@@ -178,6 +182,14 @@ class AnswerLogEntry {
   /// 组卷名（只有 [RecordOrigin.set] 有值）。
   final String originTitle;
 
+  /// 这一次重刷的 attempt（v9）；原卷行为空串。
+  ///
+  /// 同一次组卷连刷的所有题共用一个 attemptId，时间线据此把"这一次"聚成一张卡。
+  final String attemptId;
+
+  /// 这条记录来自哪道收藏（仅重刷行有值，v9）；时间线用它打开某一次 attempt。
+  final String favoriteId;
+
   /// 这道题被记过的时间（本地）。
   DateTime get localTime => DateTime.fromMillisecondsSinceEpoch(at);
 
@@ -193,6 +205,8 @@ class AnswerLogEntry {
     int? hits,
     RecordOrigin? origin,
     String? originTitle,
+    String? attemptId,
+    String? favoriteId,
   }) => AnswerLogEntry(
     id: id,
     at: at ?? this.at,
@@ -208,6 +222,8 @@ class AnswerLogEntry {
     hits: hits ?? this.hits,
     origin: origin ?? this.origin,
     originTitle: originTitle ?? this.originTitle,
+    attemptId: attemptId ?? this.attemptId,
+    favoriteId: favoriteId ?? this.favoriteId,
   );
 
   /// 插入用（不含自增主键）。
@@ -225,6 +241,8 @@ class AnswerLogEntry {
     'hits': hits,
     'origin': origin.name,
     'origin_title': originTitle,
+    'attempt_id': attemptId,
+    'favorite_id': favoriteId,
   };
 
   @override
@@ -257,6 +275,7 @@ String answerRecordKeyOf(
   String questionId,
   int atMillis, {
   RecordOrigin origin = RecordOrigin.workbook,
+  String attemptId = '',
 }) => '$questionId|${RecordTime.dayKey(
   DateTime.fromMillisecondsSinceEpoch(atMillis),
-)}|${origin.name}';
+)}|${origin.name}|$attemptId';

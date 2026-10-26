@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/domain/ai/chat.dart';
 import 'package:shuaqi/domain/ai/llm_config.dart';
 import 'package:shuaqi/state/ai_providers.dart';
+import 'package:shuaqi/ui/settings/ai_config_guide.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 打开 AI 配置弹层。返回 true = 保存过（调用方可以刷新配置）。
@@ -182,6 +183,15 @@ class _AiSettingsSheetState extends ConsumerState<AiSettingsSheet> {
               Expanded(
                 child: Text('AI 配置', style: theme.textTheme.titleMedium),
               ),
+              IconButton(
+                tooltip: '配置指导',
+                onPressed: () => showAiConfigGuide(
+                  context,
+                  onApplyDeepSeek: (String baseUrl, String model) =>
+                      _applyPreset(baseUrl, model),
+                ),
+                icon: const Icon(Icons.info_outline, size: 20),
+              ),
               if (widget.initial.isConfigured)
                 TextButton(
                   onPressed: _saving ? null : _clear,
@@ -214,7 +224,7 @@ class _AiSettingsSheetState extends ConsumerState<AiSettingsSheet> {
               _PresetChip(
                 label: 'DeepSeek',
                 onTap: () => _applyPreset(
-                  'https://api.deepseek.com/v1',
+                  'https://api.deepseek.com',
                   'deepseek-flash',
                 ),
               ),
@@ -262,7 +272,7 @@ class _AiSettingsSheetState extends ConsumerState<AiSettingsSheet> {
             enableSuggestions: false,
             decoration: InputDecoration(
               labelText: '端点',
-              hintText: 'https://api.deepseek.com/v1',
+              hintText: 'https://api.deepseek.com',
               helperText: '填到 /v1 即可；会自动补 /chat/completions。',
               border: const OutlineInputBorder(),
               isDense: true,
@@ -315,7 +325,7 @@ class _AiSettingsSheetState extends ConsumerState<AiSettingsSheet> {
             decoration: const InputDecoration(
               labelText: '模型名',
               hintText: 'deepseek-flash / qwen-vl-max',
-              helperText: 'DeepSeek 深度思考用 deepseek-flash / deepseek-v4-pro',
+              helperText: 'deepseek-flash 支持看图；deepseek-v4-pro 不支持图像',
               helperMaxLines: 2,
               border: OutlineInputBorder(),
               isDense: true,

@@ -399,9 +399,11 @@ class TimelineWorkbook {
     required this.sourceDeleted,
     this.origin = RecordOrigin.workbook,
     this.originTitle = '',
+    this.attemptId = '',
   });
 
-  /// 分组键（内部用）：原卷是卷 id，组卷是 `set:<名>`，单题重刷是 `redo`。
+  /// 分组键（内部用）：原卷是卷 id，组卷是 `set:<名>`，单题重刷是 `redo`；
+  /// v9 起带 attempt 的组用 `a:<attemptId>`，同一天多次重刷各一张卡。
   final String workbookId;
 
   /// 显示名（活库优先，卷删了用快照）。
@@ -418,8 +420,13 @@ class TimelineWorkbook {
   /// 组卷名（只有 [RecordOrigin.set] 有值）。
   final String originTitle;
 
+  /// 这一次重刷的 attempt（v9）；空 = 原卷 / 旧版重刷。
+  final String attemptId;
+
   /// 是不是"又刷了一遍"的组（时间线里默认折叠）。
   bool get isRedo => origin.isRedo;
+
+  bool get hasAttempt => attemptId.isNotEmpty;
 
   int get questions => entries.length;
 
@@ -506,6 +513,7 @@ List<TimelineDay> groupTimeline(
               !existingWorkbookIds.contains(first.workbookId),
           origin: first.origin,
           originTitle: first.originTitle,
+          attemptId: first.attemptId,
         ),
       );
     }
@@ -523,10 +531,15 @@ List<TimelineDay> groupTimeline(
 /// 一条记录属于哪一组。
 ///
 /// - 原卷：按卷 id 分（回到第一卷就还是那张卷卡）；
-/// - 组卷：按**组卷名**分（同一组卷的多次重刷聚成一张卡，卡上写组卷名）；
-/// - 单题重刷：当天所有单题重刷聚成一张「重刷」卡。
-String _groupKeyOf(AnswerLogEntry entry) => switch (entry.origin) {
-  RecordOrigin.set => 'set:${entry.originTitle}',
-  RecordOrigin.redo => 'redo',
-  RecordOrigin.workbook => 'w:${entry.workbookId}',
-};
+/// - 组卷 / 单题重刷：v9 起优先按 `attemptId` 分，**同一天刷两次是两张卡**；
+///   旧数据 attemptId 为空时退回原来的「组卷名 / 重刷」聚合。
+String _groupKeyOf(AnswerLogEntry entry) {
+  if (entry.attemptId.isNotEmpty) {
+    return 'a:${entry.attemptId}';
+  }
+  return switch (entry.origin) {
+    RecordOrigin.set => 'set:${entry.originTitle}',
+    RecordOrigin.redo => 'redo',
+    RecordOrigin.workbook => 'w:${entry.workbookId}',
+  };
+}

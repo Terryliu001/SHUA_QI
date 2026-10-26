@@ -62,12 +62,14 @@ final Provider<InkWriter> Function(String) inkWriterProvider =
 /// 收藏二刷走 FavoriteRedoInkStore。
 final Provider<InkStore> Function(InkPageKey) inkStoreForKeyProvider =
     Provider.family<InkStore, InkPageKey>((Ref ref, InkPageKey key) {
-      final String? redoFavoriteId = parseFavoriteRedoSession(key.sessionId);
-      if (redoFavoriteId != null) {
+      final ({String favoriteId, String? attemptId})? redo =
+          parseFavoriteRedoSessionRef(key.sessionId);
+      if (redo != null) {
         final AppDependencies redoDeps = ref.watch(appDependenciesProvider);
         return FavoriteRedoInkStore(
           vault: redoDeps.vault,
-          favoriteId: redoFavoriteId,
+          favoriteId: redo.favoriteId,
+          attemptId: redo.attemptId,
         );
       }
       final ({String sessionId, String questionId})? answer = parseAnswerInkSession(
@@ -467,12 +469,15 @@ class InkEditController extends Notifier<InkEditState> {
       );
       return;
     }
-    if (state.doc.strokes.isEmpty || _key.workbookId.isEmpty) {
+    if (state.doc.strokes.isEmpty) {
       return;
     }
-    // 收藏重刷：session 只带收藏 id，卷/题要回表查一次（一题一天只查一次）。
-    final String? favoriteId = parseFavoriteRedoSession(_key.sessionId);
-    if (favoriteId == null) {
+    // 收藏重刷：session 带收藏 id（新版还带 attemptId），卷/题要回表查一次。
+    // 注意：重刷画布没有 workbookId，所以不能先按 workbookId 空值提前 return
+    //（2026-10-26 真机发现：重刷笔迹一直没进记录，时间线看不到）。
+    final ({String favoriteId, String? attemptId})? redo =
+        parseFavoriteRedoSessionRef(_key.sessionId);
+    if (redo == null) {
       return;
     }
     // v8：重刷的记录带**来源**（组卷 / 单题重刷），同一天可以与原卷的记录并存。
@@ -480,16 +485,19 @@ class InkEditController extends Notifier<InkEditState> {
     final RecordOrigin origin = context != null && context.isSet
         ? RecordOrigin.set
         : RecordOrigin.redo;
+    final String attemptId = context?.attemptId ?? redo.attemptId ?? '';
     final String stamp =
-        'fav:$favoriteId|${RecordTime.dayKey(DateTime.now())}|${origin.name}';
+        'fav:${redo.favoriteId}|${RecordTime.dayKey(DateTime.now())}|'
+        '${origin.name}|$attemptId';
     if (!_recordedQuestionDays.add(stamp)) {
       return;
     }
     unawaited(
       _recordFavoriteRedo(
-        favoriteId,
+        redo.favoriteId,
         origin: origin,
         originTitle: context?.title ?? '',
+        attemptId: attemptId,
       ),
     );
   }
@@ -502,6 +510,7 @@ class InkEditController extends Notifier<InkEditState> {
     String favoriteId, {
     required RecordOrigin origin,
     required String originTitle,
+    String attemptId = '',
   }) async {
     try {
       final List<Map<String, Object?>> rows = await ref
@@ -533,6 +542,8 @@ class InkEditController extends Notifier<InkEditState> {
             workbookTitle: (row['workbook_title'] as String?) ?? '',
             origin: origin,
             originTitle: originTitle,
+            attemptId: attemptId,
+            favoriteId: favoriteId,
           );
     } on Object {
       // 旁路：重刷照常进行。

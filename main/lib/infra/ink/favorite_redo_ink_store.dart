@@ -22,31 +22,49 @@ import 'package:shuaqi/infra/vault/vault.dart';
 /// 换尺寸时按 `scaleInkDoc` 把旧笔迹等比搬过去，不会挤到左上角；
 /// `pageIndex` 就是第几张纸，每张一份 SIF。
 class FavoriteRedoInkStore implements InkStore {
-  FavoriteRedoInkStore({required this.vault, required this.favoriteId})
-    : _papers = FavoriteRedoPaperStore(vault);
+  FavoriteRedoInkStore({
+    required this.vault,
+    required this.favoriteId,
+    this.attemptId,
+  }) : _papers = FavoriteRedoPaperStore(vault);
 
   final Vault vault;
   final String favoriteId;
+
+  /// 这一次重刷的 attempt；null/空 = 旧版共享笔迹（兼容旧调用点）。
+  final String? attemptId;
+
   final FavoriteRedoPaperStore _papers;
 
   AnswerPaper? _paper;
 
   /// 纸张配置（进程内缓存；换纸张后由调用方 invalidate 本 store）。
   Future<AnswerPaper> _paperOf() async {
-    return _paper ??= await _papers.load(favoriteId);
+    return _paper ??= await _papers.load(favoriteId, attemptId: attemptId);
+  }
+
+  String _inkPath(int pageIndex) {
+    final String id = (attemptId ?? '').trim();
+    return id.isEmpty
+        ? VaultPaths.favoriteInkSif(favoriteId, pageIndex)
+        : VaultPaths.favoriteRedoInkSif(favoriteId, id, pageIndex);
+  }
+
+  String _backupPath(int pageIndex) {
+    final String id = (attemptId ?? '').trim();
+    return id.isEmpty
+        ? VaultPaths.favoriteInkSifBackup(favoriteId, pageIndex)
+        : VaultPaths.favoriteRedoInkSifBackup(favoriteId, id, pageIndex);
   }
 
   @override
   Future<InkDoc> load(String sessionId, int pageIndex) async {
-    final String relative = VaultPaths.favoriteInkSif(favoriteId, pageIndex);
+    final String relative = _inkPath(pageIndex);
     final _Read read = await _read(vault.file(relative));
     if (read.doc != null) {
       return _fit(read);
     }
-    final String backup = VaultPaths.favoriteInkSifBackup(
-      favoriteId,
-      pageIndex,
-    );
+    final String backup = _backupPath(pageIndex);
     final _Read fallback = await _read(vault.file(backup));
     if (fallback.doc != null) {
       try {
@@ -62,11 +80,9 @@ class FavoriteRedoInkStore implements InkStore {
   @override
   Future<int> save(String sessionId, int pageIndex, InkDoc doc) async {
     final Uint8List bytes = await _encode(doc);
-    final String relative = VaultPaths.favoriteInkSif(favoriteId, pageIndex);
+    final String relative = _inkPath(pageIndex);
     final File target = vault.file(relative);
-    final File backup = vault.file(
-      VaultPaths.favoriteInkSifBackup(favoriteId, pageIndex),
-    );
+    final File backup = vault.file(_backupPath(pageIndex));
     await target.parent.create(recursive: true);
     if (target.existsSync()) {
       if (backup.existsSync()) {

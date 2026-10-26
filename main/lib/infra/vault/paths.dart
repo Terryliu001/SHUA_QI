@@ -126,6 +126,33 @@ abstract final class VaultPaths {
   static String favoriteRedoPaper(String favoriteId) =>
       '${favoriteDir(favoriteId)}/paper.json';
 
+  /// 重刷 attempt 根目录：一次重刷（单题或组卷 run）一个独立目录。
+  static String favoriteRedoAttemptDir(String favoriteId, String attemptId) =>
+      '${favoriteDir(favoriteId)}/redo/${_safeId(attemptId)}';
+
+  /// attempt 的元数据（时间 / 来源 / 组卷名 / 是否已保存）。
+  static String favoriteRedoMeta(String favoriteId, String attemptId) =>
+      '${favoriteRedoAttemptDir(favoriteId, attemptId)}/meta.json';
+
+  /// attempt 的答题纸配置（每次重刷独立，改一张不影响别次）。
+  static String favoriteRedoPaperOf(String favoriteId, String attemptId) =>
+      '${favoriteRedoAttemptDir(favoriteId, attemptId)}/paper.json';
+
+  /// attempt 的第 [paperIndex] 张笔迹。
+  static String favoriteRedoInkSif(
+    String favoriteId,
+    String attemptId, [
+    int paperIndex = 0,
+  ]) =>
+      '${favoriteRedoAttemptDir(favoriteId, attemptId)}/ink/${paperIndex <= 0 ? 'p0' : 'p$paperIndex'}.sif';
+
+  /// attempt 笔迹的上一版备份。
+  static String favoriteRedoInkSifBackup(
+    String favoriteId,
+    String attemptId, [
+    int paperIndex = 0,
+  ]) => '${favoriteRedoInkSif(favoriteId, attemptId, paperIndex)}.bak';
+
   /// 「问 AI」的对话历史（按题存，用户产物）。**重切题不得覆盖**。
   static String layoutAiChat(String workbookId) =>
       '${layoutDir(workbookId)}/ai_chat.v1.json';

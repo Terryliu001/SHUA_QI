@@ -31,7 +31,7 @@ import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/domain/region/answer.dart';
 import 'package:shuaqi/domain/region/correction.dart';
 import 'package:shuaqi/domain/region/edited_question.dart';
-import 'package:shuaqi/domain/region/grading_rules.dart';
+import 'package:shuaqi/domain/region/grading_policy.dart';
 import 'package:shuaqi/domain/region/math_text.dart';
 import 'package:shuaqi/domain/region/region_rect.dart';
 import 'package:shuaqi/domain/util/ulid.dart';
@@ -58,6 +58,7 @@ import 'package:shuaqi/ui/panel/answer_ink_preview.dart';
 import 'package:shuaqi/ui/panel/answer_sheet_page.dart';
 import 'package:shuaqi/ui/panel/answer_sheet_prep.dart';
 import 'package:shuaqi/ui/panel/answer_status_card.dart';
+import 'package:shuaqi/ui/panel/grade_dot.dart';
 import 'package:shuaqi/ui/panel/panel_resize_handle.dart';
 import 'package:shuaqi/ui/panel/question_thumb.dart';
 import 'package:shuaqi/ui/panel/region_panel.dart';
@@ -227,6 +228,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
 
   /// 多选批量「AI 判」进行中。
   bool _batchAiRunning = false;
+
+  /// 「本地判不了/不可信 → 询问后 AI 后台判」的进度。
+  bool _aiGrading = false;
+  int _aiGradeDone = 0;
+  int _aiGradeTotal = 0;
+  bool _aiGradeStop = false;
 
   /// 「重框」态的目标题（左上角浮窗用）。null = 不在重框态。
   QuestionBundle? _adjustTarget;
@@ -1036,26 +1043,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     return subs.isEmpty ? all : subs;
   }
 
-  /// 判一道题：有答案 + 有识别文本才可能判出对错，其余落 none/pending。
-  AnswerVerdict _judgeOne(QuestionBundle bundle, RegionSet set) {
-    final AnswerNote? note = set.answers.forQuestion(
-      ordinal: bundle.question.ordinal,
-      label: bundle.question.label,
-    );
-    if (note == null) {
-      return AnswerVerdict.none;
-    }
-    final AnswerVerdict? verdict = judgeObjective(
-      answer: _answerEntryOf(bundle).ocrText,
-      reference: note.text,
-    );
-    // null = 本地判不了（主观题/公式）→ 待判，等 AI。
-    return verdict ?? AnswerVerdict.pending;
-  }
-
-  /// 一键改卷：跑一遍全部小题，自动结论覆盖旧的自动结论，**手改的保留**。
+  /// 一键改卷（2026-10-26 收尾口径）：
+  ///
+  /// 1. **只对已有参考答案的题**跑本地规则；没有答案的题跳过，不硬判。
+  /// 2. 本地可信 → 立即落 auto，指示灯变绿/红。
+  /// 3. 本地判不了或不可信 → 先标黄（pending），汇总后弹窗问用户
+  ///    "要不要交给 AI 后台判这 N 道"；不自动扣 token。
+  /// 4. AI 判逐题串行，手改结论永远不被覆盖。
   Future<void> _gradeAll() async {
-    if (_grading) {
+    if (_grading || _aiGrading || _fillingAi || _batchAiRunning) {
       return;
     }
     final GradingController? controller = _grades;
@@ -1064,27 +1060,225 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       return;
     }
     setState(() => _grading = true);
+    int correct = 0;
+    int wrong = 0;
+    int pending = 0;
+    int skipped = 0;
+    final List<QuestionBundle> untrusted = <QuestionBundle>[];
     try {
-      final Map<String, AnswerVerdict> verdicts = <String, AnswerVerdict>{
-        for (final QuestionBundle bundle in _gradableQuestions(set))
-          bundle.question.id: _judgeOne(bundle, set),
-      };
-      await controller.applyAuto(verdicts);
-      if (!mounted) {
-        return;
+      for (final QuestionBundle bundle in _gradableQuestions(set)) {
+        if (!mounted) {
+          return;
+        }
+        final String? reference = _referenceAnswerOf(
+          bundle,
+          answers: set.answers,
+        );
+        if (reference == null) {
+          skipped++;
+          continue;
+        }
+        final AnswerSheetEntry entry = _answerEntryOf(bundle);
+        final bool work = await _hasStudentWorkAsync(bundle);
+        final LocalGrade local = judgeLocally(
+          reference: reference,
+          studentText: entry.ocrText,
+          ocrConfidence: entry.ocrConfidence,
+          hasWork: work,
+        );
+        switch (local.readiness) {
+          case GradeReadiness.ready:
+            await controller.applyAuto(<String, AnswerVerdict>{
+              bundle.question.id: local.verdict,
+            });
+            if (local.verdict == AnswerVerdict.correct) {
+              correct++;
+            } else if (local.verdict == AnswerVerdict.wrong) {
+              wrong++;
+            }
+          case GradeReadiness.untrusted:
+            // 先标黄：让用户看到"这题还没判完"，而不是没有指示灯。
+            await controller.applyAuto(<String, AnswerVerdict>{
+              bundle.question.id: AnswerVerdict.pending,
+            });
+            untrusted.add(bundle);
+            pending++;
+          case GradeReadiness.noAnswer:
+          case GradeReadiness.noWork:
+            skipped++;
+        }
       }
-      final VerdictCounts counts = controller.data.value.countsOf(
-        verdicts.keys,
-      );
-      _showReaderTip(
-        '改卷完成：对 ${counts.correct} · 待判 ${counts.pending} · '
-        '错 ${counts.wrong} · 未判 ${counts.none}',
-      );
     } finally {
       if (mounted) {
         setState(() => _grading = false);
       }
     }
+    if (!mounted) {
+      return;
+    }
+    _showReaderTip(
+      '改卷：本地对 $correct · 错 $wrong · 待判 $pending · 跳过 $skipped',
+    );
+    if (untrusted.isEmpty) {
+      return;
+    }
+    final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
+    if (config.validationError() != null) {
+      if (mounted) {
+        _showReaderTip('还有 $pending 道需要 AI；先在「设置 → AI 分析」配置');
+      }
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final bool useAi = await _askAiGrade(
+      count: untrusted.length,
+      reason: '本地在客观题比对时判不了，或识别置信度偏低',
+    );
+    if (useAi) {
+      await _runAiGrading(untrusted, asked: '改卷：帮我判一下这道作答。');
+    }
+  }
+
+  /// 弹窗询问是否把 N 道题交给 AI（不自动决定）。
+  Future<bool> _askAiGrade({
+    required int count,
+    required String reason,
+  }) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('$count 道题需要 AI'),
+        content: Text(
+          '$reason。\n\n'
+          '要交给 AI 在后台逐题判吗？会产生 $count 次模型请求，'
+          '费用由你的服务商按调用量结算；判题结论仍可被你的手改覆盖。',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.65),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('先这样'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('交给 AI 判'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  /// 串行 AI 判一批题；页面内异步，不挡阅读，可点进度条上的「停止」。
+  Future<void> _runAiGrading(
+    List<QuestionBundle> bundles, {
+    String asked = 'AI 判：帮我判一下这道作答。',
+  }) async {
+    if (_aiGrading || bundles.isEmpty) {
+      return;
+    }
+    final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
+    if (config.validationError() != null) {
+      if (mounted) {
+        _showReaderTip('先在「设置 → AI 分析」填端点与 Key');
+      }
+      return;
+    }
+    final AiService service = ref.read(aiServiceProvider(widget.workbookId));
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _aiGrading = true;
+      _aiGradeDone = 0;
+      _aiGradeTotal = bundles.length;
+      _aiGradeStop = false;
+    });
+    int graded = 0;
+    int skipped = 0;
+    try {
+      for (final QuestionBundle bundle in bundles) {
+        if (!mounted || _aiGradeStop) {
+          break;
+        }
+        try {
+          final AiGrade? grade = await _aiGradeOne(
+            bundle,
+            config: config,
+            service: service,
+            asked: asked,
+          );
+          if (grade != null) {
+            graded++;
+          } else {
+            skipped++;
+          }
+        } on Object {
+          skipped++;
+        }
+        if (mounted) {
+          setState(() => _aiGradeDone++);
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _aiGrading = false;
+          _aiGradeStop = false;
+        });
+      }
+    }
+    if (mounted) {
+      _showReaderTip(
+        'AI 判完成：判了 $graded 道'
+        '${skipped > 0 ? ' · 跳过 $skipped 道（没作答或调用失败）' : ''}',
+      );
+    }
+  }
+
+  /// AI 判一道题并写回（判题 + 该题「问 AI」对话）。没有作答返回 null。
+  Future<AiGrade?> _aiGradeOne(
+    QuestionBundle bundle, {
+    required LlmConfig config,
+    required AiService service,
+    String asked = 'AI 判：帮我判一下这道作答。',
+    AnswerSet? answers,
+  }) async {
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final List<AiImageAttachment> attachments = await _aiAttachmentsOf(bundle);
+    final bool hasWork =
+        entry.ocrText.trim().isNotEmpty ||
+        attachments.any(
+          (AiImageAttachment item) => item.kind == AiImageKind.answer,
+        );
+    if (!hasWork) {
+      return null;
+    }
+    final String? reference = _referenceAnswerOf(bundle, answers: answers);
+    final AiGrade grade = await service.grade(
+      config: config,
+      payload: _aiPayloadOf(bundle),
+      referenceAnswer: reference,
+      studentAnswerText: entry.ocrText,
+      attachments: attachments,
+    );
+    final bool applied =
+        await _grades?.applyAi(
+          bundle.question.id,
+          grade.verdict,
+          note: grade.reason,
+        ) ??
+        false;
+    await _appendBatchAiTurns(
+      bundle,
+      grade: grade,
+      applied: applied,
+      referenceAnswer: reference,
+      asked: asked,
+    );
+    return grade;
   }
 
   /// 「AI 补答案」（2026-10-26 用户第 1 条）。
@@ -1096,7 +1290,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   /// （尤其是扫描件），剩下的题连"对答案"都无从谈起。
   /// 补齐之后，判题与「问 AI」才有东西可对照。
   Future<void> _fillAnswersWithAi() async {
-    if (_grading || _fillingAi || _batchAiRunning) {
+    if (_grading || _fillingAi || _batchAiRunning || _aiGrading) {
       return;
     }
     final RegionSet set = _regionSetOf();
@@ -1185,7 +1379,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   /// 3. **写进该题的「问 AI」对话**——用户在那一题里能看到这次判了什么、
   ///    为什么判成对/错/拿不准。
   Future<void> _gradeSelectedWithAi(List<QuestionBundle> picked) async {
-    if (_batchAiRunning || _fillingAi) {
+    if (_batchAiRunning || _fillingAi || _aiGrading || _grading) {
       return;
     }
     if (picked.isEmpty) {
@@ -1197,14 +1391,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       return;
     }
     final AiService service = ref.read(aiServiceProvider(widget.workbookId));
-    final GradingController? controller = _grades;
     final LayoutStore store = ref.read(layoutStoreProvider);
+    final RegionSet set = _regionSetOf();
+    final AnswerSet baseAnswers = set.answers;
     setState(() => _batchAiRunning = true);
     int filled = 0;
     int graded = 0;
     int skipped = 0;
     try {
-      // 1) 补答案（只补没有的）。
+      // 1) 只给没有参考答案的题补答案；已有答案的题不重复生成。
       AnswerSet next = AnswerSet.fromJson(
         await store.readAiAnswers(widget.workbookId),
       );
@@ -1212,8 +1407,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         if (!mounted) {
           return;
         }
-        final RegionSet set = _regionSetOf();
-        if (_hasReferenceAnswer(bundle, set)) {
+        if (_hasReferenceAnswer(bundle, set) || bundle.slices.isEmpty) {
+          continue;
+        }
+        // 没有作答的题补答案会白花 token；这类题直接跳过（用户要的是判作答）。
+        if (!await _hasStudentWorkAsync(bundle)) {
           continue;
         }
         try {
@@ -1237,53 +1435,34 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           );
           filled++;
         } on Object {
-          // 单题失败不中断整批。
+          // 单题补答案失败不中断整批；判题阶段会按"没有参考答案"处理。
         }
       }
       if (filled > 0) {
         await store.writeAiAnswers(widget.workbookId, next.toJson());
-        ref.invalidate(regionSetProvider(widget.workbookId));
       }
 
       // 2) 逐题判 + 3) 写回对话。
+      //
+      // 关键：用内存里刚合并好的答案集，不要从已 invalidate 的 provider 取
+      //（否则刚补的答案读不到，模型会以为没有参考答案）。
+      final AnswerSet merged = baseAnswers.mergeMissing(next);
       for (final QuestionBundle bundle in picked) {
         if (!mounted) {
           return;
         }
-        final AnswerSheetEntry entry = _answerEntryOf(bundle);
-        final List<AiImageAttachment> attachments = await _aiAttachmentsOf(
-          bundle,
-        );
-        final bool hasAnswer =
-            entry.ocrText.trim().isNotEmpty ||
-            attachments.any(
-              (AiImageAttachment item) => item.kind == AiImageKind.answer,
-            );
-        if (!hasAnswer) {
-          skipped++;
-          continue;
-        }
         try {
-          final AiGrade grade = await service.grade(
-            config: config,
-            payload: _aiPayloadOf(bundle),
-            referenceAnswer: _referenceAnswerOf(bundle),
-            studentAnswerText: entry.ocrText,
-            attachments: attachments,
-          );
-          final bool applied = await controller?.applyAi(
-            bundle.question.id,
-            grade.verdict,
-            note: grade.reason,
-          ) ??
-              false;
-          graded++;
-          await _appendBatchAiTurns(
+          final AiGrade? grade = await _aiGradeOne(
             bundle,
-            grade: grade,
-            applied: applied,
-            referenceAnswer: _referenceAnswerOf(bundle),
+            config: config,
+            service: service,
+            answers: merged,
           );
+          if (grade == null) {
+            skipped++;
+          } else {
+            graded++;
+          }
         } on Object {
           skipped++;
         }
@@ -1291,6 +1470,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     } finally {
       if (mounted) {
         setState(() => _batchAiRunning = false);
+        if (filled > 0) {
+          ref.invalidate(regionSetProvider(widget.workbookId));
+        }
         final String filledText = filled > 0 ? ' · 补答案 $filled 道' : '';
         _showReaderTip(
           'AI 判完成：判了 $graded 道$filledText'
@@ -1309,6 +1491,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     required AiGrade grade,
     required bool applied,
     String? referenceAnswer,
+    String asked = '批量 AI 判：帮我判一下这道作答。',
   }) async {
     try {
       final AiChatStore store = ref.read(aiChatStoreProvider(widget.workbookId));
@@ -1319,7 +1502,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       final int at = DateTime.now().millisecondsSinceEpoch;
       await store.save(widget.workbookId, bundle.question.id, <ChatTurn>[
         ...turns,
-        ChatTurn.user('批量 AI 判：帮我判一下这道作答。', at: at),
+        ChatTurn.user(asked, at: at),
         if (referenceAnswer != null && referenceAnswer.trim().isNotEmpty)
           ChatTurn(
             role: ChatRole.assistant,
@@ -2509,13 +2692,55 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   }
 
   /// 本题参考答案（PDF 或 AI 补的）。没有返回 null。
-  String? _referenceAnswerOf(QuestionBundle bundle) {
-    final AnswerNote? note = _regionSetOf().answers.forQuestion(
+  ///
+  /// [answers] 用于"刚刚补完答案、provider 还没重建"的调用点：
+  /// 不能从已 invalidate 的 provider 里取，否则会拿到空集（2026-10-26 修）。
+  String? _referenceAnswerOf(QuestionBundle bundle, {AnswerSet? answers}) {
+    final AnswerSet source = answers ?? _regionSetOf().answers;
+    final AnswerNote? note = source.forQuestion(
       ordinal: bundle.question.ordinal,
       label: bundle.question.label,
     );
     final String? text = note?.text.trim();
     return text == null || text.isEmpty ? null : text;
+  }
+
+  /// 这题有没有作答（答题卡笔迹 / 页内作答框墨迹 / OCR 文本 / 作答原图）。
+  ///
+  /// 比 [_hasStudentAnswerOf] 多做了两件事：跨页也能查，且会先 flush 再读 SIF。
+  /// 改卷要一次过几十道题，必须有这个"不依赖当前页"的版本。
+  Future<bool> _hasStudentWorkAsync(QuestionBundle bundle) async {
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    if (entry.hasText || entry.hasCrop) {
+      return true;
+    }
+    final InkDoc? cached = _answerInkDocs[bundle.question.id];
+    if (cached != null && cached.strokes.isNotEmpty) {
+      return true;
+    }
+    final ReaderHandle? handle = _handle;
+    if (handle == null) {
+      return false;
+    }
+    try {
+      final List<InkDoc> docs = await _loadAnswerInkPages(bundle);
+      if (docs.any((InkDoc doc) => doc.strokes.isNotEmpty)) {
+        return true;
+      }
+      if (handle.pages.isEmpty) {
+        return false;
+      }
+      final int pageIndex = entry.pageIndex.clamp(0, handle.pages.length - 1);
+      await ref
+          .read(inkWriterProvider(widget.workbookId))
+          .flush(handle.session.id, pageIndex);
+      final InkDoc pageDoc = await ref
+          .read(inkStoreProvider(widget.workbookId))
+          .load(handle.session.id, pageIndex);
+      return _strokesInRect(pageDoc, entry.rect).isNotEmpty;
+    } on Object {
+      return false;
+    }
   }
 
   bool _hasStudentAnswerOf(QuestionBundle bundle) {
@@ -2784,10 +3009,244 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     );
   }
 
-  /// 「对答案」入口（按钮已放好，自动判题后续补）。
-  void _checkAnswer(QuestionBundle bundle) {
+  /// 「对答案」入口（2026-10-26 收尾口径）：
+  ///
+  /// - 没有参考答案 → 不可用（按钮已在面板置灰）；
+  /// - 有答案没作答 → 只展示参考答案，不改指示灯；
+  /// - 本地可信 → 直接落结论 + 指示灯；
+  /// - 本地判不了/不可信 → 先黄点，再问是否交给 AI 判这一道。
+  Future<void> _checkAnswer(QuestionBundle bundle) async {
     final String label = bundle.question.label ?? '${bundle.question.ordinal}';
-    _showReaderTip('第 $label 题：先看右侧答案卡；自动判题会在后续补上。');
+    final RegionSet set = _regionSetOf();
+    final String? reference = _referenceAnswerOf(bundle, answers: set.answers);
+    if (reference == null) {
+      _showReaderTip('第 $label 题还没有参考答案：先「补答案」或多选用「AI 判」');
+      return;
+    }
+    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    final bool work = await _hasStudentWorkAsync(bundle);
+    final LocalGrade local = judgeLocally(
+      reference: reference,
+      studentText: entry.ocrText,
+      ocrConfidence: entry.ocrConfidence,
+      hasWork: work,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (local.readiness == GradeReadiness.noWork) {
+      await _showReferenceOnly(
+        bundle: bundle,
+        reference: reference,
+        reason: '这道题还没有作答。先看看参考答案，或去答题卡写一遍。',
+      );
+      return;
+    }
+    if (local.canApply) {
+      await _grades?.applyAuto(<String, AnswerVerdict>{
+        bundle.question.id: local.verdict,
+      });
+      if (mounted) {
+        await _showGradeResult(
+          bundle: bundle,
+          reference: reference,
+          verdict: local.verdict,
+          reason: local.reason,
+        );
+      }
+      return;
+    }
+
+    // 本地不可信：先黄点，让状态明确，再问 AI。
+    await _grades?.applyAuto(<String, AnswerVerdict>{
+      bundle.question.id: AnswerVerdict.pending,
+    });
+    final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
+    if (!mounted) {
+      return;
+    }
+    if (config.validationError() != null) {
+      await _showGradeResult(
+        bundle: bundle,
+        reference: reference,
+        verdict: AnswerVerdict.pending,
+        reason: '${local.reason}\n\n要 AI 判，先在「设置 → AI 分析」配置端点与 Key。',
+      );
+      return;
+    }
+    final bool useAi = await _askSingleAi(label: label, reason: local.reason);
+    if (!useAi || !mounted) {
+      return;
+    }
+    try {
+      final AiGrade? grade = await _aiGradeOne(
+        bundle,
+        config: config,
+        service: ref.read(aiServiceProvider(widget.workbookId)),
+        asked: '对答案：帮我判一下这道作答。',
+      );
+      if (grade != null && mounted) {
+        await _showGradeResult(
+          bundle: bundle,
+          reference: reference,
+          verdict: grade.verdict,
+          reason: grade.reason,
+          fromAi: true,
+        );
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showReaderTip('AI 判失败：$error');
+      }
+    }
+  }
+
+  Future<bool> _askSingleAi({
+    required String label,
+    required String reason,
+  }) async {
+    final bool? ok = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('第 $label 题 · 本地判不了'),
+        content: Text(
+          '$reason。\n\n交给 AI 判这一道？会产生 1 次模型请求。',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.65),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('先这样'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('交给 AI 判'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
+  Future<void> _showGradeResult({
+    required QuestionBundle bundle,
+    required String reference,
+    required AnswerVerdict verdict,
+    required String reason,
+    bool fromAi = false,
+  }) async {
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    final ThemeData theme = Theme.of(context);
+    final Color color = gradeColor(context, verdict);
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Row(
+          children: <Widget>[
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: ShqSpace.sm),
+            Expanded(
+              child: Text(
+                '第 $label 题 · ${gradeLabel(verdict)}${fromAi ? '（AI）' : '（本地）'}',
+              ),
+            ),
+          ],
+        ),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  reason.isEmpty ? '没有更多依据。' : reason,
+                  style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
+                ),
+                if (reference.trim().isNotEmpty) ...<Widget>[
+                  const SizedBox(height: ShqSpace.md),
+                  Text(
+                    '参考答案',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: ShqSpace.xs),
+                  SelectableText(
+                    reference,
+                    style: theme.textTheme.bodyMedium?.copyWith(height: 1.65),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showReferenceOnly({
+    required QuestionBundle bundle,
+    required String reference,
+    required String reason,
+  }) async {
+    final String label = bundle.question.label ?? '${bundle.question.ordinal}';
+    final ThemeData theme = Theme.of(context);
+    final bool? goWrite = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: Text('第 $label 题 · 还没有作答'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(reason, style: theme.textTheme.bodyMedium),
+                const SizedBox(height: ShqSpace.md),
+                Text(
+                  '参考答案',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: ShqSpace.xs),
+                SelectableText(
+                  reference,
+                  style: theme.textTheme.bodyMedium?.copyWith(height: 1.65),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('知道了'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('去作答'),
+          ),
+        ],
+      ),
+    );
+    if (goWrite == true && mounted) {
+      _openAnswerSheetAt(bundle.question.id);
+    }
   }
 
   /// AI 面板用的载荷：图片权威、公式题只给图。
@@ -3473,6 +3932,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       // 阅读视图一旦不撑满宽度，它的裁剪边界就变成内容边界（实测会裁掉右侧内容）。
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        if (_aiGrading)
+          _AiGradeBanner(
+            done: _aiGradeDone,
+            total: _aiGradeTotal,
+            onStop: () => setState(() => _aiGradeStop = true),
+          ),
         Expanded(
           child: Stack(
             children: <Widget>[
@@ -3590,7 +4055,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                                       _grades?.verdictOf(bundle.question.id) ??
                                       AnswerVerdict.none,
                                   counts: _gradeCounts(regionSet),
-                                  grading: _grading,
+                                  grading: _grading || _aiGrading,
                                   onGradeAll: () => unawaited(_gradeAll()),
                                   onFillAnswers: () =>
                                       unawaited(_fillAnswersWithAi()),
@@ -3626,7 +4091,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                                   showStemText: showStemText,
                                   answers: regionSet.answers,
                                   onFavorite: _favoriteQuestion,
-                                  onCheckAnswer: _checkAnswer,
+                                  onCheckAnswer: (QuestionBundle bundle) =>
+                                      unawaited(_checkAnswer(bundle)),
                                   onAskAi: (QuestionBundle bundle) =>
                                       unawaited(_showAskAi(bundle)),
                                   showAnswers: _showAnswers,
@@ -3840,6 +4306,80 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           ),
         ),
       ],
+    );
+  }
+}
+
+/// AI 后台判题的顶部进度条（2026-10-26 用户：提示用户是否提交 AI 判）。
+///
+/// 不挡阅读：它只占一行，做完自动消失；「停止」只停后续题，已完成的结果保留。
+class _AiGradeBanner extends StatelessWidget {
+  const _AiGradeBanner({
+    required this.done,
+    required this.total,
+    required this.onStop,
+  });
+
+  final int done;
+  final int total;
+  final VoidCallback onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    final double? fraction = total <= 0 ? null : (done / total).clamp(0.0, 1.0);
+    return Material(
+      color: scheme.secondaryContainer,
+      child: SafeArea(
+        top: false,
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(
+            ShqSpace.md,
+            6,
+            ShqSpace.sm,
+            6,
+          ),
+          child: Row(
+            children: <Widget>[
+              Icon(
+                Icons.auto_awesome,
+                size: 16,
+                color: scheme.onSecondaryContainer,
+              ),
+              const SizedBox(width: ShqSpace.sm),
+              Text(
+                'AI 后台判 $done/$total',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: scheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: ShqSpace.md),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(ShqRadius.pill),
+                  child: LinearProgressIndicator(
+                    value: fraction,
+                    minHeight: 4,
+                    backgroundColor: scheme.surfaceContainerHighest,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: onStop,
+                style: TextButton.styleFrom(
+                  foregroundColor: scheme.onSecondaryContainer,
+                  minimumSize: const Size(0, 32),
+                  padding: const EdgeInsets.symmetric(horizontal: ShqSpace.sm),
+                ),
+                child: const Text('停止'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

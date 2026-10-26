@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/favorite/favorite_store.dart';
 import 'package:shuaqi/app/import/import_workbook.dart';
+import 'package:shuaqi/app/storage/storage_error.dart';
 import 'package:shuaqi/domain/export/export_options.dart';
 import 'package:shuaqi/domain/model/import_batch.dart';
 import 'package:shuaqi/domain/model/shelf_folder.dart';
@@ -18,9 +19,9 @@ import 'package:shuaqi/domain/model/workbook_search.dart';
 import 'package:shuaqi/infra/db/dao/folder_dao.dart';
 import 'package:shuaqi/infra/db/dao/setting_dao.dart';
 import 'package:shuaqi/infra/db/dao/workbook_dao.dart';
-import 'package:shuaqi/infra/vault/paths.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
 import 'package:shuaqi/state/app_providers.dart';
+import 'package:shuaqi/state/bookshelf_providers.dart';
 import 'package:shuaqi/state/favorite_providers.dart';
 import 'package:shuaqi/state/ui_prefs_provider.dart';
 import 'package:shuaqi/ui/bookshelf/export_sheet.dart';
@@ -447,13 +448,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   /// 字节怎么来（渲染、PDF 语法）在 `workbook_export.dart` / `app/export`，
   /// 这里只负责把三段串起来，并把失败翻成一句人话。
   Future<void> _export(Workbook workbook) async {
-    final ExportOptions? options = await showExportOptionsSheet(
+    final ExportRequest? request = await showExportOptionsSheet(
       context,
       workbook: workbook,
     );
-    if (options == null || !mounted) {
+    if (request == null || !mounted) {
       return;
     }
+    final ExportOptions options = request.options;
     final ValueNotifier<ExportProgress> progress =
         ValueNotifier<ExportProgress>(const ExportProgress('准备中'));
     unawaited(
@@ -473,7 +475,12 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
         options,
         onProgress: (ExportProgress value) => progress.value = value,
       );
-      final String name = exportFileName(workbook.title, DateTime.now());
+      final String name = exportFileName(
+        workbook.title,
+        DateTime.now(),
+        options: options,
+        customName: request.fileName,
+      );
       final String path = await savePdfToDownloads(bytes, name);
       if (!mounted) {
         return;
@@ -487,7 +494,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     } on Object catch (error) {
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
-        _toast('导出失败：$error');
+        _toast(storageAwareMessage('导出', error));
       }
     } finally {
       // 弹窗还在做退场动画时不能 dispose 监听对象；延后一点再回收。
@@ -1875,10 +1882,14 @@ class _WorkbookTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final ThemeData theme = Theme.of(context);
-    // 缩略图不存在由 errorBuilder 兜底，不用 existsSync 探测（避免 build 里做 IO）
-    final File thumb = ref
-        .watch(vaultProvider)
-        .file(VaultPaths.thumb(workbook.id, 0));
+    // 缩略图：有就读字节，缺了就懒重建（清缓存/恢复备份后不再整排空白）。
+    final AsyncValue<Uint8List?> thumb = ref.watch(
+      workbookThumbnailProvider(workbook.id),
+    );
+    final Uint8List? thumbBytes = thumb.maybeWhen<Uint8List?>(
+      data: (Uint8List? value) => value,
+      orElse: () => null,
+    );
 
     // 文件损坏态：库里有记录、但 Vault 里的 PDF 没了。书架先置灰告知，
     // 而不是让用户点进去才在阅读器里撞错误。
@@ -1946,7 +1957,10 @@ class _WorkbookTile extends ConsumerWidget {
                       ),
                     Stack(
                       children: <Widget>[
-                        _Thumb(file: thumb),
+                        _Thumb(
+                          image: thumbBytes,
+                          loading: thumb.isLoading,
+                        ),
                         if (broken)
                           Positioned(
                             left: 0,
@@ -2090,9 +2104,13 @@ class _WorkbookGridTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    final File thumb = ref
-        .watch(vaultProvider)
-        .file(VaultPaths.thumb(workbook.id, 0));
+    final AsyncValue<Uint8List?> thumb = ref.watch(
+      workbookThumbnailProvider(workbook.id),
+    );
+    final Uint8List? thumbBytes = thumb.maybeWhen<Uint8List?>(
+      data: (Uint8List? value) => value,
+      orElse: () => null,
+    );
     final AsyncValue<bool> health = ref.watch(
       workbookHealthProvider(workbook.id),
     );
@@ -2144,7 +2162,8 @@ class _WorkbookGridTile extends ConsumerWidget {
                           fit: StackFit.expand,
                           children: <Widget>[
                             _Thumb(
-                              file: thumb,
+                              image: thumbBytes,
+                              loading: thumb.isLoading,
                               width: double.infinity,
                               height: double.infinity,
                             ),
@@ -2950,9 +2969,15 @@ class _FolderChip extends StatelessWidget {
 }
 
 class _Thumb extends StatelessWidget {
-  const _Thumb({required this.file, this.width = 64, this.height = 88});
+  const _Thumb({
+    required this.image,
+    this.loading = false,
+    this.width = 64,
+    this.height = 88,
+  });
 
-  final File file;
+  final Uint8List? image;
+  final bool loading;
   final double width;
   final double height;
 
@@ -2979,21 +3004,42 @@ class _Thumb extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(ShqRadius.sm - 1),
-        child: Image.file(
-          file,
-          fit: BoxFit.cover,
-          errorBuilder:
-              (BuildContext context, Object error, StackTrace? stackTrace) {
-                return ColoredBox(
-                  color: scheme.surfaceContainerHighest,
-                  child: Icon(
-                    Icons.description_outlined,
-                    size: 24,
-                    color: scheme.onSurfaceVariant,
+        child: image != null
+            ? Image.memory(
+                image!,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder:
+                    (BuildContext context, Object error, StackTrace? stackTrace) {
+                      return _placeholder(scheme);
+                    },
+              )
+            : loading
+            ? ColoredBox(
+                color: scheme.surfaceContainerHighest,
+                child: Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.8,
+                      color: scheme.outline,
+                    ),
                   ),
-                );
-              },
-        ),
+                ),
+              )
+            : _placeholder(scheme),
+      ),
+    );
+  }
+
+  Widget _placeholder(ColorScheme scheme) {
+    return ColoredBox(
+      color: scheme.surfaceContainerHighest,
+      child: Icon(
+        Icons.description_outlined,
+        size: 24,
+        color: scheme.onSurfaceVariant,
       ),
     );
   }

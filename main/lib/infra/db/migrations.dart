@@ -228,6 +228,23 @@ CREATE TABLE answer_log(
       'CREATE INDEX idx_answer_log_origin ON answer_log(origin)',
     ],
   ),
+  Migration(
+    version: 9,
+    note:
+        '重刷独立 attempt（2026-10-26 用户：多次重刷要能逐次查看）：\n'
+        '1) answer_log 加 attempt_id：一次重刷（组卷 run 也算一次）一个 id，'
+        '同一天同一题刷两次会留两行，时间线才能打开"那一次"的笔迹。\n'
+        '2) 唯一索引改 (question_id, day, origin, attempt_id)：原卷行 attempt_id=\'\'，'
+        '重刷行带 run id，二者互不覆盖。\n'
+        '3) 旧行 attempt_id=\'\'，归为"旧版重刷"，仍可显示。',
+    statements: <String>[
+      "ALTER TABLE answer_log ADD COLUMN attempt_id TEXT NOT NULL DEFAULT ''",
+      "ALTER TABLE answer_log ADD COLUMN favorite_id TEXT NOT NULL DEFAULT ''",
+      'DROP INDEX idx_answer_log_q_day_origin',
+      'CREATE UNIQUE INDEX idx_answer_log_q_day_origin_attempt ON answer_log(question_id, day, origin, attempt_id)',
+      'CREATE INDEX idx_answer_log_attempt ON answer_log(attempt_id)',
+    ],
+  ),
 ];
 
 /// 数据库最终版本号。

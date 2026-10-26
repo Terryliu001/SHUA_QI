@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/backup/backup_service.dart';
+import 'package:shuaqi/app/storage/storage_error.dart';
 import 'package:shuaqi/domain/app/backup_manifest.dart';
 import 'package:shuaqi/domain/app/cache_report.dart';
 import 'package:shuaqi/state/settings_providers.dart';
@@ -45,7 +46,7 @@ Future<void> exportBackup(BuildContext context, WidgetRef ref) async {
   } on Object catch (error) {
     messenger.showSnackBar(
       SnackBar(
-        content: Text('导出失败：$error'),
+        content: Text(storageAwareMessage('导出备份', error)),
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -170,7 +171,7 @@ Future<void> restoreBackup(BuildContext context, WidgetRef ref) async {
   } on Object catch (error) {
     messenger.showSnackBar(
       SnackBar(
-        content: Text('恢复失败：$error'),
+        content: Text(storageAwareMessage('恢复', error)),
         behavior: SnackBarBehavior.floating,
       ),
     );

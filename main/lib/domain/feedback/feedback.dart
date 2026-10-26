@@ -141,3 +141,9 @@ class FeedbackReceipt {
 abstract interface class FeedbackGateway {
   Future<FeedbackReceipt> submit(FeedbackDraft draft);
 }
+
+/// 编译期注入的反馈端点；空 = 通道未接通（只存本机）。
+///
+/// 构建时：
+/// `flutter build apk --dart-define=FEEDBACK_ENDPOINT=https://xxx.workers.dev`
+const String kFeedbackEndpoint = String.fromEnvironment('FEEDBACK_ENDPOINT');

@@ -41,8 +41,8 @@ class AnswerLogDao {
       // 落笔不该把已经判好的结论冲回 none：只有带来结论的动作才改 verdict。
       "verdict = CASE WHEN ? = 'none' THEN verdict ELSE ? END, "
       'workbook_id = ?, workbook_title = ?, label = ?, kind = ?, '
-      'page_index = ?, origin_title = ?, hits = hits + 1 '
-      'WHERE question_id = ? AND day = ? AND origin = ?',
+      'page_index = ?, origin_title = ?, attempt_id = ?, hits = hits + 1 '
+      'WHERE question_id = ? AND day = ? AND origin = ? AND attempt_id = ?',
       <Object?>[
         entry.at,
         entry.source.name,
@@ -54,9 +54,11 @@ class AnswerLogDao {
         entry.kind,
         entry.pageIndex,
         entry.originTitle,
+        entry.attemptId,
         entry.questionId,
         entry.day,
         entry.origin.name,
+        entry.attemptId,
       ],
     );
   }
@@ -81,7 +83,7 @@ class AnswerLogDao {
       'at = CASE WHEN at < ? THEN ? ELSE at END, '
       "verdict = CASE WHEN verdict = 'none' THEN ? ELSE verdict END, "
       'workbook_title = ?, label = ?, kind = ?, page_index = ? '
-      'WHERE question_id = ? AND day = ? AND origin = ?',
+      'WHERE question_id = ? AND day = ? AND origin = ? AND attempt_id = ?',
       <Object?>[
         entry.at,
         entry.at,
@@ -93,6 +95,7 @@ class AnswerLogDao {
         entry.questionId,
         entry.day,
         entry.origin.name,
+        entry.attemptId,
       ],
     );
   }
@@ -101,16 +104,35 @@ class AnswerLogDao {
     return _db.query(
       'answer_log',
       columns: const <String>['id'],
-      // v8：唯一索引是 (question_id, day, origin)——同一天同一题，
-      // 原卷做一次、组卷再刷一次是**两行**。
-      where: 'question_id = ? AND day = ? AND origin = ?',
-      whereArgs: <Object?>[entry.questionId, entry.day, entry.origin.name],
+      // v9：唯一索引是 (question_id, day, origin, attempt_id)——
+      // 同一天同一题，每一次重刷 attempt 是独立一行。
+      where: 'question_id = ? AND day = ? AND origin = ? AND attempt_id = ?',
+      whereArgs: <Object?>[
+        entry.questionId,
+        entry.day,
+        entry.origin.name,
+        entry.attemptId,
+      ],
       limit: 1,
     );
   }
 
-  /// 判题结论变了：把这道题**所有历史行**的 verdict 一起刷新。
+  /// 丢弃一次重刷：删掉这个 attempt 写下的全部记录。
   ///
+  /// 用于"退出时选择不保存"——笔迹与纸张目录会由 `RedoAttemptStore` 删除，
+  /// 这里把已经旁路写入的记录行也清掉，避免时间线留下幽灵。
+  Future<int> deleteAttempt(String attemptId) async {
+    if (attemptId.trim().isEmpty) {
+      return 0;
+    }
+    return _db.delete(
+      'answer_log',
+      where: 'attempt_id = ?',
+      whereArgs: <Object?>[attemptId],
+    );
+  }
+
+  /// 判题结论变了：把这道题**所有历史行**的 verdict 一起刷新。  ///
   /// 时间线里的色带读的是本表，不跟着改的话会出现"卡片写判错、
   /// 打开原卷却是判对"的分裂。
   Future<int> syncVerdict(String questionId, AnswerVerdict verdict) async {

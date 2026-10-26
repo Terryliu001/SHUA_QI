@@ -57,9 +57,12 @@ class _FeedbackPageState extends ConsumerState<FeedbackPage> {
       onClose: widget.onClose,
       child: SettingsSubPageBody(
         children: <Widget>[
-          const _Notice(
-            '提交后我们会按你留的联系方式回复。'
-            '这一版的反馈通道还没接通，内容会先存在本机，不会自动上传。',
+          _Notice(
+            kFeedbackEndpoint.trim().isEmpty
+                ? '提交后我们会按你留的联系方式回复。'
+                      '这一版的反馈通道还没接通，内容会先存在本机，不会自动上传。'
+                : '提交后会发送给开发者，修复后按你留的手机号短信/电话回复。'
+                      '网络失败时内容会先存在本机，不会假装发送成功。',
           ),
           const SubPageSectionTitle(text: '这是什么问题'),
           for (final FeedbackKind kind in FeedbackKind.values)

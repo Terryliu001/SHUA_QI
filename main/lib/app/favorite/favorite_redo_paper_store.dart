@@ -15,9 +15,9 @@ class FavoriteRedoPaperStore {
 
   final Vault _vault;
 
-  Future<AnswerPaper> load(String favoriteId) async {
+  Future<AnswerPaper> load(String favoriteId, {String? attemptId}) async {
     try {
-      final String relative = VaultPaths.favoriteRedoPaper(favoriteId);
+      final String relative = _pathOf(favoriteId, attemptId);
       if (!_vault.file(relative).existsSync()) {
         return AnswerPaper.defaults;
       }
@@ -33,10 +33,21 @@ class FavoriteRedoPaperStore {
     }
   }
 
-  Future<void> save(String favoriteId, AnswerPaper paper) async {
+  Future<void> save(
+    String favoriteId,
+    AnswerPaper paper, {
+    String? attemptId,
+  }) async {
     await _vault.writeAtomically(
-      VaultPaths.favoriteRedoPaper(favoriteId),
+      _pathOf(favoriteId, attemptId),
       utf8.encode(jsonEncode(paper.toJson())),
     );
+  }
+
+  String _pathOf(String favoriteId, String? attemptId) {
+    final String id = (attemptId ?? '').trim();
+    return id.isEmpty
+        ? VaultPaths.favoriteRedoPaper(favoriteId)
+        : VaultPaths.favoriteRedoPaperOf(favoriteId, id);
   }
 }

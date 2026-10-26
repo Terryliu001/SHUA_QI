@@ -452,6 +452,12 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
   Future<void> _runProfile(Future<void> Function() action) async {
     try {
       await action();
+      // 头像/封面写回的是**同一个文件路径**，Flutter 的 ImageCache 只认
+      // provider（路径）不认 mtime：不清掉就会一直显示旧图，看起来像"裁剪没生效"。
+      // 这里清内存缓存 + 正在显示的那一份，再让 profileProvider 重读。
+      PaintingBinding.instance.imageCache
+        ..clear()
+        ..clearLiveImages();
       ref.invalidate(profileProvider);
       if (mounted) {
         _toast('已更新');

@@ -15,6 +15,7 @@ import 'package:shuaqi/state/app_providers.dart';
 import 'package:shuaqi/state/record_providers.dart';
 import 'package:shuaqi/state/shell_providers.dart';
 import 'package:shuaqi/ui/bookshelf/workbook_menu_sheet.dart';
+import 'package:shuaqi/ui/favorites/favorite_redo_page.dart';
 import 'package:shuaqi/ui/panel/grade_dot.dart';
 import 'package:shuaqi/ui/router.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -162,8 +163,8 @@ class _RecordsTimelinePageState extends ConsumerState<RecordsTimelinePage> {
                     child: _QuestionRow(
                       entry: entry,
                       sourceDeleted: false,
-                      // 重刷记录不跳去原卷：它已经在收藏夹/组卷里了。
-                      onTap: () => _toast('这是重刷记录，笔迹在收藏夹里'),
+                      // 重刷记录打开那一次 attempt（不是原卷，也不是"只弹提示"）。
+                      onTap: () => _openRedoAttempt(workbook, entry),
                       onLongPress: () =>
                           unawaited(_openQuestionMenu(entry, workbook)),
                     ),
@@ -224,11 +225,48 @@ class _RecordsTimelinePageState extends ConsumerState<RecordsTimelinePage> {
   }
 
   void _openQuestion(AnswerLogEntry entry, TimelineWorkbook workbook) {
+    if (workbook.isRedo) {
+      _openRedoAttempt(workbook, entry);
+      return;
+    }
     if (workbook.sourceDeleted) {
       _toast('原卷已删除，无法回到作答位置');
       return;
     }
     _pushReader(entry.workbookId, entry.questionId);
+  }
+
+  /// 打开某一次重刷 attempt（v9 起每条记录带 attemptId + favoriteId）。
+  ///
+  /// 组卷一次连刷写下的多道题共用 attemptId；这里把那一组里所有还有收藏 id
+  /// 的题一起交给重刷页，打开后就是"那一次"的整组，而不仅仅是一道题。
+  void _openRedoAttempt(TimelineWorkbook workbook, AnswerLogEntry entry) {
+    if (!workbook.hasAttempt || entry.favoriteId.isEmpty) {
+      _toast('这是旧版重刷记录，笔迹在收藏夹里');
+      return;
+    }
+    final List<String> ids = <String>[
+      for (final AnswerLogEntry item in workbook.entries)
+        if (item.favoriteId.isNotEmpty) item.favoriteId,
+    ];
+    if (!ids.contains(entry.favoriteId)) {
+      ids.insert(0, entry.favoriteId);
+    }
+    final int index = ids.indexOf(entry.favoriteId).clamp(0, ids.length - 1);
+    unawaited(
+      Navigator.of(context).pushNamed(
+        AppRoutes.favoriteRedo,
+        arguments: RedoArgs(
+          favoriteIds: ids,
+          title: workbook.origin == RecordOrigin.set
+              ? '组卷 · ${workbook.originTitle}'
+              : '第 ${entry.label} 题 · 重刷',
+          attemptId: workbook.attemptId,
+          initialIndex: index,
+          isSet: workbook.origin == RecordOrigin.set,
+        ),
+      ),
+    );
   }
 
   void _pushReader(String workbookId, String questionId) {

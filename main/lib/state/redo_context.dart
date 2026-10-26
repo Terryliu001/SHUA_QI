@@ -13,13 +13,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 ///
 /// 值为 null = 不在重刷页（正常阅读/答题卡），打点按原卷口径走。
 class RedoContext {
-  const RedoContext({required this.title, this.setId});
+  const RedoContext({required this.title, this.setId, this.attemptId = ''});
 
   /// 这次重刷的标题（组卷名，或「重刷」）。
   final String title;
 
   /// 组卷 id；null = 单题重刷。
   final String? setId;
+
+  /// 这一次重刷的 attempt（一个组卷 run 共用一个）。
+  final String attemptId;
 
   bool get isSet => (setId ?? '').isNotEmpty;
 }

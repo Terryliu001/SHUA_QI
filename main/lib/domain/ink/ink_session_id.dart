@@ -8,7 +8,8 @@ library;
 /// 答题卡手写画布的 session 编码：`ans:<draftSessionId>:<questionId>`。
 const String kAnswerInkPrefix = 'ans';
 
-/// 收藏二刷画布的 session 编码：`fav:<favoriteId>`。
+/// 收藏二刷画布的 session 编码：`fav:<favoriteId>`（旧版，单份笔迹）。
+/// 2026-10-26 起每次重刷独立：`fav:<favoriteId>@<attemptId>`。
 const String kFavoriteRedoPrefix = 'fav';
 
 String answerInkSessionId(String draftSessionId, String questionId) =>
@@ -25,17 +26,40 @@ String answerInkSessionId(String draftSessionId, String questionId) =>
   return (sessionId: parts[1], questionId: parts[2]);
 }
 
-String favoriteRedoSessionId(String favoriteId) =>
-    '$kFavoriteRedoPrefix:$favoriteId';
+String favoriteRedoSessionId(String favoriteId, [String? attemptId]) {
+  final String id = (attemptId ?? '').trim();
+  return id.isEmpty
+      ? '$kFavoriteRedoPrefix:$favoriteId'
+      : '$kFavoriteRedoPrefix:$favoriteId@$id';
+}
 
-/// 解析二刷 session：不是二刷返回 null。
+/// 解析二刷 session（含 attempt）。不是二刷返回 null。
 ///
-/// 收藏 id 是 ULID（不含冒号），所以按「前缀 + 剩余整段」判断，
-/// 不会和 `ans:` 的 3 段格式混淆。
-String? parseFavoriteRedoSession(String raw) {
+/// 格式：
+/// - 旧版：`fav:<favoriteId>` → attemptId = null；
+/// - 新版：`fav:<favoriteId>@<attemptId>`。
+({String favoriteId, String? attemptId})? parseFavoriteRedoSessionRef(
+  String raw,
+) {
   if (!raw.startsWith('$kFavoriteRedoPrefix:')) {
     return null;
   }
   final String id = raw.substring(kFavoriteRedoPrefix.length + 1);
-  return id.isEmpty ? null : id;
+  if (id.isEmpty) {
+    return null;
+  }
+  final int at = id.indexOf('@');
+  if (at < 0) {
+    return (favoriteId: id, attemptId: null);
+  }
+  final String favoriteId = id.substring(0, at);
+  final String attemptId = id.substring(at + 1);
+  if (favoriteId.isEmpty || attemptId.isEmpty) {
+    return null;
+  }
+  return (favoriteId: favoriteId, attemptId: attemptId);
 }
+
+/// 旧调用点的兼容入口：只要收藏 id。
+String? parseFavoriteRedoSession(String raw) =>
+    parseFavoriteRedoSessionRef(raw)?.favoriteId;

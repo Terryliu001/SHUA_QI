@@ -40,11 +40,15 @@ class FavoriteAiPanel extends ConsumerStatefulWidget {
     required this.width,
     required this.onClose,
     this.onGraded,
+    this.attemptId,
   });
 
   final Favorite favorite;
   final double width;
   final VoidCallback onClose;
+
+  /// 这一次重刷的 attempt；null = 未打开某次（看题页用最近一次 / 旧版兼容）。
+  final String? attemptId;
 
   /// AI 判完并写回快照后通知外层（看题页要刷新判定卡片与自己的副本）。
   final VoidCallback? onGraded;
@@ -129,7 +133,7 @@ class _FavoriteAiPanelState extends ConsumerState<FavoriteAiPanel> {
 
   Future<InkDoc> _redoDoc() async {
     final InkPageKey key = InkPageKey(
-      favoriteRedoSessionId(widget.favorite.id),
+      favoriteRedoSessionId(widget.favorite.id, widget.attemptId),
       0,
     );
     try {
