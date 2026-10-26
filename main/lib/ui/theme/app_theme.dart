@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/app/accent.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
 
 /// 主题的唯一构造点（T1.1「主题单点生效」）。
@@ -23,13 +24,17 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 /// 分段按钮 / 滑块 / 进度 / 滚动条 / FAB / Tooltip** 全部在 ThemeData 里定一次。
 /// 页面上只允许写"布局"，不允许写"皮肤"。
 abstract final class ShqTheme {
-  static ThemeData light() => _build(_lightScheme());
+  /// [accent] 缺省 = 靛蓝（2026-10-24 定稿的色系），所以老调用点
+  /// （测试、二级页）不用改，行为与加色系之前逐像素一致。
+  static ThemeData light([ShqAccent accent = ShqAccent.azure]) =>
+      _build(_lightScheme(accent));
 
-  static ThemeData dark() => _build(_darkScheme());
+  static ThemeData dark([ShqAccent accent = ShqAccent.azure]) =>
+      _build(_darkScheme(accent));
 
-  static ColorScheme _lightScheme() {
+  static ColorScheme _lightScheme(ShqAccent accent) {
     final ColorScheme base = ColorScheme.fromSeed(
-      seedColor: ShqPalette.seed,
+      seedColor: accent.seed,
       brightness: Brightness.light,
     );
     return base.copyWith(
@@ -46,9 +51,9 @@ abstract final class ShqTheme {
     );
   }
 
-  static ColorScheme _darkScheme() {
+  static ColorScheme _darkScheme(ShqAccent accent) {
     final ColorScheme base = ColorScheme.fromSeed(
-      seedColor: ShqPalette.seed,
+      seedColor: accent.seed,
       brightness: Brightness.dark,
     );
     return base.copyWith(
@@ -62,10 +67,12 @@ abstract final class ShqTheme {
       onSurfaceVariant: ShqDark.onSurfaceVariant,
       outline: ShqDark.outline,
       outlineVariant: ShqDark.outlineVariant,
-      primary: ShqDark.primary,
-      onPrimary: ShqDark.onPrimary,
-      primaryContainer: ShqDark.primaryContainer,
-      onPrimaryContainer: ShqDark.onPrimaryContainer,
+      // 主色族跟色系走（手写值，见 `domain/app/accent.dart`）：
+      // fromSeed 的暗色主色偏紫灰，与冷灰骨架不搭。
+      primary: accent.darkPrimary,
+      onPrimary: accent.darkOnPrimary,
+      primaryContainer: accent.darkPrimaryContainer,
+      onPrimaryContainer: accent.darkOnPrimaryContainer,
       error: ShqDark.error,
       onError: ShqDark.onError,
       errorContainer: ShqDark.errorContainer,
@@ -324,17 +331,37 @@ abstract final class ShqTheme {
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          minimumSize: const Size(0, ShqLayout.minTouchTarget),
-          padding: const EdgeInsets.symmetric(horizontal: ShqSpace.lg),
-          elevation: 0,
-          textStyle: const TextStyle(
-            fontSize: ShqType.bodySmall,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.2,
+        // 2026-10-26 光感：主按钮带一层"强调色的低透明投影"，
+        // 按下去时高度归零（视觉上真的被按进去了），这是 iOS 18 之后
+        // 按钮的统一语言：颜色本身不变，靠一点彩色光把按钮从页面里托起来。
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll<Size>(
+            Size(0, ShqLayout.minTouchTarget),
           ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(ShqRadius.md),
+          padding: const WidgetStatePropertyAll<EdgeInsetsGeometry>(
+            EdgeInsets.symmetric(horizontal: ShqSpace.lg),
+          ),
+          textStyle: const WidgetStatePropertyAll<TextStyle>(
+            TextStyle(
+              fontSize: ShqType.bodySmall,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+            ),
+          ),
+          shape: WidgetStatePropertyAll<OutlinedBorder>(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ShqRadius.md),
+            ),
+          ),
+          elevation: WidgetStateProperty.resolveWith<double>(
+            (Set<WidgetState> states) => states.contains(WidgetState.disabled)
+                ? 0
+                : states.contains(WidgetState.pressed)
+                ? 0
+                : 1.6,
+          ),
+          shadowColor: WidgetStatePropertyAll<Color>(
+            scheme.primary.withValues(alpha: ShqGlow.actionAlpha),
           ),
         ),
       ),
@@ -375,10 +402,13 @@ abstract final class ShqTheme {
         ),
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
-        elevation: 1,
-        focusElevation: 1,
-        hoverElevation: 1,
-        highlightElevation: 2,
+        // 光感同上：FAB 是浮在内容上的，抬高比主按钮多一档。
+        // （Flutter 3.47 的 FAB 主题已移出 `shadowColor`，颜色投影只能在
+        //  具体 FAB 上用 `Material` 包一层做；这里只抬高度，够用不折腾。）
+        elevation: 2,
+        focusElevation: 2,
+        hoverElevation: 3,
+        highlightElevation: 0,
         backgroundColor: scheme.primaryContainer,
         foregroundColor: scheme.onPrimaryContainer,
         shape: RoundedRectangleBorder(
@@ -595,8 +625,7 @@ abstract final class ShqTheme {
 /// 为什么不用默认的平台转场：阅读器/设置/书架之间是"同一份内容的不同视图"，
 /// 推拉的横滑更像"打开了一个新应用"；淡入 + 极短位移更安静，也更接近
 /// iOS 的 sheet 感与 ColorOS 的"轻量切换"。
-class _FadeThroughTransitionsBuilder extends PageTransitionsBuilder {
-  const _FadeThroughTransitionsBuilder();
+class _FadeThroughTransitionsBuilder extends PageTransitionsBuilder {  const _FadeThroughTransitionsBuilder();
 
   @override
   Widget buildTransitions<T>(

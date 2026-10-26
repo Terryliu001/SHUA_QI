@@ -92,6 +92,13 @@ class _AppShellState extends ConsumerState<AppShell> {
                     decoration: BoxDecoration(
                       color: theme.colorScheme.primaryContainer,
                       borderRadius: BorderRadius.circular(ShqRadius.md),
+                      // 光感：徽标带一圈同色呼吸光，和设置里的色点同一种语言。
+                      boxShadow: ShqGlow.ring(
+                        theme.colorScheme.primary,
+                        alpha: 0.22,
+                        blur: 12,
+                        offset: const Offset(0, 2),
+                      ),
                     ),
                     child: Text(
                       '刷',

@@ -202,6 +202,9 @@ class ReaderTopActions {
               : Icons.view_day_outlined,
         ),
       // 用户 2026-10-24 第二轮：题目区域 / 缩略图 / 答题卡常驻顶栏。
+      // 2026-10-26：在"视图组"与"面板组"之间补一条分隔，
+      // 顶栏 10 个入口才有三段节奏（编辑 / 视图 / 面板），而不是一条长队。
+      if (!compact) const ReaderActionDivider(),
       _TopBarIcon(
         compact: compact,
         label: '题目',

@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/app_info.dart';
 import 'package:shuaqi/domain/ai/llm_config.dart';
 import 'package:shuaqi/domain/ai/usage.dart';
+import 'package:shuaqi/domain/app/accent.dart';
 import 'package:shuaqi/domain/reader/paper_tint.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
+import 'package:shuaqi/state/accent_provider.dart';
 import 'package:shuaqi/state/ai_providers.dart';
 import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
@@ -151,6 +153,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Widget _settingsBody() {
     final ThemeData theme = Theme.of(context);
     final ThemeMode themeMode = ref.watch(themeModeProvider);
+    final ShqAccent accent = ref.watch(accentProvider);
     final bool iconLabels = ref.watch(iconLabelsProvider);
     final bool devUnlocked = ref.watch(devOptionsUnlockedProvider);
     final ReaderPrefs defaults =
@@ -213,6 +216,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 const _Hairline(),
+                _Block(
+                  icon: Icons.palette_outlined,
+                  title: '色系',
+                  subtitle: '${accent.label} · ${accent.hint}',
+                  child: _AccentPicker(
+                    selected: accent,
+                    onSelected: (ShqAccent value) => unawaited(
+                      ref.read(accentProvider.notifier).set(value),
+                    ),
+                  ),
+                ),
+                const _Hairline(),
                 _SettingsRow(
                   icon: Icons.label_outline,
                   title: '文字模式',
@@ -229,7 +244,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 const _Hairline(),
                 const _Note(
                   '卷面配色在「阅读默认」里单独选：原图 = 白底黑字，夜读 = 黑底白字。'
-                  '两者互不影响，深色界面下也能看白底黑字的卷子。',
+                  '两者互不影响，深色界面下也能看白底黑字的卷子。'
+                  '色系只管按钮、选中态这类可点元素的颜色，纸感与判题三色不变。',
                 ),
               ],
             ),
@@ -763,6 +779,117 @@ class _ChoiceGroup<T> extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+// ── 色系 ─────────────────────────────────────────────────────────────
+
+/// 色系选择：五个色点横排，点一下立刻换整套强调色。
+///
+/// 色点用 [ShqAccent.seed] → [ShqAccent.darkPrimary] 的**同一色相两档**
+/// 做一道极浅的渐变：既是"浅色/深色都会是这个色"的暗示，也是用户要的
+/// 那点"光感"（球面感），但 26dp 的尺寸下不会显得花。
+class _AccentPicker extends StatelessWidget {
+  const _AccentPicker({required this.selected, required this.onSelected});
+
+  final ShqAccent selected;
+  final ValueChanged<ShqAccent> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    final ColorScheme scheme = theme.colorScheme;
+    return Row(
+      children: <Widget>[
+        for (final ShqAccent accent in ShqAccent.values) ...<Widget>[
+          if (accent != ShqAccent.values.first)
+            const SizedBox(width: ShqSpace.sm),
+          Expanded(
+            child: Pressable(
+              onTap: () => onSelected(accent),
+              scale: 0.94,
+              haptic: true,
+              child: AnimatedContainer(
+                duration: ShqMotion.fast,
+                curve: ShqMotion.curveStandard,
+                padding: const EdgeInsets.symmetric(
+                  vertical: ShqSpace.sm,
+                  horizontal: ShqSpace.xs,
+                ),
+                decoration: BoxDecoration(
+                  // 未选中**不描边**：五个描边小方块叠在"主题"那三个大方块
+                  // 下面会显得很碎（真机看过）。选中才浮出来，靠色点本身
+                  // 传达"这里有五个色"。
+                  color: accent == selected
+                      ? scheme.primary.withValues(alpha: 0.09)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(ShqRadius.md),
+                  border: Border.all(
+                    color: accent == selected
+                        ? scheme.primary.withValues(alpha: 0.32)
+                        : Colors.transparent,
+                  ),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    _dot(accent, scheme),
+                    const SizedBox(height: ShqSpace.xs + 2),
+                    Text(
+                      accent.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: accent == selected
+                            ? scheme.onSurface
+                            : scheme.onSurfaceVariant,
+                        fontWeight: accent == selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _dot(ShqAccent accent, ColorScheme scheme) {
+    final bool active = accent == selected;
+    return AnimatedContainer(
+      duration: ShqMotion.fast,
+      curve: ShqMotion.curveStandard,
+      width: 26,
+      height: 26,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: <Color>[accent.seed, accent.darkPrimary],
+        ),
+        // 选中时给色点一圈同色呼吸光：这就是"选中了"的视觉语言，
+        // 比加个对勾更安静（色点本身已经足够小，不再塞图标）。
+        boxShadow: active
+            ? ShqGlow.ring(
+                accent.seed,
+                alpha: 0.34,
+                blur: 12,
+                offset: const Offset(0, 2),
+              )
+            : null,
+        border: Border.all(
+          color: active
+              ? scheme.surface
+              : scheme.outlineVariant.withValues(alpha: 0.8),
+          width: active ? 2 : 1,
+        ),
+      ),
     );
   }
 }

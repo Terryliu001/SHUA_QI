@@ -72,4 +72,11 @@ abstract final class AppSettingKeys {
 
   /// 热力图显示的周数（`13` / `26` / `52`）。缺失 = 26。
   static const String recordsHeatWeeks = 'records.heat_weeks';
+
+  /// **色系**（强调色）：`azure` / `celadon` / `iris` / `clay` / `graphite`
+  /// （对应 `ShqAccent.name`）。缺失 = 靛蓝（2026-10-24 定稿那套）。
+  ///
+  /// 与 [themeMode] 分开存：深浅与色系是两件事，用户可能想"深色 + 青瓷"。
+  /// 只影响可点元素的颜色，不碰界面灰阶、纸感与判题三态色。
+  static const String uiAccent = 'ui.accent';
 }

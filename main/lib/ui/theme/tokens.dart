@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shuaqi/domain/app/accent.dart';
 import 'package:shuaqi/domain/reader/paper_tint.dart';
 
 /// 设计令牌 —— 全局唯一来源（规格 §10：常量集中在 `ui/theme/tokens.dart`）。
@@ -259,10 +260,10 @@ abstract final class ShqDark {
   static const Color outlineVariant = Color(0xFF35424B);
 
   /// 主色提亮（暗色下的可点元素要够亮），配深蓝 on 色。
-  static const Color primary = Color(0xFF8CB8F4);
-  static const Color onPrimary = Color(0xFF0A2A52);
-  static const Color primaryContainer = Color(0xFF204470);
-  static const Color onPrimaryContainer = Color(0xFFD4E3FB);
+  ///
+  /// 2026-10-26：主色族改由「色系」持有（`domain/app/accent.dart`），
+  /// 这里不再留一份固定值，避免同一个颜色两处维护、换色时漏改。
+  /// 靛蓝那套的值与 2026-10-24 定稿完全一致。
 
   /// 错误色按暗色对比度重调（M3 暗色错误是淡红，不是正红）。
   static const Color error = Color(0xFFF2B8B5);
@@ -347,4 +348,63 @@ abstract final class ShqScrim {
 
   /// 遮罩上的次要说明。
   static const Color foregroundMuted = Color(0x8FF3EFE7);
+}
+
+/// 色系 → 颜色的**唯一转换点**。
+///
+/// 十六进制值放在 `domain/app/accent.dart`（那是用户偏好数据，必须能脱离
+/// Flutter 单测）；这里负责把它们变成 `Color`，widget 侧只认这套 getter，
+/// 从而继续满足"颜色只在 tokens.dart 出现"的纪律。
+extension ShqAccentColors on ShqAccent {
+  /// 种子色：设置页的色点、以及浅色主题 `ColorScheme.fromSeed` 的输入。
+  Color get seed => Color(seedArgb);
+
+  Color get darkPrimary => Color(darkPrimaryArgb);
+  Color get darkOnPrimary => Color(darkOnPrimaryArgb);
+  Color get darkPrimaryContainer => Color(darkPrimaryContainerArgb);
+  Color get darkOnPrimaryContainer => Color(darkOnPrimaryContainerArgb);
+}
+
+/// 光感（2026-10-26 用户："可以适度在一些位置增加一点光感"）。
+///
+/// 口径写死在这里，避免每个页面各写一个 `BoxShadow`：
+/// - **只给"能按的东西"发光**：主按钮、FAB、当前选中项、浮起的面板；
+/// - 光是**强调色的低透明投影**，不是白色高光；暗色主题下同样有效
+///   （暗底上的彩色投影比黑色投影更"亮"，这正是想要的那点光）；
+/// - 透明度上限 0.32：再高就成了霓虹，与"简约"冲突；
+/// - 只用一层投影（blur ≤ 22）。多层叠加在低端机上肉眼无差，却要多次离屏合成。
+abstract final class ShqGlow {
+  /// 主按钮 / 主行动点。
+  static const double actionAlpha = 0.26;
+  static const double actionBlur = 16;
+  static const double actionLift = 3;
+
+  /// 悬浮按钮：比主按钮再亮一点点，因为它是"浮"在内容上的。
+  static const double fabAlpha = 0.32;
+  static const double fabBlur = 22;
+  static const double fabLift = 5;
+
+  /// 当前选中项（书架卡、收藏卡、分段按钮）的呼吸光。
+  static const double selectedAlpha = 0.18;
+  static const double selectedBlur = 14;
+
+  /// 浮层（底部面板 / 对话框）投影：中性黑，只负责"离开页面"。
+  static const double sheetAlpha = 0.16;
+  static const double sheetBlur = 28;
+
+  /// 一圈"呼吸光"。返回 `null` 表示不需要（例如暗色下的中性投影）。
+  static List<BoxShadow>? ring(
+    Color color, {
+    double alpha = selectedAlpha,
+    double blur = selectedBlur,
+    Offset offset = Offset.zero,
+  }) {
+    return <BoxShadow>[
+      BoxShadow(
+        color: color.withValues(alpha: alpha),
+        blurRadius: blur,
+        offset: offset,
+      ),
+    ];
+  }
 }

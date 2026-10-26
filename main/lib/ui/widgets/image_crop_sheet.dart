@@ -13,15 +13,31 @@ import 'package:shuaqi/ui/theme/tokens.dart';
 /// 而"取景框 + 缩放平移"用自管矩阵比 `InteractiveViewer` 更可控：
 /// 缩放中心必须跟着手指、图必须始终盖住取景框，这两点都要自己算。
 ///
-/// ## 交互
-/// - 暗色遮罩 + 固定取景框：框里的部分就是要留下的；
-/// - 单指拖动、双指缩放，**以手指为中心**；图始终盖住框，不会拖出空白；
-/// - 底部缩放滑条 / 重置 / 「使用这张」；
-/// - 取消不写任何东西。
+/// ## 2026-10-26 重做：整图可见 + 绝不挤压（用户报"原图被挤压，框不准"）
+///
+/// 现象：上传后预览里的原图被明显拉扁，没法按意图框选。
+///
+/// 根因（两个，叠在一起）：
+/// 1. **约束把图夹回视口**：图被 `Positioned.fill` 的紧约束包着，
+///    `SizedBox(width: base.width, ...)` 会走 `BoxConstraints.enforce`
+///    被夹成视口尺寸，于是 `RawImage(fit: BoxFit.fill)` 把图按视口宽高比
+///    硬拉 —— 这才叫"挤压"。修法：用 [OverflowBox] 解除上界，
+///    再 `ClipRect` 裁掉溢出部分，`BoxFit.contain` 兜底（尺寸对不上时
+///    宁可留边也绝不拉伸）。
+/// 2. **一进来就 cover 到视口**：图被放到"刚好盖满视口"，竖构图只看得到
+///    中间一条，用户看不到全图自然框不准。修法见下。
+///
+/// 现在的口径（用户明确："底层要是原图的完整展示"）：
+/// - 底层恒为 **contain**：整张原图完整落在视口里，`scale = 1` 就是全图；
+/// - 取景框按目标比例**内接在图里**（不是内接在屏幕里），所以 `scale = 1`
+///   时框一定被图盖满，**任何时刻都不会裁出空白**；
+/// - 缩放范围 `1×..8×`，放大后以手指为中心、四边夹住不让拖出框；
+/// - 拖动 / 双指缩放是直接跟手的（不走手势竞技场）；按钮与「重置」走
+///   220ms 缓动，手感才是"灵动"而不是瞬移。
 ///
 /// ## 输出
-/// 按 [CropKind.outWidth] × [CropKind.outHeight] 输出 PNG。
-/// 封面的高由 `宽 / 比例` 算，不再写死正方形（横向封面会被压扁）。
+/// 按 [CropKind.outWidth] × [CropKind.outputHeight] 输出 PNG，
+/// 比例恒等于取景框比例（封面不再被压扁）。
 class CropKind {
   const CropKind({
     required this.title,
@@ -87,19 +103,21 @@ class _CropPage extends StatefulWidget {
   State<_CropPage> createState() => _CropPageState();
 }
 
-class _CropPageState extends State<_CropPage> {
+class _CropPageState extends State<_CropPage>
+    with SingleTickerProviderStateMixin {
   ui.Image? _image;
   String? _error;
 
-  // 缩放与平移自己管：显示矩形 = (offset, base * scale)。
-  // 不依赖 InteractiveViewer 的矩阵语义，裁剪换算与显示矩形同一口径。
+  // 显示变换：图左上角 = [_offset]，尺寸 = [_base] × [_scale]。
+  // 自己管矩阵而不是 `InteractiveViewer`：裁剪换算与显示矩形用同一口径，
+  // 不会出现"看到的和裁出来的不是一块"。
   double _scale = 1;
   Offset _offset = Offset.zero;
 
-  /// 图片在视口里"scale = 1"时的尺寸（按 cover 铺满视口）。
+  /// `scale = 1` 时的图片显示尺寸（**contain** 进视口，保持原图宽高比）。
   Size _base = Size.zero;
 
-  /// 取景框在视口里的位置。
+  /// 取景框在视口里的位置（大小由目标比例 + 图在 1× 时能盖住多少决定）。
   Rect _frame = Rect.zero;
 
   Size _viewport = Size.zero;
@@ -107,13 +125,26 @@ class _CropPageState extends State<_CropPage> {
   /// 本次布局是否已经初始化过缩放/平移。
   bool _layoutReady = false;
 
-  double _minScale = 1;
-  double _maxScale = 8;
+  /// 下限 1 = 整张原图完整可见；上限给到 8×（再大就是看像素颗粒了）。
+  static const double _minScale = 1;
+  static const double _maxScale = 8;
+
+  /// 用户是否已经动过图（第一次动之后提示语淡出）。
+  bool _touched = false;
+
+  /// 按钮/重置的缓动，避免"瞬移"。
+  late final AnimationController _zoomCtl = AnimationController(
+    vsync: this,
+    duration: ShqMotion.base,
+  )..addListener(_onZoomTick);
+  double _fromScale = 1;
+  double _toScale = 1;
+  Offset _fromOffset = Offset.zero;
+  Offset _toOffset = Offset.zero;
 
   // 手势起点快照。
   double _startScale = 1;
   Offset _startOffset = Offset.zero;
-  Offset _startFocal = Offset.zero;
   Offset _startImagePoint = Offset.zero;
 
   /// 原始指针：不用 GestureDetector 的竞技场，单指平移 / 双指缩放自己算。
@@ -130,6 +161,7 @@ class _CropPageState extends State<_CropPage> {
 
   @override
   void dispose() {
+    _zoomCtl.dispose();
     _image?.dispose();
     super.dispose();
   }
@@ -176,6 +208,7 @@ class _CropPageState extends State<_CropPage> {
             style: TextButton.styleFrom(foregroundColor: ShqScrim.foreground),
             child: const Text('取消'),
           ),
+          const SizedBox(width: ShqSpace.sm),
         ],
       ),
       body: _error != null
@@ -212,13 +245,10 @@ class _CropPageState extends State<_CropPage> {
                   IconButton(
                     tooltip: '缩小',
                     onPressed: ready
-                        ? () => _setScaleAround(
-                            _frame.center,
-                            (_scale / 1.25).clamp(_minScale, _maxScale),
-                          )
+                        ? () => _zoomBy(1 / 1.25)
                         : null,
                     icon: const Icon(
-                      Icons.zoom_out,
+                      Icons.remove,
                       color: ShqScrim.foreground,
                       size: 20,
                     ),
@@ -236,14 +266,9 @@ class _CropPageState extends State<_CropPage> {
                   ),
                   IconButton(
                     tooltip: '放大',
-                    onPressed: ready
-                        ? () => _setScaleAround(
-                            _frame.center,
-                            (_scale * 1.25).clamp(_minScale, _maxScale),
-                          )
-                        : null,
+                    onPressed: ready ? () => _zoomBy(1.25) : null,
                     icon: const Icon(
-                      Icons.zoom_in,
+                      Icons.add,
                       color: ShqScrim.foreground,
                       size: 20,
                     ),
@@ -257,14 +282,16 @@ class _CropPageState extends State<_CropPage> {
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: ShqSpace.xs),
               Row(
                 children: <Widget>[
                   Expanded(
                     child: Text(
-                      '输出 ${widget.kind.outWidth} × ${widget.kind.outputHeight}',
+                      '缩放 ${_scale.toStringAsFixed(1)}× · '
+                      '输出 ${widget.kind.outWidth} × '
+                      '${widget.kind.outputHeight}',
                       style: theme.textTheme.labelSmall?.copyWith(
-                        color: ShqScrim.foreground.withValues(alpha: 0.62),
+                        color: ShqScrim.foregroundMuted,
                       ),
                     ),
                   ),
@@ -294,11 +321,36 @@ class _CropPageState extends State<_CropPage> {
         if (viewport.width <= 0 || viewport.height <= 0) {
           return const SizedBox.shrink();
         }
-        // 取景框：按比例，尽量占满视口（留边）。
-        double frameW = viewport.width - 32;
+        // 视口内留一点边：图贴到屏幕边缘时，取景框四角会看不清。
+        final Rect fitBox = (Offset.zero & viewport).deflate(ShqSpace.md);
+        if (fitBox.width <= 0 || fitBox.height <= 0) {
+          return const SizedBox.shrink();
+        }
+
+        // ① 基础尺寸 = **contain**：整张原图完整落在视口里（不裁、不挤压）。
+        final double containScale = math.min(
+          fitBox.width / image.width,
+          fitBox.height / image.height,
+        );
+        final Size base = Size(
+          image.width * containScale,
+          image.height * containScale,
+        );
+
+        // ② 取景框 = 目标比例的最大矩形，且**必须内接在图里**。
+        //    这样 scale = 1（全图）时框一定被盖满，任何时刻都不会裁出空白，
+        //    用户也不必先放大才能裁。
+        double frameW = math.min(
+          fitBox.width,
+          fitBox.height * widget.kind.aspectRatio,
+        );
         double frameH = frameW / widget.kind.aspectRatio;
-        if (frameH > viewport.height - 32) {
-          frameH = viewport.height - 32;
+        if (frameW > base.width) {
+          frameW = base.width;
+          frameH = frameW / widget.kind.aspectRatio;
+        }
+        if (frameH > base.height) {
+          frameH = base.height;
           frameW = frameH * widget.kind.aspectRatio;
         }
         final Rect frame = Rect.fromCenter(
@@ -307,32 +359,17 @@ class _CropPageState extends State<_CropPage> {
           height: frameH,
         );
 
-        // 基础尺寸按 **cover** 铺满视口：图不会在框里露出空白。
-        final double coverScale = math.max(
-          viewport.width / image.width,
-          viewport.height / image.height,
-        );
-        final Size base = Size(
-          image.width * coverScale,
-          image.height * coverScale,
-        );
-        final double minScale = math.max(
-          frame.width / base.width,
-          frame.height / base.height,
-        );
-        final double maxScale = math.max(8.0, minScale * 6);
         final bool layoutChanged =
             _viewport != viewport || _frame != frame || _base != base;
         _viewport = viewport;
         _frame = frame;
         _base = base;
-        _minScale = minScale;
-        _maxScale = maxScale;
 
-        // 布局第一次就位 / 旋转 / 尺寸变化：把图放大到刚好填满取景框。
-        // 这里在 build 里，不能 setState；直接赋值后本帧的 Transform 就生效。
+        // 布局第一次就位 / 旋转 / 尺寸变化：回到"全图居中"。
+        // 在 build 里不能 setState，直接赋值后本帧的 Transform 就生效。
         if (!_layoutReady || layoutChanged) {
           _layoutReady = true;
+          _zoomCtl.stop();
           _resetInternal();
         } else {
           _scale = _scale.clamp(_minScale, _maxScale);
@@ -341,6 +378,12 @@ class _CropPageState extends State<_CropPage> {
 
         return Stack(
           children: <Widget>[
+            // 图在底层铺满整个视口（超出部分裁掉，不参与布局测量）。
+            //
+            // **OverflowBox + ClipRect 是修"挤压"的关键**：
+            // 直接 `Positioned.fill` 会把 SizedBox 夹成视口尺寸，
+            // 再 `fill` 就是按视口比例拉伸。放开上界后 SizedBox 才是
+            // 真实尺寸，contain 也就永远不会变形。
             Positioned.fill(
               child: Listener(
                 behavior: HitTestBehavior.opaque,
@@ -348,15 +391,29 @@ class _CropPageState extends State<_CropPage> {
                 onPointerMove: _onPointerMove,
                 onPointerUp: _onPointerUp,
                 onPointerCancel: _onPointerUp,
-                child: Transform(
-                  transform: Matrix4.identity()
-                    ..translateByDouble(_offset.dx, _offset.dy, 0, 1)
-                    ..scaleByDouble(_scale, _scale, 1, 1),
-                  alignment: Alignment.topLeft,
-                  child: SizedBox(
-                    width: base.width,
-                    height: base.height,
-                    child: RawImage(image: image, fit: BoxFit.fill),
+                child: ClipRect(
+                  child: OverflowBox(
+                    alignment: Alignment.topLeft,
+                    minWidth: 0,
+                    maxWidth: double.infinity,
+                    minHeight: 0,
+                    maxHeight: double.infinity,
+                    child: Transform(
+                      transform: Matrix4.identity()
+                        ..translateByDouble(_offset.dx, _offset.dy, 0, 1)
+                        ..scaleByDouble(_scale, _scale, 1, 1),
+                      alignment: Alignment.topLeft,
+                      child: SizedBox(
+                        width: base.width,
+                        height: base.height,
+                        child: RawImage(
+                          image: image,
+                          // contain：尺寸万一算错也只留边，绝不拉伸。
+                          fit: BoxFit.contain,
+                          filterQuality: FilterQuality.medium,
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -370,26 +427,30 @@ class _CropPageState extends State<_CropPage> {
                 ),
               ),
             ),
-            // 提示语放在最上层：压在图上时图可能把它盖住（真机踩到）。
+            // 提示语：第一次动过就淡出，不常驻抢视线。
             Positioned(
-              left: 0,
-              right: 0,
-              bottom: 12,
+              left: ShqSpace.lg,
+              right: ShqSpace.lg,
+              bottom: ShqSpace.md,
               child: IgnorePointer(
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: ShqSpace.md,
-                      vertical: ShqSpace.xs,
-                    ),
-                    decoration: BoxDecoration(
-                      color: ShqScrim.backdrop.withValues(alpha: 0.72),
-                      borderRadius: BorderRadius.circular(ShqRadius.pill),
-                    ),
-                    child: Text(
-                      '拖动或双指缩放，把要留下的部分放进框里',
-                      style: Theme.of(context).textTheme.labelSmall
-                          ?.copyWith(color: ShqScrim.foreground),
+                child: AnimatedOpacity(
+                  opacity: _touched ? 0 : 1,
+                  duration: ShqMotion.fast,
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: ShqSpace.md,
+                        vertical: ShqSpace.xs,
+                      ),
+                      decoration: BoxDecoration(
+                        color: ShqScrim.backdrop.withValues(alpha: 0.66),
+                        borderRadius: BorderRadius.circular(ShqRadius.pill),
+                      ),
+                      child: Text(
+                        '整张图都在这里 · 双指放大后拖动框位',
+                        style: Theme.of(context).textTheme.labelSmall
+                            ?.copyWith(color: ShqScrim.foregroundMuted),
+                      ),
                     ),
                   ),
                 ),
@@ -402,14 +463,18 @@ class _CropPageState extends State<_CropPage> {
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    _zoomCtl.stop();
+    if (!_touched) {
+      setState(() => _touched = true);
+    }
     _pointers[event.pointer] = event.localPosition;
     if (_pointers.length >= 2) {
       final List<Offset> pts = _pointers.values.toList();
       _startScale = _scale;
       _startOffset = _offset;
-      _startFocal = (pts[0] + pts[1]) / 2;
+      final Offset focal = (pts[0] + pts[1]) / 2;
       _pinchStartDistance = (pts[0] - pts[1]).distance;
-      _startImagePoint = (_startFocal - _startOffset) / _startScale;
+      _startImagePoint = (focal - _startOffset) / _startScale;
       _lastPan = null;
     } else {
       _lastPan = event.localPosition;
@@ -461,30 +526,60 @@ class _CropPageState extends State<_CropPage> {
     if (!_layoutReady) {
       return;
     }
-    setState(_resetInternal);
+    _animateTo(_minScale, _offsetForScale(_minScale));
   }
 
   void _resetInternal() {
     _scale = _minScale;
-    _offset = _clampOffset(
+    _offset = _offsetForScale(_scale);
+  }
+
+  /// `scale` 下"图居中于取景框"的偏移。
+  Offset _offsetForScale(double scale) {
+    return _clampOffset(
       Offset(
-        _frame.center.dx - _base.width * _scale / 2,
-        _frame.center.dy - _base.height * _scale / 2,
+        _frame.center.dx - _base.width * scale / 2,
+        _frame.center.dy - _base.height * scale / 2,
       ),
-      _scale,
+      scale,
     );
   }
 
-  void _setScaleAround(Offset focal, double nextScale) {
+  void _zoomBy(double factor) {
+    _setScaleAround(_frame.center, _scale * factor, animate: true);
+  }
+
+  void _setScaleAround(Offset focal, double nextScale, {bool animate = false}) {
     final double scale = nextScale.clamp(_minScale, _maxScale);
     if ((scale - _scale).abs() < 0.0001) {
       return;
     }
     final Offset imagePoint = (focal - _offset) / _scale;
     final Offset nextOffset = focal - imagePoint * scale;
+    if (animate) {
+      _animateTo(scale, nextOffset);
+    } else {
+      setState(() {
+        _scale = scale;
+        _offset = _clampOffset(nextOffset, scale);
+      });
+    }
+  }
+
+  void _animateTo(double scale, Offset offset) {
+    final double target = scale.clamp(_minScale, _maxScale);
+    _fromScale = _scale;
+    _toScale = target;
+    _fromOffset = _offset;
+    _toOffset = _clampOffset(offset, target);
+    _zoomCtl.forward(from: 0);
+  }
+
+  void _onZoomTick() {
+    final double t = ShqMotion.curveStandard.transform(_zoomCtl.value);
     setState(() {
-      _scale = scale;
-      _offset = _clampOffset(nextOffset, scale);
+      _scale = _fromScale + (_toScale - _fromScale) * t;
+      _offset = Offset.lerp(_fromOffset, _toOffset, t)!;
     });
   }
 
@@ -574,7 +669,7 @@ class _FramePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final Paint shade = Paint()
-      ..color = ShqScrim.backdrop.withValues(alpha: 0.58);
+      ..color = ShqScrim.backdrop.withValues(alpha: 0.55);
     final Path outside = Path()
       ..addRect(Offset.zero & size)
       ..fillType = PathFillType.evenOdd;
@@ -589,7 +684,7 @@ class _FramePainter extends CustomPainter {
       final Paint thin = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 0.8
-        ..color = ShqScrim.foreground.withValues(alpha: 0.28);
+        ..color = ShqScrim.foreground.withValues(alpha: 0.22);
       for (int i = 1; i <= 2; i += 1) {
         final double x = frame.left + frame.width * i / 3;
         final double y = frame.top + frame.height * i / 3;
@@ -598,13 +693,20 @@ class _FramePainter extends CustomPainter {
       }
     }
 
+    // 描边：先压一层半透明黑再压白线，亮图（试卷白纸）上白线才看得出来。
+    final Paint borderShadow = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.6
+      ..color = ShqScrim.backdrop.withValues(alpha: 0.35);
     final Paint border = Paint()
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
+      ..strokeWidth = 1.6
       ..color = ShqScrim.foreground;
     if (circular) {
+      canvas.drawOval(frame, borderShadow);
       canvas.drawOval(frame, border);
     } else {
+      canvas.drawRect(frame, borderShadow);
       canvas.drawRect(frame, border);
     }
 
@@ -615,7 +717,7 @@ class _FramePainter extends CustomPainter {
         ..strokeWidth = 4
         ..strokeCap = StrokeCap.round
         ..color = ShqScrim.foreground;
-      const double len = 18;
+      const double len = 16;
       final List<(Offset, Offset)> corners = <(Offset, Offset)>[
         (frame.topLeft, frame.topLeft + const Offset(len, 0)),
         (frame.topLeft, frame.topLeft + const Offset(0, len)),
@@ -624,7 +726,7 @@ class _FramePainter extends CustomPainter {
         (frame.bottomLeft, frame.bottomLeft + const Offset(len, 0)),
         (frame.bottomLeft, frame.bottomLeft - const Offset(0, len)),
         (frame.bottomRight, frame.bottomRight - const Offset(len, 0)),
-        (frame.bottomRight, frame.bottomRight - const Offset(0, len)),
+        (frame.bottomRight, frame.bottomRight + const Offset(0, len)),
       ];
       for (final (Offset a, Offset b) in corners) {
         canvas.drawLine(a, b, corner);
