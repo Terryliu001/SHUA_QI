@@ -289,7 +289,7 @@
 | 图形吸附 | `domain/ink/shape_recognition.dart` | 停笔 500ms → 预览 → 抬笔确认；直线/矩形/正方形/圆/椭圆/三角/平行四边形；残差拒识 + 可取消 |
 | 反馈远端 | `FEEDBACK_ENDPOINT` + `server/feedback-worker/` | 配了走 GitHub 私有仓库 issue；没配只存本机；失败落草稿不假成功 |
 | 导出命名 | `domain/export/export_options.dart` | 默认 `卷名_内容_yyyyMMdd-HHmm.pdf`；内容段随勾选；可手改 |
-| 词云 | `ui/records/records_word_cloud.dart` | 每个字独立粒子；拖动搅动附近字；`elasticOut` 回 home 重拼词；布局确定 |
+| 词云 | `ui/records/records_word_cloud.dart` | 每个字是带速度的粒子；整框沙盘搅动；松手随机词目标 + 弹簧归位；同词共用目标；粒子撞边不出去；多字按面积缩字号并 `+N` |
 | 时间线分组 | `TimelineWorkbook.groupKey` / `workbookId` | 前者只做展开/去重；后者必须是真实来源卷 id，打开卷不能传错 |
 | AI 答案 | `answers_ai.v1.json` + `_liveAiAnswers` | 每补一题立刻写盘 + 当前页内存覆盖；不 invalidate 跳页；进卷刷新 provider |
 
@@ -306,7 +306,7 @@
 6. AI Key 换 `flutter_secure_storage`（现仍明文存 setting）。
 7. 小项：`workbook.folder` 旧列清空；文件夹拖动排序 UI；标签点击筛书架；
    删除本卷时提示补充"组卷成员一并移除"。
-8. **UI 与交互优化**（用户指定下一轮；见 `072`）：词云可发现性/命中区/手感、时间线落点提示、批量收藏状态、AI 逐题进度、返回键语义统一。
+8. **UI 与交互优化**（用户指定下一轮；见 `072`）：词云沙盘手感/大量文字呈现、时间线落点提示、批量收藏状态、AI 逐题进度、返回键语义统一。
 
 ## 6. 索引（现行 36 篇）
 
