@@ -73,6 +73,40 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
     });
   }
 
+  /// 在整个词云上做命中：点哪个字就搅哪个字；点空白取最近的字。
+  /// 每个字不再各自装 GestureDetector，避免小字命中区太窄/被父层滚动抢走。
+  int? _hitGlyph(Offset position, _CloudLayout layout) {
+    int? nearest;
+    double nearestDistance = 28;
+    for (int i = 0; i < layout.glyphs.length; i += 1) {
+      final _Glyph glyph = layout.glyphs[i];
+      final Offset at = glyph.home + (_offsets[i] ?? Offset.zero);
+      final Rect rect = Rect.fromLTWH(
+        at.dx,
+        at.dy,
+        glyph.painter.width,
+        glyph.painter.height,
+      );
+      if (rect.contains(position)) {
+        return i;
+      }
+      final double distance = (rect.center - position).distance;
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
+
+  void _startAt(Offset position, _CloudLayout layout) {
+    final int? index = _hitGlyph(position, layout);
+    if (index == null) {
+      return;
+    }
+    _start(index);
+  }
+
   void _update(int index, Offset delta, Size size, _CloudLayout layout) {
     final _Glyph glyph = layout.glyphs[index];
     final Offset current = _offsets[index] ?? Offset.zero;
@@ -193,10 +227,25 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
               final List<Offset> offsets = <Offset>[
                 for (int i = 0; i < layout.glyphs.length; i += 1) _offsetFor(i),
               ];
-              return Stack(
-                children: <Widget>[
-                  Positioned.fill(
-                    child: IgnorePointer(
+              // 整块词云一个手势识别器：按下的位置命中哪个字就拖哪个字。
+              // 比"每个字一个 GestureDetector"稳：小字也有 28px 的最近命中兜底，
+              // 也不会因为逐字重建把手势打断。
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanStart: (DragStartDetails details) =>
+                    _startAt(details.localPosition, layout),
+                onPanUpdate: (DragUpdateDetails details) {
+                  final int? active = _active;
+                  if (active != null) {
+                    _update(active, details.delta, size, layout);
+                  }
+                },
+                onPanEnd: (_) => _release(),
+                onPanCancel: _release,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: <Widget>[
+                    IgnorePointer(
                       child: CustomPaint(
                         painter: _CloudPainter(
                           layout: layout,
@@ -205,23 +254,8 @@ class _RecordsWordCloudState extends State<RecordsWordCloud>
                         ),
                       ),
                     ),
-                  ),
-                  for (int i = 0; i < layout.glyphs.length; i += 1)
-                    Positioned(
-                      left: layout.glyphs[i].home.dx + offsets[i].dx,
-                      top: layout.glyphs[i].home.dy + offsets[i].dy,
-                      width: layout.glyphs[i].painter.width,
-                      height: layout.glyphs[i].painter.height,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onPanStart: (_) => _start(i),
-                        onPanUpdate: (DragUpdateDetails details) =>
-                            _update(i, details.delta, size, layout),
-                        onPanEnd: (_) => _release(),
-                        onPanCancel: _release,
-                      ),
-                    ),
-                ],
+                  ],
+                ),
               );
             },
           );
