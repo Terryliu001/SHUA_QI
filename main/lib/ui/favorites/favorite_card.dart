@@ -56,6 +56,12 @@ class FavoriteCard extends ConsumerWidget {
       scale: 0.985,
       child: Card(
         clipBehavior: Clip.antiAlias,
+        // 选中光晕（2026-10-26）：与书架卡同一套（`ShqGlow.selectedAlpha`）。
+        // 这里已经有主色描边，再加一圈同色光，"已选中"在暗色卡片墙上一眼可见。
+        elevation: picked == true ? 6 : 0,
+        shadowColor: picked == true
+            ? scheme.primary.withValues(alpha: ShqGlow.selectedAlpha)
+            : null,
         shape: picked == true
             ? RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(ShqRadius.lg),

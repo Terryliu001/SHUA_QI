@@ -385,8 +385,8 @@ abstract final class ShqGlow {
   static const double fabLift = 5;
 
   /// 当前选中项（书架卡、收藏卡、分段按钮）的呼吸光。
-  static const double selectedAlpha = 0.18;
-  static const double selectedBlur = 14;
+  static const double selectedAlpha = 0.26;
+  static const double selectedBlur = 16;
 
   /// 浮层（底部面板 / 对话框）投影：中性黑，只负责"离开页面"。
   static const double sheetAlpha = 0.16;

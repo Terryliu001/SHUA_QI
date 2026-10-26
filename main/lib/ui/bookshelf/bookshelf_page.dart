@@ -1933,6 +1933,13 @@ class _WorkbookTile extends ConsumerWidget {
               color: selected
                   ? theme.colorScheme.primaryContainer.withValues(alpha: 0.28)
                   : null,
+              // 列表行同款选中光晕（见大图卡注释）。
+              elevation: selected ? 5 : 0,
+              shadowColor: selected
+                  ? theme.colorScheme.primary.withValues(
+                      alpha: ShqGlow.selectedAlpha,
+                    )
+                  : null,
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(
                   ShqSpace.md,
@@ -2149,6 +2156,13 @@ class _WorkbookGridTile extends ConsumerWidget {
               clipBehavior: Clip.antiAlias,
               color: selected
                   ? scheme.primaryContainer.withValues(alpha: 0.28)
+                  : null,
+              // 选中光晕（2026-10-26）：多选时卡片带一圈同色光。
+              // 走 Card 自己的 elevation + shadowColor，而不是外面再包一层：
+              // 少一层 widget、不用重排缩进，阴影形状天生跟圆角一致。
+              elevation: selected ? 6 : 0,
+              shadowColor: selected
+                  ? scheme.primary.withValues(alpha: ShqGlow.selectedAlpha)
                   : null,
               child: LayoutBuilder(
                 builder: (BuildContext context, BoxConstraints constraints) {
