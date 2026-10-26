@@ -42,6 +42,9 @@ class RecordsPage extends ConsumerStatefulWidget {
 }
 
 class _RecordsPageState extends ConsumerState<RecordsPage> {
+  /// 页首实际宽度（含壳层侧栏占位）；裁封面按它算比例，不能用整块屏幕宽。
+  final GlobalKey _headerKey = GlobalKey();
+
   /// 词云维度：默认按科目（文件夹），可切到题型。
   bool _cloudByKind = false;
 
@@ -58,7 +61,9 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
       }
     });
 
-    final AsyncValue<RecordsOverview> async = ref.watch(recordsOverviewProvider);
+    final AsyncValue<RecordsOverview> async = ref.watch(
+      recordsOverviewProvider,
+    );
     final AsyncValue<ProfileData> profileAsync = ref.watch(profileProvider);
 
     return Scaffold(
@@ -70,6 +75,7 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
             SliverToBoxAdapter(
               child: profileAsync.maybeWhen(
                 data: (ProfileData profile) => RecordsProfileHeader(
+                  key: _headerKey,
                   profile: profile,
                   avatarFile: ref.read(profileStoreProvider).avatarFile(),
                   coverFile: ref.read(profileStoreProvider).coverFile(),
@@ -246,9 +252,7 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
       showDragHandle: true,
       backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(
-          top: Radius.circular(ShqRadius.xl),
-        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(ShqRadius.xl)),
       ),
       builder: (BuildContext context) => SafeArea(
         child: Column(
@@ -334,8 +338,10 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
                 foregroundImage: profile.hasAvatar
                     ? FileImage(store.avatarFile())
                     : null,
-                onForegroundImageError:
-                    (Object error, StackTrace? stackTrace) {},
+                onForegroundImageError: (
+                  Object error,
+                  StackTrace? stackTrace,
+                ) {},
                 child: profile.hasAvatar
                     ? null
                     : Icon(
@@ -426,9 +432,13 @@ class _RecordsPageState extends ConsumerState<RecordsPage> {
     if (!mounted) {
       return;
     }
-    // 封面的取景比例 = 页首实宽 : 230dp（页首高度），裁出来就是显示的样子。
-    final double coverAspect =
-        MediaQuery.sizeOf(context).width / 230;
+    // 封面的取景比例 = 页首**实际**宽 : 230dp。
+    // 不能用 MediaQuery.width：平板有左侧栏，实际页首比整屏窄；
+    // 用整屏宽会把裁切框拉得比最终显示更宽，图在页首会被横向拉长。
+    final Size? headerSize = _headerKey.currentContext?.size;
+    final double headerWidth =
+        headerSize?.width ?? MediaQuery.sizeOf(context).width;
+    final double coverAspect = headerWidth / 230;
     final Uint8List? cropped = await showImageCropSheet(
       context,
       bytes: bytes,
@@ -605,9 +615,8 @@ class _TextEditDialogState extends State<_TextEditDialog> {
             Text(
               '留空即不显示。昵称最多 ${ProfileStore.maxNameLength} 字，'
               '格言最多 ${ProfileStore.maxMottoLength} 字。',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.labelSmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ],
         ),
@@ -717,120 +726,122 @@ class _HeatCard extends ConsumerWidget {
         behavior: HitTestBehavior.translucent,
         onTap: picked == null ? null : onClear,
         child: Padding(
-        padding: const EdgeInsets.fromLTRB(
-          ShqSpace.lg,
-          ShqSpace.lg,
-          ShqSpace.lg,
-          ShqSpace.md,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Text(
-                  '作答热力图',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(width: ShqSpace.sm),
-                // 范围可点：13 / 26 / 52 周（用户第 8 条"显示数量上限设置"）。
-                Pressable(
-                  onTap: () => _pickRange(context, ref, weekCount),
-                  scale: 0.95,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: ShqSpace.xs,
-                      vertical: 2,
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: <Widget>[
-                        Text(
-                          _rangeLabel(weekCount),
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.onSurfaceVariant,
-                          ),
-                        ),
-                        const SizedBox(width: 2),
-                        Icon(
-                          Icons.expand_more,
-                          size: 15,
-                          color: scheme.outline,
-                        ),
-                      ],
+          padding: const EdgeInsets.fromLTRB(
+            ShqSpace.lg,
+            ShqSpace.lg,
+            ShqSpace.lg,
+            ShqSpace.md,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  Text(
+                    '作答热力图',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
-                ),
-                const Spacer(),
-                Text(
-                  '${overview.activeDays} 天有记录',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: ShqSpace.md),
-            RecordsHeatmap(
-              weeks: weeks,
-              today: today,
-              selectedDay: picked,
-              onPick: onPick,
-            ),
-            const SizedBox(height: ShqSpace.md),
-            Row(
-              children: <Widget>[
-                Text(
-                  '少',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(width: ShqSpace.xs),
-                for (int level = 1; level <= 5; level += 1)
-                  Container(
-                    width: 10,
-                    height: 10,
-                    margin: const EdgeInsets.symmetric(horizontal: 1),
-                    decoration: BoxDecoration(
-                      color: ShqHeat.level(
-                        level,
-                        dark: theme.brightness == Brightness.dark,
+                  const SizedBox(width: ShqSpace.sm),
+                  // 范围可点：13 / 26 / 52 周（用户第 8 条"显示数量上限设置"）。
+                  Pressable(
+                    onTap: () => _pickRange(context, ref, weekCount),
+                    scale: 0.95,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: ShqSpace.xs,
+                        vertical: 2,
                       ),
-                      borderRadius: BorderRadius.circular(2.5),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          Text(
+                            _rangeLabel(weekCount),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          Icon(
+                            Icons.expand_more,
+                            size: 15,
+                            color: scheme.outline,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
-                const SizedBox(width: ShqSpace.xs),
-                Text(
-                  '多',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-                const Spacer(),
-                Flexible(
-                  child: Text(
-                    // 用相对日（今天/昨天/前天/10月24日）而不是完整日期：
-                    // 2/5 栏里 "10月25日 周日 · 3 题 · 2 卷" 会被省略号截掉后半段。
-                    picked == null
-                        ? '点格子看当天'
-                        : '${RecordTime.relativeDay(picked, today: today)} · '
-                              '${pickedStat?.questions ?? 0} 题 · '
-                              '${pickedStat?.workbooks ?? 0} 卷',
-                    textAlign: TextAlign.right,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  const Spacer(),
+                  Text(
+                    '${overview.activeDays} 天有记录',
                     style: theme.textTheme.labelSmall?.copyWith(
-                      color: picked == null ? scheme.outline : scheme.onSurface,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ],
-        ),
+                ],
+              ),
+              const SizedBox(height: ShqSpace.md),
+              RecordsHeatmap(
+                weeks: weeks,
+                today: today,
+                selectedDay: picked,
+                onPick: onPick,
+              ),
+              const SizedBox(height: ShqSpace.md),
+              Row(
+                children: <Widget>[
+                  Text(
+                    '少',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: ShqSpace.xs),
+                  for (int level = 1; level <= 5; level += 1)
+                    Container(
+                      width: 10,
+                      height: 10,
+                      margin: const EdgeInsets.symmetric(horizontal: 1),
+                      decoration: BoxDecoration(
+                        color: ShqHeat.level(
+                          level,
+                          dark: theme.brightness == Brightness.dark,
+                        ),
+                        borderRadius: BorderRadius.circular(2.5),
+                      ),
+                    ),
+                  const SizedBox(width: ShqSpace.xs),
+                  Text(
+                    '多',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  Flexible(
+                    child: Text(
+                      // 用相对日（今天/昨天/前天/10月24日）而不是完整日期：
+                      // 2/5 栏里 "10月25日 周日 · 3 题 · 2 卷" 会被省略号截掉后半段。
+                      picked == null
+                          ? '点格子看当天'
+                          : '${RecordTime.relativeDay(picked, today: today)} · '
+                                '${pickedStat?.questions ?? 0} 题 · '
+                                '${pickedStat?.workbooks ?? 0} 卷',
+                      textAlign: TextAlign.right,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: picked == null
+                            ? scheme.outline
+                            : scheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
