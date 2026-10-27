@@ -32,3 +32,6 @@ main/demo_assets/papers/
 main/demo_assets/verify/
 Rpage/download/
 *.jks
+
+# 真实试卷（只在本机演示用，不进仓库）
+main/demo_assets/*.pdf
