@@ -1,8 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/app/app_info.dart';
 import 'package:shuaqi/app/backup/backup_service.dart';
+import 'package:shuaqi/app/feedback/feedback_config.dart';
+import 'package:shuaqi/app/feedback/feedback_outbox.dart';
+import 'package:shuaqi/app/feedback/github_feedback_gateway.dart';
 import 'package:shuaqi/app/feedback/http_feedback_gateway.dart';
-import 'package:shuaqi/app/feedback/local_feedback_gateway.dart';
 import 'package:shuaqi/app/storage/cache_service.dart';
 import 'package:shuaqi/domain/feedback/feedback.dart';
 import 'package:shuaqi/state/app_providers.dart';
@@ -30,16 +32,38 @@ final Provider<BackupService> backupServiceProvider = Provider<BackupService>((
   );
 });
 
-/// 反馈通道：配了 `FEEDBACK_ENDPOINT` 走远端；否则本机暂存并明说"未接通"。
-/// 远端失败时 [HttpFeedbackGateway] 会落本机草稿，不假装成功。
-final Provider<FeedbackGateway> feedbackGatewayProvider =
-    Provider<FeedbackGateway>((Ref ref) {
-      final String endpoint = kFeedbackEndpoint.trim();
-      if (endpoint.isEmpty) {
-        return LocalFeedbackGateway(vault: ref.watch(vaultProvider));
+/// 编译期反馈通道配置（`--dart-define=...`）。
+final Provider<FeedbackRemoteConfig> feedbackRemoteConfigProvider =
+    Provider<FeedbackRemoteConfig>(
+      (Ref ref) => FeedbackRemoteConfig.fromEnvironment(),
+    );
+
+/// 远端通道实现；null = 没配（只落本机草稿箱，界面明说没发出去）。
+///
+/// 优先级：GitHub 私有仓库 > 自建 HTTP 端点。两者都不配时不返回
+/// [LocalFeedbackGateway] 之类的"假网关"——本地落盘由 [FeedbackOutbox] 负责，
+/// 不再多一层会写重复草稿的实现。
+final Provider<FeedbackGateway?> feedbackRemoteGatewayProvider =
+    Provider<FeedbackGateway?>((Ref ref) {
+      final FeedbackRemoteConfig config = ref.watch(feedbackRemoteConfigProvider);
+      if (config.hasGitHub) {
+        return GitHubFeedbackGateway(
+          token: config.githubToken,
+          owner: config.githubOwner,
+          repo: config.githubRepo,
+          branch: config.githubBranch,
+        );
       }
-      return HttpFeedbackGateway(
-        endpoint: endpoint,
-        vault: ref.watch(vaultProvider),
-      );
+      if (config.hasEndpoint) {
+        return HttpFeedbackGateway(endpoint: config.endpoint);
+      }
+      return null;
     });
+
+/// 反馈草稿箱 + 发送队列（唯一入口：UI 只跟它打交道）。
+final Provider<FeedbackOutbox> feedbackOutboxProvider = Provider<FeedbackOutbox>(
+  (Ref ref) => FeedbackOutbox(
+    vault: ref.watch(vaultProvider),
+    remote: ref.watch(feedbackRemoteGatewayProvider),
+  ),
+);

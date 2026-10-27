@@ -1,4 +1,4 @@
-﻿# 刷起 SHUAQI · 展示与下载页
+# 刷起 SHUAQI · 展示与下载页
 
 一个**没有任何构建步骤**的静态单页：`index.html` + 一份 CSS + 一份 JS + 几张截图。
 直接丢到任意静态服务器（Nginx / GitHub Pages / 对象存储）就能跑。
@@ -15,7 +15,7 @@ Rpage/
 │  ├─ js/site.js           滚动动效、三个功能演示、试写画布、热力图、色系
 │  └─ img/                 真机截图（1800px 宽，已裁状态栏）+ app-icon.png
 └─ download/
-   └─ shuaqi-0.1.0.apk     当前内测包（36 MB，release 签名，仅 arm64）
+   └─ shuaqi-0.1.1.apk     当前内测包（36.7 MB，release 签名，仅 arm64）
 ```
 
 ---
@@ -39,7 +39,7 @@ python -m http.server 8788
 
 ```js
 window.SHUAQI = {
-  apkUrl: "https://github.com/Terryliu001/SHUA_QI/releases/download/v0.1.0/shuaqi-0.1.0.apk",
+  apkUrl: "https://github.com/Terryliu001/SHUA_QI/releases/download/v0.1.1/shuaqi-0.1.1.apk",
   github: "https://github.com/Terryliu001/SHUA_QI"
 };
 ```
@@ -48,15 +48,15 @@ window.SHUAQI = {
 
 | 放法 | 怎么配 | 适合 |
 |---|---|---|
-| GitHub Releases（**当前默认**） | 建 Release `v0.1.0`，资产名必须是 `shuaqi-0.1.0.apk`，`apkUrl` 已填好 | 推 GitHub，仓库里不放二进制 |
-| 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.0.apk` | 自己的服务器，最省事 |
+| GitHub Releases（**当前默认**） | 建 Release `v0.1.1`，资产名必须是 `shuaqi-0.1.1.apk`，`apkUrl` 已填好 | 推 GitHub，仓库里不放二进制 |
+| 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.1.apk` | 自己的服务器，最省事 |
 | CDN / 对象存储 | 填完整 URL | 想扛流量、想换包不换网页 |
 
 > 仓库里的 `Rpage/download/` 是 **.gitignore 掉的**，所以走 Pages 时必须用 Release 直链，
 > 否则站点的下载按钮会 404。放自己服务器时把包一起上传即可。
 >
-> `download/shuaqi-0.1.0.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
-> **36.6 MB / 38,378,383 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
+> `download/shuaqi-0.1.1.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
+> **36.7 MB / 38,509,535 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
 > 换包后务必同步页面上的体积、字节数与 SHA-256。
 
 ### ② 版本信息（`index.html` → `#download` 区块）
@@ -65,15 +65,15 @@ window.SHUAQI = {
 
 | 位置 | 现在写的 |
 |---|---|
-| 首屏按钮 | `v0.1.0 · 36.6 MB` |
-| 下载区标题旁 | `v0.1.0 · 36.6 MB` |
-| 参数表 | `0.1.0 (1)` / `Android 8.0 以上 · arm64` / `36 MB · 38,025,823 字节` / `2026-10-27` |
-| `SHA-256` | `252F1520…FB4B3E7B` |
+| 首屏按钮 | `v0.1.1 · 36.7 MB` |
+| 下载区标题旁 | `v0.1.1 · 36.7 MB` |
+| 参数表 | `0.1.1 (2)` / `Android 8.0 以上 · arm64` / `36.7 MB · 38,509,535 字节` / `2026-10-27` |
+| `SHA-256` | `244DA342…FFB46029` |
 
 重新算 SHA-256：
 
 ```powershell
-(Get-FileHash .\download\shuaqi-0.1.0.apk -Algorithm SHA256).Hash
+(Get-FileHash .\download\shuaqi-0.1.1.apk -Algorithm SHA256).Hash
 ```
 
 ### ③ 截图（`assets/img/`）
@@ -199,11 +199,11 @@ Google Fonts 被墙导致中文字体回退**的问题，全部走系统字体�
 - **没有**交卷总分页 → FAQ 里明说"暂时不能"，下载区单独一栏"这一版还没有"。
 - **公式题只给图** → FAQ 里写清，不暗示能识别公式。
 - 手写识别**首次需联网下载模型** → 写在 FAQ 第一条。
-- 反馈通道**未接通** → 页面不提"反馈"入口，避免误导。
+- 反馈通道**已接通**（0.1.1 起：内置私有反馈仓库，文字 + 截图；失败的先存本机并可重试）。
 - 不写"提分""押题""AI 一键解题"；不出现任何出版社/学校完整卷面。
 
-页面里出现的数字（49 MB / 51,380,751 字节 / SHA-256 / v0.1.0 / DB v9）都来自
-`main/build/app/outputs/flutter-apk/app-release.apk` 的实测值。
+页面里出现的数字（36.7 MB / 38,509,535 字节 / SHA-256 / v0.1.1 / DB v9）都来自
+`main/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk` 的实测值。
 
 ---
 

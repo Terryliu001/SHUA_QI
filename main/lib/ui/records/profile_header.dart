@@ -192,18 +192,22 @@ class RecordsProfileHeader extends StatelessWidget {
 
   Widget _avatar(ThemeData theme) {
     final ColorScheme scheme = theme.colorScheme;
+    // 2026-10-27 用户：「头像框里还能看到矩形的裁切边，图没占满圆框」。
+    //
+    // 根因：`BoxDecoration` 的 `border` 会变成 Container 的**内边距**
+    // （`decoration.padding` = 2.5），图片被缩成 73×73，而 ClipPath 仍是
+    // 78 的整圆 → 圆的上下左右四个顶点落在图片外，图片的**直边**露在圆里，
+    // 看起来就是「圆框里有个带圆角的方框」。
+    //
+    // 修法：**边框改画在图片上层**（`foregroundDecoration` 不参与布局、
+    // 也不产生内边距），图片按 78×78 铺满再被圆裁掉，圆框内 100% 是图。
+    // 边框颜色/宽度保持不变，视觉上只是从「挤小图」变成「压在图上的环」。
     return Container(
       width: 78,
       height: 78,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: scheme.surfaceContainerHighest,
-        border: Border.all(
-          color: profile.hasCover
-              ? Colors.white.withValues(alpha: 0.9)
-              : scheme.surface,
-          width: 2.5,
-        ),
         boxShadow: <BoxShadow>[
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.16),
@@ -212,11 +216,22 @@ class RecordsProfileHeader extends StatelessWidget {
           ),
         ],
       ),
+      foregroundDecoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: profile.hasCover
+              ? Colors.white.withValues(alpha: 0.9)
+              : scheme.surface,
+          width: 2.5,
+        ),
+      ),
       clipBehavior: Clip.antiAlias,
       child: profile.hasAvatar
           ? Image.file(
               avatarFile,
               key: ValueKey<String>('avatar-$imageEpoch'),
+              width: 78,
+              height: 78,
               fit: BoxFit.cover,
               cacheWidth: 320,
               errorBuilder: (

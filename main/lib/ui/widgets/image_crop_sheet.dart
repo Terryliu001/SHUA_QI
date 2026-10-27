@@ -633,15 +633,20 @@ class _CropPageState extends State<_CropPage>
 
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     final Canvas canvas = Canvas(recorder);
+    final double outW = widget.kind.outWidth.toDouble();
+    final double outH = widget.kind.outputHeight.toDouble();
+    // 2026-10-27 用户：「头像框里还能看到矩形的裁切边」。
+    //
+    // 头像最终永远以圆形出现（页首 / 预览浮层）。这里直接把输出也**裁成圆**，
+    // 圆外是透明像素 —— 就算未来某个界面漏了 ClipOval，也只会在圆的范围内
+    // 有内容，不会再露出方形边界。封面仍然是直角矩形（页首是矩形）。
+    if (widget.kind.circular) {
+      canvas.clipPath(Path()..addOval(Rect.fromLTWH(0, 0, outW, outH)));
+    }
     canvas.drawImageRect(
       image,
       source,
-      Rect.fromLTWH(
-        0,
-        0,
-        widget.kind.outWidth.toDouble(),
-        widget.kind.outputHeight.toDouble(),
-      ),
+      Rect.fromLTWH(0, 0, outW, outH),
       Paint()..filterQuality = FilterQuality.high,
     );
     final ui.Picture picture = recorder.endRecording();

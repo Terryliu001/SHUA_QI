@@ -78,6 +78,21 @@ class MainActivity : FlutterActivity() {
                         result.error("restart_failed", error.message, null)
                     }
                 }
+                // 2026-10-27：反馈要带"什么设备/什么系统"，这里给一个只含
+                // 厂商型号 + Android 版本 + API 级别的最小集合（不取任何标识符）。
+                "deviceInfo" -> {
+                    try {
+                        result.success(
+                            mapOf(
+                                "model" to "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+                                "android" to Build.VERSION.RELEASE,
+                                "sdk" to Build.VERSION.SDK_INT,
+                            )
+                        )
+                    } catch (error: Exception) {
+                        result.error("device_info_failed", error.message, null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

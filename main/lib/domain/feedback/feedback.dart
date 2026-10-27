@@ -37,6 +37,7 @@ class FeedbackDraft {
     this.images = const <Uint8List>[],
     this.appVersion = '',
     this.device = '',
+    this.submissionId = '',
   });
 
   final FeedbackKind kind;
@@ -51,6 +52,13 @@ class FeedbackDraft {
   /// 帮助定位问题的上下文（版本号、设备型号）。不带任何个人信息。
   final String appVersion;
   final String device;
+
+  /// 落盘/重试用的稳定 id（ULID）。空 = 由通道自己生成。
+  ///
+  /// 为什么要它：反馈先写本机再尝试远端；重试时必须复用同一个 id，
+  /// 这样已经上传过的截图落在同一个 `feedback/<id>/` 里，不会每次重试
+  /// 都在仓库里留一堆孤儿图片。
+  final String submissionId;
 
   bool get hasPhone => phone.trim().isNotEmpty;
 
@@ -119,15 +127,44 @@ String? validateFeedbackImages(List<Uint8List> images) {
   return null;
 }
 
+/// 一条反馈在本机草稿箱里的状态（2026-10-27：反馈真正接上远端后新增）。
+///
+/// 口径：
+/// - [pending]：已存本机，还没确认送达（首次提交后网络失败、或通道没配）；
+/// - [sent]：远端明确回了 issue 号 / 成功响应，**只有这一种算"发出去了"**；
+/// - [failed]：尝试过且失败，等下次联网/手动重试。
+///
+/// 不存在"假装成功"的中间态：`sent` 一定要有远端凭证（issue 号或成功响应）。
+enum FeedbackStatus {
+  pending('待发送'),
+  sent('已送达'),
+  failed('发送失败');
+
+  const FeedbackStatus(this.label);
+
+  final String label;
+
+  static FeedbackStatus decode(String? raw) {
+    for (final FeedbackStatus status in values) {
+      if (status.name == raw) {
+        return status;
+      }
+    }
+    return FeedbackStatus.pending;
+  }
+}
+
 /// 提交结果（**不假设一定送达**）。
 class FeedbackReceipt {
   const FeedbackReceipt({
     required this.delivered,
     required this.message,
     this.localPath,
+    this.issueNumber,
+    this.issueUrl,
   });
 
-  /// true = 已发到服务器；false = 只落在本机（通道未开通）。
+  /// true = 已发到服务器；false = 只落在本机（通道未开通 / 网络失败）。
   final bool delivered;
 
   /// 给用户看的结论句。
@@ -135,6 +172,10 @@ class FeedbackReceipt {
 
   /// 落盘位置（delivered=false 时给用户一个"东西在这"的交代）。
   final String? localPath;
+
+  /// 远端回执：GitHub 私有仓库里的 issue 号与链接（delivered=true 时可能有）。
+  final int? issueNumber;
+  final String? issueUrl;
 }
 
 /// 反馈通道。实现由 `app/feedback/` 提供。

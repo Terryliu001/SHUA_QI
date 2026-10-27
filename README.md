@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="Rpage/assets/img/app-icon.png" width="96" alt="刷起 SHUAQI">
 </p>
 
@@ -26,10 +26,10 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 
 | 项 | 值 |
 |---|---|
-| 版本 | v0.1.0（内测） |
+| 版本 | v0.1.1（内测） |
 | 平台 | Android 8.0+ · **仅 arm64** · 平板 + 手写笔最佳 |
-| 体积 | 36.6 MB（已用 release 密钥签名） |
-| 位置 | [Releases](https://github.com/Terryliu001/SHUA_QI/releases) → `shuaqi-0.1.0.apk` |
+| 体积 | 36.7 MB（已用 release 密钥签名） |
+| 位置 | [Releases](https://github.com/Terryliu001/SHUA_QI/releases) → `shuaqi-0.1.1.apk` |
 
 > 装过更早的 debug 签名版本时，两个包签名不同、需要先卸载（卸载会删本机数据，先导出备份）。
 
@@ -50,7 +50,7 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 |---|---|
 | `main/` | Flutter 应用（`lib/` 分层：ui → state → domain → infra） |
 | `Rpage/` | 展示与下载页（零构建静态站，GitHub Pages 从这里发） |
-| `项目日志/` | 34 篇开发日志（现象 → 根因 → 修法 → 证据） |
+| `项目日志/` | 40 篇开发日志（现象 → 根因 → 修法 → 证据） |
 | `宣传/` | 对外材料：功能清单、Release 正文稿 |
 | `server/feedback-worker/` | 应用内反馈的 Cloudflare Worker（可选部署） |
 
@@ -59,7 +59,8 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 ```bash
 cd main
 flutter pub get
-flutter build apk --release --split-per-abi
+# release（含反馈通道凭证，凭证从 _verify/.gh_app_token 读，不进 git）
+powershell -File tool/build_release.ps1
 # 产物 build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
 ```
 
@@ -71,6 +72,7 @@ flutter build apk --release --split-per-abi
 - **没有**「交卷 → 总分 / 成绩报告」页
 - 公式题目前只给图，不做公式识别
 - 手写识别首次使用需联网下载模型
+- 用户反馈已接通（写入开发者的私有反馈仓库），但**没有回复通知**：开发者回复后不会在 App 内推送
 - 只有 Android / arm64；没有 iOS、桌面版、多设备同步
 - 界面按平板横屏设计，手机竖屏能用但很挤
 
@@ -78,6 +80,7 @@ flutter build apk --release --split-per-abi
 
 无账号、无云同步、无埋点；卷子、笔迹、判题结果都在应用私有目录。
 AI 是可选项：填你自己的 OpenAI 兼容端点与 Key，请求直接发往你填的地址，本项目不做中转。
+用户反馈只在你点「提交」时发送（文字 + 最多 3 张截图 + 版本/设备型号），手机号选填且只进私有 issue。
 
 ## 许可
 
