@@ -52,8 +52,10 @@ window.SHUAQI = {
 | 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.1.apk` | 自己的服务器，最省事 |
 | CDN / 对象存储 | 填完整 URL | 想扛流量、想换包不换网页 |
 
-> 仓库里的 `Rpage/download/` 是 **.gitignore 掉的**，所以走 Pages 时必须用 Release 直链，
-> 否则站点的下载按钮会 404。放自己服务器时把包一起上传即可。
+> 仓库里的 `Rpage/download/` 是 **.gitignore 掉的**，所以走 Pages 时**不能**让 HTML 依赖
+> `download/...` 的相对路径。现在 `index.html` 里两个下载入口的 `href` 直接写的是
+> Release 直链（**没有 JS 也能下**），`site.config.js` 的 `apkUrl` 只是方便换地址时再覆盖一次。
+> 放自己服务器时把包丢进 `download/`，再把 `apkUrl` 改成 `download/shuaqi-0.1.1.apk` 即可。
 >
 > `download/shuaqi-0.1.1.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
 > **36.7 MB / 38,509,535 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
