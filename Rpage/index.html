@@ -1,0 +1,738 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>刷起 SHUAQI · 把你的 PDF 卷子变成能判分的题本</title>
+<meta name="description" content="刷起是一款 Android 平板上的刷题工具：导入你自己的 PDF 试卷，用手写笔直接在卷面上作答，自动切题、本地判题、错题组卷二刷。无需账号，不上传任何卷子。">
+<meta name="theme-color" content="#F4F0E8">
+<meta name="color-scheme" content="only light">
+<meta property="og:type" content="website">
+<meta property="og:title" content="刷起 SHUAQI · 把你的 PDF 卷子变成能判分的题本">
+<meta property="og:description" content="真手写 · 自动切题 · 判题二刷 · 数据全在本机。题库 App 只能用它的题，刷起能用你自己的卷子。">
+<meta property="og:image" content="assets/img/reader-panel.webp">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="assets/css/site.css">
+<noscript><style>[data-reveal]{opacity:1!important;transform:none!important}.hero-title .line>span{opacity:1!important;transform:none!important}</style></noscript>
+</head>
+<body>
+
+<a class="skip-link" href="#main">跳到正文</a>
+<div class="scroll-progress" aria-hidden="true"><i data-progress></i></div>
+
+<!-- ============================ 导航 ============================ -->
+<header class="nav" data-nav>
+  <div class="nav-inner">
+    <a class="brand" href="#top" aria-label="刷起 SHUAQI 首页">
+      <span class="brand-mark">刷</span>
+      <span class="brand-type">刷起<em>SHUAQI</em></span>
+    </a>
+
+    <nav class="nav-links" data-nav-links aria-label="页面导航">
+      <a href="#split">切题</a>
+      <a href="#grade">判题</a>
+      <a href="#redo">二刷</a>
+      <a href="#write">试写</a>
+      <a href="#records">记录</a>
+      <a href="#faq">问答</a>
+    </nav>
+
+    <div class="nav-actions">
+      <div class="accents" role="group" aria-label="切换强调色（这是软件里的五套色系）">
+        <button class="accent-dot" data-accent="azure" title="靛蓝" aria-label="靛蓝" aria-pressed="true"></button>
+        <button class="accent-dot" data-accent="celadon" title="青瓷" aria-label="青瓷" aria-pressed="false"></button>
+        <button class="accent-dot" data-accent="iris" title="紫藤" aria-label="紫藤" aria-pressed="false"></button>
+        <button class="accent-dot" data-accent="clay" title="赭陶" aria-label="赭陶" aria-pressed="false"></button>
+        <button class="accent-dot" data-accent="graphite" title="石墨" aria-label="石墨" aria-pressed="false"></button>
+      </div>
+      <a class="btn btn-primary btn-sm nav-cta" href="#download">
+        <span>下载</span>
+        <svg viewBox="0 0 16 16" aria-hidden="true" class="ico"><path d="M8 2v8m0 0 3.2-3.2M8 10 4.8 6.8M3 12.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </a>
+      <button class="nav-burger" data-burger aria-label="打开菜单" aria-expanded="false">
+        <span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- ============================ 首屏 ============================ -->
+  <section class="hero" id="top">
+    <div class="hero-bg" aria-hidden="true">
+      <span class="hero-glow"></span>
+      <span class="hero-grid"></span>
+    </div>
+
+    <div class="wrap hero-grid-layout">
+      <div class="hero-copy">
+        <p class="eyebrow reveal" data-reveal>
+          <span class="pulse-dot"></span>
+          Android 平板 · 手写笔 · 全部在本机
+        </p>
+
+        <h1 class="hero-title" data-hero-title>
+          <span class="line"><span>把你的 PDF 卷子</span></span>
+          <span class="line"><span>变成能<em class="mark">判分</em>的题本</span></span>
+        </h1>
+
+        <p class="hero-lead reveal" data-reveal data-delay="1">
+          导入你手上那份真实的 PDF 试卷，用手写笔直接在卷面上写。刷起会把一页卷子拆成一道一道题，
+          判出对错，再让错题长成下一套可以重刷的卷子。
+        </p>
+
+        <div class="hero-cta reveal" data-reveal data-delay="2">
+          <a class="btn btn-primary btn-lg" href="#download">
+            下载 Android 版
+            <span class="btn-sub">v0.1.0 · 36 MB</span>
+          </a>
+          <a class="btn btn-ghost btn-lg" href="#split">
+            看它怎么工作
+            <svg viewBox="0 0 16 16" class="ico" aria-hidden="true"><path d="M8 3v10m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>
+
+        <ul class="hero-facts reveal" data-reveal data-delay="3">
+          <li>无需注册</li>
+          <li>无广告 · 无内购</li>
+          <li>离线也能判</li>
+          <li>不传任何卷子</li>
+        </ul>
+      </div>
+
+      <div class="hero-visual reveal" data-reveal data-delay="2">
+        <div class="hero-visual-inner" data-parallax>
+          <div class="device">
+            <div class="device-bezel">
+              <img src="assets/img/reader-panel.webp" width="1800" height="1219"
+                   alt="刷起阅读器：左边是切好题的 PDF 卷面，卷面上有手写的「你好」和一道荧光笔；右边是题目区域面板" fetchpriority="high">
+              <span class="device-sheen" aria-hidden="true"></span>
+            </div>
+          </div>
+
+          <div class="hero-chip hero-chip--top" aria-hidden="true">
+            <span class="chip-dot"></span>
+            一页切成 13 道题
+          </div>
+          <div class="hero-chip hero-chip--bottom" aria-hidden="true">
+            <span class="mini-state"><i class="s-correct"></i>对</span>
+            <span class="mini-state"><i class="s-pending"></i>待判</span>
+            <span class="mini-state"><i class="s-wrong"></i>错</span>
+          </div>
+
+          <span class="seal" aria-hidden="true">刷起</span>
+        </div>
+
+        <p class="hero-caption">真实界面截图 · OPPO 平板横屏</p>
+      </div>
+    </div>
+
+    <div class="hero-index">
+      <div class="wrap hero-index-inner">
+        <span class="hero-index-hint"><span class="scroll-line" aria-hidden="true"></span>三个动作，撑起整个产品</span>
+        <nav class="hero-index-nav" aria-label="核心功能索引">
+          <a href="#split"><b>01</b>切题</a>
+          <a href="#grade"><b>02</b>判题</a>
+          <a href="#redo"><b>03</b>二刷</a>
+        </nav>
+      </div>
+    </div>
+
+    <div class="hero-edge" aria-hidden="true">
+      <span class="vert-text">SHUAQI · PDF 卷子刷题工具 · v0.1.0</span>
+    </div>
+  </section>
+
+  <!-- ============================ 定位 ============================ -->
+  <section class="statement">
+    <div class="wrap">
+      <p class="sec-label reveal" data-reveal><span>为什么</span>生态位</p>
+      <h2 class="statement-title reveal" data-reveal>
+        题库 App 只能用它的题。<br>
+        <span class="u-marker">刷起能用你自己的卷子</span>。
+      </h2>
+
+      <div class="compare reveal" data-reveal data-delay="1">
+        <div class="compare-row compare-head" aria-hidden="true">
+          <span>你手上的工具</span><span>它的强项</span><span>它到不了的地方</span>
+        </div>
+        <div class="compare-row">
+          <span class="cmp-name">手写笔记 App</span>
+          <span class="cmp-good">笔感好、生态成熟</span>
+          <span class="cmp-gap">不懂「题」：没有判题、错题本、组卷</span>
+        </div>
+        <div class="compare-row">
+          <span class="cmp-name">题库 / 背题 App</span>
+          <span class="cmp-good">有题库、有复习算法</span>
+          <span class="cmp-gap">只能用它的题，装不进你的 PDF</span>
+        </div>
+        <div class="compare-row">
+          <span class="cmp-name">打印 + 红笔</span>
+          <span class="cmp-good">手感无可替代</span>
+          <span class="cmp-gap">不能统计、不能二刷、带不走</span>
+        </div>
+        <div class="compare-row compare-us">
+          <span class="cmp-name">刷起</span>
+          <span class="cmp-good">你自己的 PDF + 真手写</span>
+          <span class="cmp-gap">切题、判题、二刷、记录 —— 一条路走完</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 00 书架 ============================ -->
+  <section class="shelf on-dark" id="shelf">
+    <div class="wrap shelf-grid">
+      <div class="shelf-copy">
+        <p class="sec-label reveal" data-reveal><span>00</span>书架</p>
+        <h2 class="h2 reveal" data-reveal>先把卷子<br>放进书架。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          导入你自己的 PDF —— 一次可以选好几份。同一份卷子不会重复进来（按文件内容做指纹比对）。
+          之后是列表、大图、树形三种看法，文件夹能嵌套，标签像书签一样贴在卡片右上角。
+        </p>
+        <ul class="points points--compact">
+          <li class="reveal" data-reveal data-delay="1"><b>三种视图</b>列表 / 大图 / 单栏树，文件夹可嵌套，长按拖动改归属。</li>
+          <li class="reveal" data-reveal data-delay="2"><b>标签是书签</b>贴在卡片角上，按名字稳定配色，不占布局。</li>
+          <li class="reveal" data-reveal data-delay="3"><b>内容去重</b>同一份 PDF 再导入会被拦下，直接跳到已有那一卷。</li>
+        </ul>
+      </div>
+
+      <figure class="shelf-shot reveal" data-reveal data-delay="1">
+        <img src="assets/img/bookshelf.webp" width="1800" height="1219" loading="lazy"
+             alt="书架：八份 PDF 卷子的大图视图，带缩略图、页数与最近打开时间">
+        <figcaption>书架 · 大图视图<span>缩略图直接渲染 PDF 第一页</span></figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================ 01 切题 ============================ -->
+  <section class="feature feature--split" id="split">
+    <div class="wrap feature-grid">
+      <div class="feature-copy">
+        <p class="sec-label reveal" data-reveal><span>01</span>切题</p>
+        <h2 class="h2 reveal" data-reveal>一页卷子，<br>会先被拆成一道一道题。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          这一步是从「看 PDF」跨到「做题」的分水岭。只有先切成题，才可能有判题、错题本、知识点和组卷。
+        </p>
+        <ul class="points">
+          <li class="reveal" data-reveal data-delay="1">
+            <b>两套切题</b>
+            文本版 PDF 读文字层；扫描件按行与题号推断。两条路最后都落在同一套框上。
+          </li>
+          <li class="reveal" data-reveal data-delay="2">
+            <b>切歪了就手调</b>
+            切分、并入、跨页、改题号、锁定。锁住的框，重新切题也不会被覆盖。
+          </li>
+          <li class="reveal" data-reveal data-delay="3">
+            <b>每题一个框</b>
+            框是这道题的坐标：点一下跳过去，写的时候它就是一张独立的答题卡。
+          </li>
+        </ul>
+      </div>
+
+      <div class="feature-visual reveal" data-reveal data-delay="1">
+        <div class="demo demo-split" data-demo="split">
+          <div class="demo-chrome">
+            <span class="demo-tag">切题 · 演示</span>
+            <button class="demo-replay" data-split-replay type="button">
+              <svg viewBox="0 0 16 16" class="ico" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.6V5.4h-2.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              重播
+            </button>
+          </div>
+
+          <div class="paper-sheet" data-split-paper>
+            <div class="paper-head">
+              <p class="paper-title">2025—2026 学年第一学期 · 数学分析（上）</p>
+              <p class="paper-sub">三、计算题（每小题 8 分，共 32 分）</p>
+            </div>
+
+            <div class="paper-body">
+              <div class="qline" data-q>
+                <span class="qno">7</span>
+                <p>设函数 <i>f</i>(<i>x</i>) 在 <i>x</i> = 0 处连续，且 lim<sub><i>x</i>→0</sub> <i>f</i>(<i>x</i>)/<i>x</i> = 1，求 <i>f</i>′(0)。</p>
+              </div>
+              <div class="qline" data-q>
+                <span class="qno">8</span>
+                <p>已知数列 {<i>a<sub>n</sub></i>} 满足 <i>a</i><sub>1</sub> = 1，<i>a</i><sub>n+1</sub> = 2<i>a<sub>n</sub></i> + 1，求 <i>a</i><sub>5</sub>。</p>
+              </div>
+              <div class="qline" data-q>
+                <span class="qno">9</span>
+                <p>计算定积分 ∫<sub>0</sub><sup>1</sup> (2<i>x</i> + 1) d<i>x</i>。</p>
+              </div>
+              <div class="qline" data-q>
+                <span class="qno">10</span>
+                <p>设矩阵 <i>A</i> 可逆，且 |<i>A</i>| = 2，求 |<i>A</i><sup>−1</sup> + <i>A</i>*| 的值。</p>
+              </div>
+            </div>
+
+            <svg class="region-layer" data-region-layer aria-hidden="true"></svg>
+            <span class="paper-fold" aria-hidden="true">密封线内不要答题</span>
+          </div>
+
+          <div class="demo-status" data-split-status>
+            <span class="status-ico">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8.6l3 3L12.8 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <span data-split-status-text>正在识别页面结构…</span>
+          </div>
+        </div>
+        <p class="demo-note">示意图。真机上框线可以拖、可以拉角，也可以锁定。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 02 判题 ============================ -->
+  <section class="feature feature--grade on-dark" id="grade">
+    <div class="wrap feature-grid feature-grid--reverse">
+      <div class="feature-copy">
+        <p class="sec-label reveal" data-reveal><span>02</span>判题</p>
+        <h2 class="h2 reveal" data-reveal>判题先本地，<br>判不了才问 AI。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          选择题、数值题在设备上就能判，不联网、不花钱、不排队。本地判不了，或者手写识别没把握，
+          才亮一个琥珀色的点，由你决定要不要交给 AI。
+        </p>
+        <ul class="points points--compact">
+          <li class="reveal" data-reveal data-delay="1"><b>三种结论，不是两种</b>对 / 待判 / 错。待判不等于错，它只是「我还没把握」。</li>
+          <li class="reveal" data-reveal data-delay="2"><b>手改永远最优先</b>你亲手改过的结论，AI 不会覆盖。</li>
+          <li class="reveal" data-reveal data-delay="3"><b>没有答案就不判</b>按钮直接置灰并说明原因，不假装判过。</li>
+        </ul>
+      </div>
+
+      <div class="feature-visual reveal" data-reveal data-delay="1">
+        <div class="demo demo-grade" data-demo="grade">
+          <div class="grade-panel">
+            <div class="grade-panel-head">
+              <span>题目区域</span>
+              <button class="grade-run" data-grade-run type="button">改卷</button>
+            </div>
+
+            <ul class="grade-list" data-grade-list>
+              <li data-verdict="correct"><span class="vdot"></span><span class="gno">1</span><span class="gmeta">选择题 · 第 1 页</span><span class="gtag">本地</span></li>
+              <li data-verdict="correct"><span class="vdot"></span><span class="gno">2</span><span class="gmeta">选择题 · 第 1 页</span><span class="gtag">本地</span></li>
+              <li data-verdict="wrong"><span class="vdot"></span><span class="gno">3</span><span class="gmeta">选择题 · 第 1 页</span><span class="gtag">本地</span></li>
+              <li data-verdict="pending"><span class="vdot"></span><span class="gno">4</span><span class="gmeta">计算题 · 第 1 页</span><span class="gtag">待确认</span></li>
+              <li data-verdict="correct"><span class="vdot"></span><span class="gno">5</span><span class="gmeta">计算题 · 第 2 页</span><span class="gtag">AI · 请自检</span></li>
+              <li data-verdict="wrong"><span class="vdot"></span><span class="gno">6</span><span class="gmeta">计算题 · 第 2 页</span><span class="gtag">本地</span></li>
+            </ul>
+
+            <div class="grade-stats" data-grade-stats>
+              <span class="gs gs--correct"><b data-count="correct">0</b> 对</span>
+              <span class="gs gs--pending"><b data-count="pending">0</b> 待判</span>
+              <span class="gs gs--wrong"><b data-count="wrong">0</b> 错</span>
+              <span class="gs gs--rest">本地 5 题 · 1 题问 AI</span>
+            </div>
+
+            <p class="grade-tip" data-grade-tip>
+              <span class="tip-dot"></span>
+              第 4 题的手写识别置信度不够 —— 可以先手改，也可以问 AI。
+            </p>
+          </div>
+        </div>
+        <p class="demo-note">点「改卷」重播。琥珀色的「待判」是本产品最不愿意妥协的一个状态。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 03 二刷 ============================ -->
+  <section class="feature feature--redo" id="redo">
+    <div class="wrap feature-grid">
+      <div class="feature-copy">
+        <p class="sec-label reveal" data-reveal><span>03</span>二刷</p>
+        <h2 class="h2 reveal" data-reveal>错题会自己<br>长成第二本卷子。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          收藏是跨卷快照：原卷删了，题还在。打上知识点，或者让 AI 归纳后由你逐题确认，
+          再挑几道组一套新卷 —— 用一张空白答题卡重做，每一次重刷都是一份独立记录。
+        </p>
+        <ul class="points">
+          <li class="reveal" data-reveal data-delay="1">
+            <b>收藏即快照</b>
+            题面、你的作答、判定、AI 对话一起带走，不依赖原卷还活着。
+          </li>
+          <li class="reveal" data-reveal data-delay="2">
+            <b>组卷连刷</b>
+            多选建卷、长按拖动排序，一次刷完一套。二刷写在新纸上，不覆盖第一遍。
+          </li>
+          <li class="reveal" data-reveal data-delay="3">
+            <b>回看出处</b>
+            任何时候都能跳回原卷的那一页、那道题，看看当时是怎么写的。
+          </li>
+        </ul>
+      </div>
+
+      <div class="feature-visual reveal" data-reveal data-delay="1">
+        <div class="demo demo-redo" data-demo="redo">
+          <div class="redo-stage">
+            <div class="redo-src" data-redo-src>
+              <article class="rcard" data-rcard><span class="rno">3</span><span class="rtxt">极限 <i>lim</i> …</span><i class="rstate wrong"></i></article>
+              <article class="rcard" data-rcard><span class="rno">7</span><span class="rtxt">数列通项 …</span><i class="rstate wrong"></i></article>
+              <article class="rcard" data-rcard><span class="rno">12</span><span class="rtxt">矩阵可逆 …</span><i class="rstate wrong"></i></article>
+            </div>
+
+            <div class="redo-set" data-redo-set>
+              <span class="set-badge">组卷</span>
+              <b>三刷 · 高数易错</b>
+              <small>3 题 · 长按可调顺序</small>
+            </div>
+
+            <span class="sheet-ghost sheet-ghost--1" aria-hidden="true"></span>
+            <span class="sheet-ghost sheet-ghost--2" aria-hidden="true"></span>
+            <div class="redo-sheet" data-redo-sheet>
+              <div class="sheet-head">
+                <span class="sheet-set">三刷 · 高数易错</span>
+                <span class="sheet-date">10 月 26 日 · 第 2 遍</span>
+              </div>
+              <div class="sheet-lines" aria-hidden="true"></div>
+              <svg class="sheet-ink" viewBox="0 0 420 200" aria-hidden="true">
+                <path class="ink-path" d="M54 118c14-18 24-30 34-26s6 26 18 24 16-28 28-26 10 24 22 24 20-18 32-14 14 14 26 12" />
+              </svg>
+              <span class="sheet-cap">空白答题卡</span>
+            </div>
+
+            <div class="redo-toast" data-redo-toast>
+              <span class="toast-dot"></span>已保存这次重刷记录
+            </div>
+          </div>
+          <button class="redo-replay" data-redo-replay type="button">
+            <svg viewBox="0 0 16 16" class="ico" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.6V5.4h-2.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            重播
+          </button>
+        </div>
+        <p class="demo-note">收藏 → 知识点 → 组卷 → 空白重做 → 记录这一次。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 截图画廊 ============================ -->
+  <section class="gallery" aria-label="界面截图">
+    <div class="wrap">
+      <div class="gallery-strip">
+        <figure class="reveal" data-reveal>
+          <img src="assets/img/favorites.webp" width="1800" height="1219" loading="lazy" alt="收藏夹：按知识点归类的题目卡片墙">
+          <figcaption><b>收藏夹</b>按知识点、按试卷、按组卷，四种看法</figcaption>
+        </figure>
+        <figure class="reveal" data-reveal data-delay="1">
+          <img src="assets/img/answer-ai.webp" width="1800" height="1219" loading="lazy" alt="答题卡旁边的 AI 面板：先做一遍、判我的作答">
+          <figcaption><b>答题卡 + 问 AI</b>用你自己的 Key，判断、思路、公式排版</figcaption>
+        </figure>
+        <figure class="reveal" data-reveal data-delay="2">
+          <img src="assets/img/redo-paper.webp" width="1800" height="1219" loading="lazy" alt="二刷：一张空白答题卡上写着第二遍的演算">
+          <figcaption><b>二刷</b>每一遍都有自己的答题卡与记录</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 04 试写 ============================ -->
+  <section class="write" id="write">
+    <div class="write-margin" aria-hidden="true">
+      <span class="seal-line"></span>
+      <span class="seal-text">密封线内不要答题</span>
+    </div>
+
+    <div class="wrap">
+      <div class="write-head">
+        <div>
+          <p class="sec-label reveal" data-reveal><span>04</span>下笔</p>
+          <h2 class="h2 reveal" data-reveal>就在这张纸上写。</h2>
+        </div>
+        <p class="write-lead reveal" data-reveal data-delay="1">
+          钢笔、圆珠笔、荧光笔、橡皮。橡皮不是删掉整笔，而是把笔画切开 —— 中间擦掉，两头还在。
+          停笔半秒，图形吸附会把歪歪扭扭的直线和矩形摆正。下面这块纸是真的能写。
+        </p>
+      </div>
+
+      <div class="pad-shell reveal" data-reveal data-delay="1">
+        <div class="pad-tools" role="toolbar" aria-label="书写工具">
+          <div class="tool-group">
+            <button class="tool is-active" data-tool="pen" aria-pressed="true" aria-label="钢笔">
+              <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="M13.6 3.2 16.8 6.4 7.4 15.8l-4.2 1 1-4.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              <span>钢笔</span>
+            </button>
+            <button class="tool" data-tool="marker" aria-pressed="false" aria-label="荧光笔">
+              <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="M6 13.6 5.2 17l3.4-.8 8-8-2.6-2.6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+              <span>荧光笔</span>
+            </button>
+            <button class="tool" data-tool="eraser" aria-pressed="false" aria-label="橡皮">
+              <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="m3.6 11.4 6-6a1.6 1.6 0 0 1 2.3 0l3 3a1.6 1.6 0 0 1 0 2.3l-4.4 4.4H6.2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8.6 8.4 12 11.8" stroke="currentColor" stroke-width="1.5"/></svg>
+              <span>橡皮</span>
+            </button>
+          </div>
+
+          <div class="tool-group colors" role="group" aria-label="笔迹颜色">
+            <button class="swatch is-active" data-color="#16181C" style="--c:#16181C" aria-label="墨黑" aria-pressed="true"></button>
+            <button class="swatch" data-color="#1F4FA8" style="--c:#1F4FA8" aria-label="靛蓝" aria-pressed="false"></button>
+            <button class="swatch" data-color="#A8392E" style="--c:#A8392E" aria-label="朱红" aria-pressed="false"></button>
+            <button class="swatch" data-color="#2F6B4F" style="--c:#2F6B4F" aria-label="松绿" aria-pressed="false"></button>
+          </div>
+
+          <div class="tool-group tool-group--right">
+            <button class="tool" data-pad-undo type="button" aria-label="撤销">
+              <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="M7.5 5 3 9.5 7.5 14M3.4 9.5H12a4.5 4.5 0 0 1 0 9H9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>撤销</span>
+            </button>
+            <button class="tool" data-pad-clear type="button" aria-label="清空">
+              <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="M4.5 6h11M8 6V4.5h4V6m-6 0 .7 9.5h6.6L14 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span>清空</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="pad" data-pad data-paper="original">
+          <canvas data-pad-canvas aria-label="试写区：可以用鼠标、手指或手写笔书写"></canvas>
+          <p class="pad-hint" data-pad-hint>在这儿写两笔 —— 有手写笔的话，压感也会带上</p>
+
+          <div class="pad-papers" role="group" aria-label="纸张">
+            <button class="paper-dot is-active" data-paper="original" aria-label="原纸" aria-pressed="true"></button>
+            <button class="paper-dot" data-paper="warm" aria-label="暖白" aria-pressed="false"></button>
+            <button class="paper-dot" data-paper="ivory" aria-label="象牙" aria-pressed="false"></button>
+            <button class="paper-dot" data-paper="gray" aria-label="浅灰" aria-pressed="false"></button>
+            <button class="paper-dot" data-paper="green" aria-label="浅绿" aria-pressed="false"></button>
+            <button class="paper-dot paper-dot--night" data-paper="night" aria-label="夜读" aria-pressed="false"></button>
+          </div>
+        </div>
+
+        <p class="pad-caption">完整功能在平板上：六种纸感、夜读、图形吸附、五十步撤销、掌托拒识。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 05 记录 ============================ -->
+  <section class="records on-dark" id="records">
+    <div class="wrap records-grid">
+      <div class="records-copy">
+        <p class="sec-label reveal" data-reveal><span>05</span>记录</p>
+        <h2 class="h2 reveal" data-reveal>记录的是行为，<br>不是打卡海报。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          哪一天写了多少题、哪些科目写得最多、最近七天正确率多少 —— 每一个数字都能点回那天、那套卷、那道题。
+        </p>
+
+        <ul class="points points--compact">
+          <li class="reveal" data-reveal data-delay="1"><b>13 / 26 / 52 周热力图</b>点一个格子，看那天的小结。</li>
+          <li class="reveal" data-reveal data-delay="2"><b>科目与题型词云</b>手指搅动像沙盘，松手弹回原位。</li>
+          <li class="reveal" data-reveal data-delay="3"><b>作答时间线</b>按试卷或按题目，点卡就回到那一刻。</li>
+        </ul>
+      </div>
+
+      <div class="records-visual reveal" data-reveal data-delay="1">
+        <figure class="shot shot--dark">
+          <img src="assets/img/records.webp" width="1800" height="914" loading="lazy" alt="记录页：作答热力图、连续打卡、作答概览与作答时间线">
+        </figure>
+
+        <div class="heat-card reveal" data-reveal data-delay="2" aria-label="作答热力图示意">
+          <div class="heat-head">
+            <span>作答热力图</span>
+            <span class="heat-sub" data-heat-sub>近 26 周</span>
+          </div>
+          <div class="heat-months" data-heat-months aria-hidden="true"></div>
+          <div class="heat-grid" data-heat aria-hidden="true"></div>
+          <div class="heat-foot">
+            <span class="heat-scale">少 <i></i><i></i><i></i><i></i><i></i> 多</span>
+            <span data-heat-tip class="heat-tip">把鼠标放到格子上</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 私有 ============================ -->
+  <section class="privacy">
+    <div class="wrap">
+      <div class="privacy-head">
+        <p class="sec-label reveal" data-reveal><span>06</span>归属</p>
+        <h2 class="statement-title reveal" data-reveal>
+          卷子是你的，笔迹也是。<br>
+          <span class="u-marker">没有服务器需要你信任</span>。
+        </h2>
+      </div>
+
+      <div class="privacy-grid">
+        <article class="pcard reveal" data-reveal>
+          <span class="pcard-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M4 7.5A2.5 2.5 0 0 1 6.5 5H10l1.5 2H18a2.5 2.5 0 0 1 2.5 2.5v7A2.5 2.5 0 0 1 18 19H6.5A2.5 2.5 0 0 1 4 16.5z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          </span>
+          <h3>不需要账号</h3>
+          <p>没有登录、没有云同步、没有埋点上报。安装完就能用。</p>
+        </article>
+        <article class="pcard reveal" data-reveal data-delay="1">
+          <span class="pcard-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><rect x="4.5" y="3.5" width="15" height="17" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h8M8 11.5h8M8 15h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+          <h3>全在本机</h3>
+          <p>PDF、笔迹、判题结果都在应用私有目录里，不上传、不中转、不分析。</p>
+        </article>
+        <article class="pcard reveal" data-reveal data-delay="2">
+          <span class="pcard-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8M18.4 18.4l-2.8-2.8M8.4 8.4 5.6 5.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </span>
+          <h3>AI 是可选项</h3>
+          <p>填你自己的 OpenAI 兼容端点与 Key，请求直接发往你填的地址；不填也完全能用。</p>
+        </article>
+        <article class="pcard reveal" data-reveal data-delay="3">
+          <span class="pcard-ico" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 3.5v10m0 0 4-4m-4 4-4-4M5 16.5v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <h3>一键备份</h3>
+          <p>卷子、笔迹、收藏、记录打包成一个 zip。换机、卸载前都能带走。</p>
+        </article>
+      </div>
+
+      <p class="privacy-note reveal" data-reveal>
+        没有"账号丢了资料就没了"的恐惧。唯一需要你保管的，是自己填的那串 API Key。
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================ FAQ ============================ -->
+  <section class="faq" id="faq">
+    <div class="wrap faq-grid">
+      <div class="faq-head">
+        <p class="sec-label reveal" data-reveal><span>07</span>问答</p>
+        <h2 class="h2 reveal" data-reveal>先说清楚<br>它现在还不能做什么。</h2>
+        <p class="feature-lead reveal" data-reveal data-delay="1">
+          这是一个内测版本。下面每一条都是真的，写在这里是为了让你少走弯路。
+        </p>
+      </div>
+
+      <div class="faq-list">
+        <details class="reveal" data-reveal open>
+          <summary>需要联网吗？</summary>
+          <div class="faq-body">不需要。卷子、笔迹、判题、记录全在本机，飞行模式也能写能判。两个例外：本地手写识别第一次要联网下载模型；AI 功能当然要联网。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>没有 AI Key 是不是就只能当笔记用？</summary>
+          <div class="faq-body">不是。选择题与数值题在本地就能判，收藏、组卷、二刷、记录都不依赖 AI。AI 只负责本地判不了的那部分，以及和你讨论思路。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>能算一整卷的总分吗？</summary>
+          <div class="faq-body">暂时不能。单题可以判对错，但没有"交卷 → 总分 / 成绩报告"这一页，这是目前最明显的缺口，已经排在下一版。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>公式题能识别吗？</summary>
+          <div class="faq-body">现在只给图。公式题会保留题面截图，可以写、可以问 AI，但不会把公式变成文本再去判分。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>有 iOS、Windows 或网页版吗？</summary>
+          <div class="faq-body">没有。目前只有 Android（arm64），界面按平板横屏设计；手机能跑，但会很挤。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>我的卷子会被上传吗？</summary>
+          <div class="faq-body">不会。没有服务器，也没有中转。只有你主动使用 AI 功能时，那一道题的题面或图片才会按你的配置发给你自己填的端点。</div>
+        </details>
+        <details class="reveal" data-reveal>
+          <summary>以后换平板，数据怎么办？</summary>
+          <div class="faq-body">设置 → 数据 → 导出备份，得到一个 zip；新设备上从备份恢复即可。恢复前会先把当前数据留一份底。</div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 下载 ============================ -->
+  <section class="download on-dark" id="download">
+    <div class="wrap download-grid">
+      <div class="download-copy">
+        <p class="sec-label reveal" data-reveal><span>下载</span>内测版</p>
+        <h2 class="download-title reveal" data-reveal>现在，<br>把你的卷子<br>搬进来。</h2>
+        <p class="download-lead reveal" data-reveal data-delay="1">
+          Android 平板 + 手写笔体验最好。装完第一次打开会建库，几秒钟。
+        </p>
+
+        <div class="dl-app reveal" data-reveal data-delay="1">
+          <img class="dl-app-icon" src="assets/img/app-icon.png" width="76" height="76"
+               alt="刷起 App 图标：一张卷子与一道判题的对勾">
+          <div class="dl-app-meta">
+            <b>刷起 SHUAQI</b>
+            <span>Android 平板 · 手写笔 · 全本机</span>
+          </div>
+        </div>
+
+        <div class="download-actions reveal" data-reveal data-delay="2">
+          <a class="btn btn-primary btn-xl" href="download/shuaqi-0.1.0.apk" download data-apk-link>
+            <svg viewBox="0 0 20 20" class="ico" aria-hidden="true"><path d="M10 3v9m0 0 4-4m-4 4-4-4M4 15.5h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            下载 APK
+            <span class="btn-sub">v0.1.0 · 36 MB</span>
+          </a>
+          <a class="btn btn-ghost btn-lg on-dark-ghost" href="#" data-link="github" hidden>
+            GitHub 仓库
+            <svg viewBox="0 0 16 16" class="ico" aria-hidden="true"><path d="M6 3h7v7M13 3 3.5 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+        </div>
+
+        <dl class="specs reveal" data-reveal data-delay="3">
+          <div><dt>版本</dt><dd>0.1.0 <span>(1)</span></dd></div>
+          <div><dt>系统</dt><dd>Android 8.0 以上 · arm64</dd></div>
+          <div><dt>体积</dt><dd>36 MB <span>· 38,025,823 字节</span></dd></div>
+          <div><dt>构建</dt><dd>2026-10-26</dd></div>
+        </dl>
+
+        <p class="sha reveal" data-reveal data-delay="3">
+          <span>SHA-256</span>
+          <code data-sha>0F28C702670DBBAD4EA8750ED99F094089267946D57299A917BC8406349882C5</code>
+        </p>
+      </div>
+
+      <div class="download-side">
+        <ol class="steps reveal" data-reveal data-delay="1">
+          <li>
+            <span class="step-n">01</span>
+            <div><b>导入一份 PDF 卷子</b><p>书架右下角「导入 PDF」，可以多选。同一份不会重复导入。</p></div>
+          </li>
+          <li>
+            <span class="step-n">02</span>
+            <div><b>点开「题目」看切题</b><p>切歪了就拖框调整：切分、并入、改题号、锁定。</p></div>
+          </li>
+          <li>
+            <span class="step-n">03</span>
+            <div><b>写，然后改卷</b><p>答题卡里作答，工具行点「改卷」。判完的题收藏起来，下次组卷二刷。</p></div>
+          </li>
+        </ol>
+
+        <p class="warn reveal" data-reveal data-delay="2">
+          <b>内测包提示</b>
+          目前是未签名的内测构建。正式版发布时需要卸载重装，<strong>请先在「设置 → 数据」里导出备份</strong>，卸载会一起删掉本机数据。
+        </p>
+
+        <div class="dl-limits reveal" data-reveal data-delay="3">
+          <p class="dl-limits-title">这一版还没有</p>
+          <ul>
+            <li>交卷后的总分与成绩报告</li>
+            <li>公式题的识别 —— 目前只给图</li>
+            <li>iOS、桌面或网页版</li>
+          </ul>
+          <a class="dl-limits-link" href="#faq">看完整的边界说明<span aria-hidden="true">→</span></a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ 页脚 ============================ -->
+  <footer class="footer on-dark">
+    <div class="wrap footer-inner">
+      <div class="footer-brand">
+        <span class="brand-mark">刷</span>
+        <div>
+          <b>刷起 SHUAQI</b>
+          <p>把纸质的 PDF 卷子，变成一本能写、能判、能二刷的电子题本。</p>
+        </div>
+      </div>
+      <nav class="footer-links" aria-label="页脚导航">
+        <a href="#split">切题</a>
+        <a href="#grade">判题</a>
+        <a href="#redo">二刷</a>
+        <a href="#faq">问答</a>
+        <a href="download/shuaqi-0.1.0.apk" download data-apk-link>下载</a>
+      </nav>
+      <p class="footer-meta">
+        v0.1.0（DB v9）· 用 Flutter 构建于 Android<br>
+        无账号 · 无广告 · 无内购 · 数据只在你的设备上
+      </p>
+    </div>
+  </footer>
+
+</main>
+
+<script src="site.config.js"></script>
+<script src="assets/js/site.js"></script>
+</body>
+</html>

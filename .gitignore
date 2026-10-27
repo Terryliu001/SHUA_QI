@@ -25,3 +25,10 @@ desktop.ini
 *.log
 *.tmp
 ~$*
+
+# local verification screenshots and big assets
+_verify/
+main/demo_assets/papers/
+main/demo_assets/verify/
+Rpage/download/
+*.jks

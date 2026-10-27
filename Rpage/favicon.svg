@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1D2B3A"/>
+      <stop offset="0.55" stop-color="#111A24"/>
+      <stop offset="1" stop-color="#080D12"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.42" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+  </defs>
+<rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+        <rect width="1024" height="1024" rx="224" fill="url(#sheen)"/>
+        
+  <g transform="rotate(-6 512 512) ">
+    <rect x="306" y="226" width="420" height="562" rx="26" fill="#000" opacity="0.35" filter="url(#soft)"/>
+    <path d="M 326 206 H 646 L 726 286 V 742 Q 726 768 700 768 H 326 Q 300 768 300 742 V 232 Q 300 206 326 206 Z"
+          fill="#FBF7EE"/>
+    <path d="M 646 206 L 726 286 H 646 Z" fill="#E9E1CF"/>
+    <path d="M 356 372 c 18 -16 36 -16 54 0 s 36 16 54 0 s 36 -16 54 0"
+          fill="none" stroke="#232A31" stroke-width="15" stroke-linecap="round"/>
+    <path d="M 356 448 c 18 -16 36 -16 54 0 s 36 16 54 0"
+          fill="none" stroke="#232A31" stroke-width="15" stroke-linecap="round"/>
+    <path d="M 372 604 L 476 708 L 716 440"
+          fill="none" stroke="#2E5BD8" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
