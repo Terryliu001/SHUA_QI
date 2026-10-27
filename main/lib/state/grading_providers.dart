@@ -21,6 +21,7 @@ final Provider<GradingController> Function(String) gradingProvider =
         store: ref.watch(layoutStoreProvider),
         onGraded: (String questionId, AnswerVerdict verdict) {
           // 先补当天那条（没做过也说明"判过"），再把历史行的结论一起刷成最新。
+          // 写完顺手让记录页失效：判题会改正确率，不能等用户切 tab。
           unawaited(
             records
                 .touch(
@@ -35,7 +36,11 @@ final Provider<GradingController> Function(String) gradingProvider =
                     questionId: questionId,
                     verdict: verdict,
                   ),
-                ),
+                )
+                .whenComplete(() {
+                  ref.invalidate(recordsOverviewProvider);
+                  ref.invalidate(recordsTimelineProvider);
+                }),
           );
         },
       );

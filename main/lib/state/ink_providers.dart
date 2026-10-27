@@ -6,6 +6,8 @@ import 'package:shuaqi/domain/ink/ink_doc.dart';
 import 'package:shuaqi/domain/ink/ink_session_id.dart';
 import 'package:shuaqi/domain/ink/ink_store.dart';
 import 'package:shuaqi/domain/ink/undo_stack.dart';
+import 'package:shuaqi/domain/model/question.dart';
+import 'package:shuaqi/domain/model/region_set.dart';
 import 'package:shuaqi/domain/records/answer_log.dart';
 import 'package:shuaqi/domain/records/record_time.dart';
 import 'package:shuaqi/infra/ink/answer_ink_store.dart';
@@ -16,6 +18,7 @@ import 'package:shuaqi/infra/ink/sif_ink_store.dart';
 import 'package:shuaqi/state/app_providers.dart';
 import 'package:shuaqi/state/record_providers.dart';
 import 'package:shuaqi/state/redo_context.dart';
+import 'package:shuaqi/state/region_providers.dart';
 
 /// session id 的编解码在 `domain/ink/ink_session_id.dart`（数据契约，测试也要用）。
 /// 这里 re-export，老的 `import state/ink_providers.dart` 不用改。
@@ -465,7 +468,8 @@ class InkEditController extends Notifier<InkEditState> {
               workbookId: _key.workbookId,
               questionId: questionId,
               source: RecordSource.ink,
-            ),
+            )
+            .whenComplete(_invalidateRecordPages),
       );
       return;
     }
@@ -478,6 +482,9 @@ class InkEditController extends Notifier<InkEditState> {
     final ({String favoriteId, String? attemptId})? redo =
         parseFavoriteRedoSessionRef(_key.sessionId);
     if (redo == null) {
+      // 卷面作答（2026-10-27 补）：不经过答题卡、直接写在 PDF 页上的墨迹，
+      // 只要落在某道题的框里，也算"做过这道题"。
+      _recordPageInkIfAny();
       return;
     }
     // v8：重刷的记录带**来源**（组卷 / 单题重刷），同一天可以与原卷的记录并存。
@@ -498,8 +505,95 @@ class InkEditController extends Notifier<InkEditState> {
         origin: origin,
         originTitle: context?.title ?? '',
         attemptId: attemptId,
-      ),
+      ).whenComplete(_invalidateRecordPages),
     );
+  }
+
+  /// 卷面作答：PDF 页上的墨迹落在某道题的框里 → 记一笔"做过"。
+  ///
+  /// 为什么之前没有：v7 的打点只认答题卡会话（`ans:`），直接写在卷面上的字
+  /// 不进记录 —— 用户 2026-10-27 指出这是遗漏。
+  ///
+  /// 归属口径：
+  /// - 只认**这一页**上的框（跨页题按页切片）；
+  /// - 卷里有小题（level > 1）时只数小题，避免"大题容器 + 小题"重复记两道；
+  /// - 只要有一笔的**落点**在框内就算（不是笔迹外接框相交，避免长笔误伤）。
+  void _recordPageInkIfAny() {
+    final String workbookId = _key.workbookId;
+    if (workbookId.isEmpty || state.doc.strokes.isEmpty) {
+      return;
+    }
+    unawaited(_recordPageInk(workbookId, _key.pageIndex));
+  }
+
+  Future<void> _recordPageInk(String workbookId, int pageIndex) async {
+    try {
+      final RegionSet set = await ref.read(
+        regionSetProvider(workbookId).future,
+      );
+      if (set.questions.isEmpty) {
+        return;
+      }
+      final bool hasSubQuestions = set.questions.any(
+        (QuestionBundle bundle) => bundle.question.parentId != null,
+      );
+      final int now = DateTime.now().millisecondsSinceEpoch;
+      for (final QuestionBundle bundle in set.questions) {
+        if (hasSubQuestions && bundle.question.parentId == null) {
+          continue;
+        }
+        final List<QuestionSlice> slices = <QuestionSlice>[
+          for (final QuestionSlice slice in bundle.slices)
+            if (slice.pageIndex == pageIndex) slice,
+        ];
+        if (slices.isEmpty || !_inkHitsSlices(slices)) {
+          continue;
+        }
+        final String stamp = answerRecordKeyOf(bundle.question.id, now);
+        if (!_recordedQuestionDays.add(stamp)) {
+          continue;
+        }
+        await ref
+            .read(recordServiceProvider)
+            .touch(
+              workbookId: workbookId,
+              questionId: bundle.question.id,
+              source: RecordSource.ink,
+            );
+        _invalidateRecordPages();
+      }
+    } on Object {
+      // 记录是旁路：任何异常都不能影响落笔。
+    }
+  }
+
+  /// 记录写成功后，让记录页当场重算 —— 不再依赖"切 tab 才刷新"。
+  ///
+  /// 2026-10-27：用户反馈"作答后记录页不实时更新"。原来只有 `records_page`
+  /// 监听 `shellTabProvider` 变化时才 invalidate；如果页面本来就停在「记录」tab
+  /// （或 IndexedStack 保活期间写入了记录），切回来时 tab 没变，就不会重算。
+  /// 改成"写一笔就失效"，记录页无论在哪都会拿到新数据。
+  void _invalidateRecordPages() {
+    try {
+      ref.invalidate(recordsOverviewProvider);
+      ref.invalidate(recordsTimelineProvider);
+    } on Object {
+      // 旁路：刷新失败不影响书写。
+    }
+  }
+
+  /// 这一页的墨迹是否有落点在某道题的框内。
+  bool _inkHitsSlices(List<QuestionSlice> slices) {
+    for (final InkStroke stroke in state.doc.strokes) {
+      for (final InkPoint point in stroke.points) {
+        for (final QuestionSlice slice in slices) {
+          if (slice.rect.contains(point.x, point.y)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 
   /// 重刷页的一笔也算"做过"：回表拿到这道收藏的来源卷与题号。
