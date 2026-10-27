@@ -7,13 +7,15 @@
 Rpage/
 ├─ index.html              页面结构 + 全部文案
 ├─ site.config.js          部署前唯一需要改的文件（APK 地址、GitHub 地址）
-├─ favicon.svg             站点图标
+├─ favicon.svg             站点图标（与 App 图标同一份 SVG）
+├─ apple-touch-icon.png    180px，iOS「添加到主屏」用
+├─ icon-512.png            512px 图标大图（og / 商店素材）
 ├─ assets/
-│  ├─ css/site.css         设计令牌 + 全部样式（约 2.8k 行）
+│  ├─ css/site.css         设计令牌 + 全部样式（约 2.9k 行）
 │  ├─ js/site.js           滚动动效、三个功能演示、试写画布、热力图、色系
-│  └─ img/*.webp           真机截图（1800px 宽，已裁掉状态栏）
+│  └─ img/                 真机截图（1800px 宽，已裁状态栏）+ app-icon.png
 └─ download/
-   └─ shuaqi-0.1.0.apk     当前内测包（49 MB，未签名）
+   └─ shuaqi-0.1.0.apk     当前内测包（36 MB，release 签名，仅 arm64）
 ```
 
 ---
@@ -37,8 +39,8 @@ python -m http.server 8788
 
 ```js
 window.SHUAQI = {
-  apkUrl: "download/shuaqi-0.1.0.apk",  // 改成你的下载地址
-  github: ""                             // 填了才会出现「GitHub 仓库」按钮
+  apkUrl: "https://github.com/Terryliu001/SHUA_QI/releases/download/v0.1.0/shuaqi-0.1.0.apk",
+  github: "https://github.com/Terryliu001/SHUA_QI"
 };
 ```
 
@@ -46,13 +48,16 @@ window.SHUAQI = {
 
 | 放法 | 怎么配 | 适合 |
 |---|---|---|
-| 跟站点一起 | 把 APK 放在 `download/`，`apkUrl` 保持默认 | 自己的服务器，最省事 |
-| GitHub Releases | 上传资产后填 `https://github.com/<你>/<仓库>/releases/download/v0.1.0/shuaqi-0.1.0.apk` | 推 GitHub，网页不放二进制 |
+| GitHub Releases（**当前默认**） | 建 Release `v0.1.0`，资产名必须是 `shuaqi-0.1.0.apk`，`apkUrl` 已填好 | 推 GitHub，仓库里不放二进制 |
+| 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.0.apk` | 自己的服务器，最省事 |
 | CDN / 对象存储 | 填完整 URL | 想扛流量、想换包不换网页 |
 
-> `download/shuaqi-0.1.0.apk` 现在就是 `main/build/app/outputs/flutter-apk/app-release.apk`
-> 的原样拷贝（**49 MB，debug 签名的内测包**）。正式版换签名后记得同时更新
-> 页面上的版本号、体积与 SHA-256。
+> 仓库里的 `Rpage/download/` 是 **.gitignore 掉的**，所以走 Pages 时必须用 Release 直链，
+> 否则站点的下载按钮会 404。放自己服务器时把包一起上传即可。
+>
+> `download/shuaqi-0.1.0.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
+> **36 MB / 38,025,823 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
+> 换包后务必同步页面上的体积、字节数与 SHA-256。
 
 ### ② 版本信息（`index.html` → `#download` 区块）
 
@@ -60,10 +65,10 @@ window.SHUAQI = {
 
 | 位置 | 现在写的 |
 |---|---|
-| 首屏按钮 | `v0.1.0 · 49 MB` |
-| 下载区标题旁 | `v0.1.0 · 49 MB` |
-| 参数表 | `0.1.0 (1)` / `Android 8.0 以上 · arm64` / `49 MB · 51,380,751 字节` / `2026-10-26` |
-| `SHA-256` | `FA875C1D…24A3CECB` |
+| 首屏按钮 | `v0.1.0 · 36 MB` |
+| 下载区标题旁 | `v0.1.0 · 36 MB` |
+| 参数表 | `0.1.0 (1)` / `Android 8.0 以上 · arm64` / `36 MB · 38,025,823 字节` / `2026-10-27` |
+| `SHA-256` | `0F28C702…349882C5` |
 
 重新算 SHA-256：
 
@@ -77,7 +82,7 @@ window.SHUAQI = {
 
 | 文件 | 用在哪 | 来源 |
 |---|---|---|
-| `reader-panel.webp` | 首屏设备 | `demo_assets/verify/2026-10-26-bd/10-region-panel.png` |
+| `reader-panel.webp` | 首屏设备 | **2026-10-27 真机新拍**：自制高数样卷第 2 页，卷面上手写「你好」+ 荧光笔，右侧题目面板；源图 `_verify/demo/63-hero3.png` |
 | `bookshelf.webp` | 00 书架 | **2026-10-27 真机新拍**：8 本卷子（含 5 份自制样卷），源图 `_verify/demo/22-shelf.png` |
 | `favorites.webp` | 画廊 1 | `.../2026-10-25-favorites-r4/08-tag-applied.png` |
 | `answer-ai.webp` | 画廊 2 | `.../2026-10-25-favorites-r4/12-answer-sheet-ai.png` |
@@ -98,15 +103,17 @@ im.save(dst, "WEBP", quality=84, method=6)
 
 ## 3. 部署
 
-### GitHub Pages
+### GitHub Pages（本仓库已带 workflow）
 
-```powershell
-# 仓库设置 → Pages → Source: GitHub Actions / Deploy from a branch（/root 或 /docs）
-# 若把 Rpage 作为独立仓库：直接推上去，Settings → Pages → main / (root)
-copy .nojekyll dist\   # 本例已在 Rpage 根目录放好
-```
+`.github/workflows/pages.yml` 会把 **`Rpage/` 目录**直接发成站点根目录，推 main 即触发。
 
-`site.config.js` 里的 `apkUrl` 建议改成 Releases 直链，仓库里就不用放 49 MB 的二进制。
+一次性设置：
+
+1. 仓库 → **Settings → Pages → Build and deployment → Source** 选 **GitHub Actions**；
+2. 推一次 main（或手动跑一次 `Deploy site (Rpage)` workflow）；
+3. 站点地址形如 `https://terryliu001.github.io/SHUA_QI/`（**仓库必须是 public**，私有仓库开 Pages 需要付费计划）。
+
+`site.config.js` 里的 `apkUrl` 已指向 Releases 直链，仓库里不放二进制。
 
 ### 自己的服务器（Nginx）
 
@@ -166,6 +173,22 @@ Google Fonts 被墙导致中文字体回退**的问题，全部走系统字体�
 4. **试写画布**：Canvas 2D + Pointer Events，支持手写笔压感、荧光笔、
    **局部橡皮（把一笔切成两段，不是整笔删）**、撤销、清空、6 种纸色。
    这是页面上唯一"真的能玩"的功能，也是产品最容易被误解的那部分——所以放开手让人试。
+
+### 4.3 图标（App 与网站共用）
+
+一张裁了角的卷子、两道手写、一道判题勾，底色是深墨渐变（`#1D2B3A → #080D12`），
+勾用品牌靛蓝 `#2E5BD8`。**全部是路径，不依赖字体**，所以 App 与网站可以是同一份 SVG。
+
+| 落点 | 文件 |
+|---|---|
+| App 启动图标（旧系统） | `main/android/app/src/main/res/mipmap-*/ic_launcher.png`（48/72/96/144/192） |
+| App 启动图标（自适应） | `mipmap-anydpi-v26/ic_launcher.xml` + `mipmap-*/ic_launcher_foreground.png` + `values/colors.xml` |
+| 网站 favicon / iOS / 大图 | `favicon.svg` / `apple-touch-icon.png` / `icon-512.png` |
+| 下载区展示 | `assets/img/app-icon.png`（256px，不透明方版） |
+
+源文件与生成脚本在 `_verify/demo/icon/`（`icon-full.svg` / `icon-fg.svg` / `icon-square.svg`），
+改图标就改这三个 SVG，再跑 `make_icon.py` + `make_icon_assets.py`（后者需要本机 Edge 渲染）。
+**App 内部左上角那个「刷」徽标没有改**，也不该改——它是应用内的品牌记号，和桌面图标分工不同。
 
 ---
 
@@ -227,5 +250,6 @@ node ..\_verify\shot.mjs http://127.0.0.1:8788/ ..\_verify\out 1440 900
 ## 8. 素材与授权
 
 - 截图来自本项目的真机验证（OPPO OPD2601），内容为自制/校内数学卷，页面里已裁掉状态栏。
+- 图标是本项目原创路径（`_verify/demo/icon/*.svg`），不含任何第三方图形或字体。
 - 字体全部走系统栈，不打包任何字体文件。
 - 若把页面公开，请保留页脚"数据只在你的设备上"的表述，不要改成"云端同步"之类。
