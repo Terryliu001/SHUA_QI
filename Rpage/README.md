@@ -1,4 +1,4 @@
-# 刷起 SHUAQI · 展示与下载页
+﻿# 刷起 SHUAQI · 展示与下载页
 
 一个**没有任何构建步骤**的静态单页：`index.html` + 一份 CSS + 一份 JS + 几张截图。
 直接丢到任意静态服务器（Nginx / GitHub Pages / 对象存储）就能跑。
@@ -56,7 +56,7 @@ window.SHUAQI = {
 > 否则站点的下载按钮会 404。放自己服务器时把包一起上传即可。
 >
 > `download/shuaqi-0.1.0.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
-> **36 MB / 38,025,823 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
+> **36.6 MB / 38,378,383 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
 > 换包后务必同步页面上的体积、字节数与 SHA-256。
 
 ### ② 版本信息（`index.html` → `#download` 区块）
@@ -65,10 +65,10 @@ window.SHUAQI = {
 
 | 位置 | 现在写的 |
 |---|---|
-| 首屏按钮 | `v0.1.0 · 36 MB` |
-| 下载区标题旁 | `v0.1.0 · 36 MB` |
+| 首屏按钮 | `v0.1.0 · 36.6 MB` |
+| 下载区标题旁 | `v0.1.0 · 36.6 MB` |
 | 参数表 | `0.1.0 (1)` / `Android 8.0 以上 · arm64` / `36 MB · 38,025,823 字节` / `2026-10-27` |
-| `SHA-256` | `0F28C702…349882C5` |
+| `SHA-256` | `467B346C…DB64907A` |
 
 重新算 SHA-256：
 

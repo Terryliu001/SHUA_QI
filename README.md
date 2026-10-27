@@ -1,4 +1,4 @@
-<p align="center">
+﻿<p align="center">
   <img src="Rpage/assets/img/app-icon.png" width="96" alt="刷起 SHUAQI">
 </p>
 
@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/Terryliu001/SHUA_QI/releases">下载</a> ·
-  <a href="Rpage/">展示页</a> ·
+  <a href="https://terryliu001.github.io/SHUA_QI/">展示页</a> ·
   <a href="项目日志/README.md">开发日志</a> ·
   <a href="宣传/075-功能清单与宣发建议.md">功能清单</a>
 </p>
@@ -28,7 +28,7 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 |---|---|
 | 版本 | v0.1.0（内测） |
 | 平台 | Android 8.0+ · **仅 arm64** · 平板 + 手写笔最佳 |
-| 体积 | 36.3 MB（已用 release 密钥签名） |
+| 体积 | 36.6 MB（已用 release 密钥签名） |
 | 位置 | [Releases](https://github.com/Terryliu001/SHUA_QI/releases) → `shuaqi-0.1.0.apk` |
 
 > 装过更早的 debug 签名版本时，两个包签名不同、需要先卸载（卸载会删本机数据，先导出备份）。

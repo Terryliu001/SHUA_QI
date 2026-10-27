@@ -70,9 +70,16 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // 正式包用 release 密钥；没配 key.properties 时回落 debug（方便本地 flutter run --release）。
             signingConfig = signingConfigs.getByName(if (keystoreFile.exists()) "release" else "debug")
+
+            // R8：ML Kit 用反射实例化组件注册器，必须按 proguard-rules.pro 保活，
+            // 否则 release 包启动即崩（NoSuchMethodException: *Registrar.<init>）。
+            isMinifyEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
