@@ -877,23 +877,39 @@ class _RegionPainter extends CustomPainter {
         oldDelegate.darkPaper != darkPaper ||
         oldDelegate.selectedKey != selectedKey ||
         oldDelegate.marks.length != marks.length ||
-        !_sameMarks(oldDelegate.marks, marks);
+        !regionMarksEqual(oldDelegate.marks, marks);
   }
+}
 
-  static bool _sameMarks(List<RegionMark> a, List<RegionMark> b) {
-    for (int i = 0; i < a.length; i++) {
-      if (a[i].key != b[i].key ||
-          a[i].rect != b[i].rect ||
-          a[i].grade != b[i].grade ||
-          a[i].label != b[i].label ||
-          a[i].locked != b[i].locked ||
-          a[i].isAnswer != b[i].isAnswer ||
-          a[i].userAdded != b[i].userAdded) {
-        return false;
-      }
-    }
-    return true;
+/// 两帧的框是否**完全一样**（决定要不要重绘叠加上层）。
+///
+/// 2026-10-27 用户：在虚线框上点「加题」确认后，符号（题号/位置）都对了，
+/// 但框**没有立刻**由虚线变实线 —— 要关一次题目面板才刷新。
+///
+/// 根因就在这里：确认只改 `level`（1 → 2，虚线 → 实线）；
+/// 而旧的比较漏了 `level`，key / 矩形 / 题号都没变、置信度又恰好本来就是绿色，
+/// 于是 `shouldRepaint` 判定"没变"，叠加上层保持旧图。
+///
+/// 现在把所有**影响绘制**的字段都比一遍（等级、置信度、锁定、作答框、手画…）；
+/// 漏一个就会重演"改了但屏幕不动"。
+bool regionMarksEqual(List<RegionMark> a, List<RegionMark> b) {
+  if (a.length != b.length) {
+    return false;
   }
+  for (int i = 0; i < a.length; i++) {
+    if (a[i].key != b[i].key ||
+        a[i].rect != b[i].rect ||
+        a[i].level != b[i].level ||
+        a[i].grade != b[i].grade ||
+        a[i].confidence != b[i].confidence ||
+        a[i].label != b[i].label ||
+        a[i].locked != b[i].locked ||
+        a[i].isAnswer != b[i].isAnswer ||
+        a[i].userAdded != b[i].userAdded) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// 贴框浮动条（2026-10-23 用户第二轮反馈后）：**题号（可改）+ 并入上题 + 删除**。

@@ -39,6 +39,18 @@ class ReleaseNote {
 /// 版本说明（新版本加在**最前面**）。
 const List<ReleaseNote> kReleaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '0.1.2',
+    date: '2026-10-27',
+    fixed: <String>[
+      '虚线框（切题没拿准的块）上点「加题」不再把它改成"最大题号+1"、也不再跳到题目列表末尾：现在是**就地确认**，题号、面板里的位置、题目 id 都不变，只把虚线框变成实线并认作题目',
+      '确认后同一道题的判题/收藏/记录不会因为 id 变化而断开（复用原 anchor key 的题目 id）',
+    ],
+    limits: <String>[
+      '虚线框确认只改这一块本身的层级；如果它下面还挂着自动切出的小题，不会自动合并那些小题',
+      '实线题上点「加题」仍然是"在本题下方新增一道题"（题号接在现有最大号之后）',
+    ],
+  ),
+  ReleaseNote(
     version: '0.1.1',
     date: '2026-10-27',
     added: <String>[

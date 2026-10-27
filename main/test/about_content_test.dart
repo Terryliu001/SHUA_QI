@@ -17,7 +17,15 @@ void main() {
     final ReleaseNote first = kReleaseNotes.first;
     expect(first.version, isNotEmpty);
     expect(first.date, isNotEmpty);
-    expect(first.added, isNotEmpty, reason: '第一版总得有"新增"');
+    // 0.1.2 是纯修复版本（没有新功能），所以"第一条有内容"允许落在 fixed 上；
+    // 早期版本都带 added。这条断言的本意是"别发布一条空版本说明"。
+    expect(
+      first.added.isNotEmpty ||
+          first.changed.isNotEmpty ||
+          first.fixed.isNotEmpty,
+      isTrue,
+      reason: '第一版总得写点"新增/变更/修复"',
+    );
     expect(
       first.limits,
       isNotEmpty,

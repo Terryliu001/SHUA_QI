@@ -7,7 +7,7 @@ abstract final class AppInfo {
   static const String name = '刷起 SHUAQI';
 
   /// 改版本时同步改 `pubspec.yaml` 的 `version:`（见文件头注释）。
-  static const String version = '0.1.1';
+  static const String version = '0.1.2';
 
   static const String tagline = '导入一份 PDF 试卷，就能像在纸上一样写';
 }

@@ -270,4 +270,78 @@ void main() {
       isTrue,
     );
   });
+
+  /// 2026-10-27 用户：虚线框上的「加题」应该是**就地确认**，
+  /// 不是"新建一道题 + 删掉原框"（那会把题号改成最大号+1、位置挪到最后）。
+  EditedQuestion dashed() => EditedQuestion(
+    key: regionKeyOf('二、', <PageSlice>[
+      PageSlice(
+        pageIndex: 0,
+        rect: RegionRect.fromLTRB(50, 500, 400, 700),
+      ),
+    ]),
+    ordinal: 2,
+    label: '二、',
+    level: 1,
+    kind: 'unknown',
+    stem: '',
+    confidence: 0.35,
+    slices: <PageSlice>[
+      PageSlice(
+        pageIndex: 0,
+        rect: RegionRect.fromLTRB(50, 500, 400, 700),
+      ),
+    ],
+  );
+
+  test('16. 确认虚线框：题号/序号/位置/区域全不变，只变实线', () {
+    final EditedQuestion target = dashed();
+    final List<EditedQuestion> before = <EditedQuestion>[
+      base()[0],
+      target,
+      base()[2],
+    ];
+    final List<EditedQuestion> after = CorrectionLog(<RegionCorrection>[
+      ConfirmQuestionCorrection(id: 'a', key: target.key),
+    ]).applyTo(before);
+
+    expect(after.length, 3, reason: '不新增题，也不删除题');
+    expect(after[1].key, target.key, reason: 'key 不变 → 题目 id 会被复用');
+    expect(after[1].ordinal, 2, reason: '序号不变 → 面板位置不变');
+    expect(after[1].label, '二、', reason: '题号不变');
+    expect(after[1].level, 2, reason: 'level 1 → 2：虚线变实线');
+    expect(after[1].confidence, 1, reason: '用户确认过，不再算不确定');
+    expect(after[1].slices.single.rect.top, 500);
+    expect(after[1].slices.single.rect.bottom, 700);
+    // 别的题不动
+    expect(after[0].label, '1.');
+    expect(after[2].label, '3.');
+  });
+
+  test('17. 确认 op 可 JSON 往返、不改题数、重复应用幂等', () {
+    final ConfirmQuestionCorrection op = ConfirmQuestionCorrection(
+      id: 'a',
+      key: dashed().key,
+    );
+    final RegionCorrection? restored = RegionCorrection.fromJson(op.toJson());
+    expect(restored, isA<ConfirmQuestionCorrection>());
+    expect(restored!.key, op.key);
+    expect(restored.id, op.id);
+
+    expect(
+      questionDeltaOf(CorrectionLog(<RegionCorrection>[op])),
+      0,
+      reason: '确认不是"加一道题"，题目净增数不变',
+    );
+
+    final List<EditedQuestion> once = CorrectionLog(<RegionCorrection>[
+      op,
+    ]).applyTo(<EditedQuestion>[dashed()]);
+    final List<EditedQuestion> twice = CorrectionLog(<RegionCorrection>[
+      op,
+      op,
+    ]).applyTo(<EditedQuestion>[dashed()]);
+    expect(twice.single.level, once.single.level);
+    expect(twice.single.key, once.single.key);
+  });
 }

@@ -115,6 +115,8 @@ sealed class RegionCorrection {
           key: key,
           value: (json['v'] as num?)?.toInt() != 0,
         );
+      case 'confirm':
+        return ConfirmQuestionCorrection(id: id, key: key);
       default:
         return null;
     }
@@ -317,6 +319,46 @@ class AddQuestionCorrection extends RegionCorrection {
 
   @override
   String get debugLabel => 'add "$label" p$page';
+}
+
+/// 把「不确定 / 容器」框**就地确认为一道题**（2026-10-27 用户反馈）。
+///
+/// ## 为什么需要它
+/// 切题拿不准时会给一个 **level 1 的虚线框**（"这一块可能是大题容器，也可能是
+/// 一道题"）。用户在题目面板里点「加题」，意思明明是：
+///
+/// > 这一块**就是这道题**，把虚线去掉、认作题目。
+///
+/// 但旧实现走的是 [AddQuestionCorrection] + [DeleteCorrection]：
+/// 新题的题号取"现有最大号 +1"，再删掉原来那个虚线框 ——
+/// 于是题号变了、在面板里也跳到了列表末尾，和用户意图相反。
+///
+/// ## 语义
+/// 只改三件事，其余**一律不动**：
+/// - `level` 1 → 2（虚线 → 实线，开始计入可作答的单题）；
+/// - `confidence` → 1（用户已经确认过，不再是"不确定"）；
+/// - 删除/新增都不做：`key`、`ordinal`、`label`、`slices` 原样保留，
+///   所以**题号不变、面板里的位置不变、题目 id 也不变**
+///   （`RegionBuilder` 按 anchor key 复用旧 id，判题/收藏/记录都不会断）。
+class ConfirmQuestionCorrection extends RegionCorrection {
+  const ConfirmQuestionCorrection({required super.id, required super.key});
+
+  @override
+  List<EditedQuestion> apply(List<EditedQuestion> questions) => _mapQuestion(
+    questions,
+    key,
+    (EditedQuestion question) => question.copyWith(level: 2, confidence: 1),
+  );
+
+  @override
+  Map<String, Object?> toJson() => <String, Object?>{
+    't': 'confirm',
+    'id': id,
+    'key': key,
+  };
+
+  @override
+  String get debugLabel => 'confirm';
 }
 
 /// 删除（软删除：保留记录，重切后还能按 anchor 找回来）。

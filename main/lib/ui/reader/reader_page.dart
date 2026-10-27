@@ -73,6 +73,7 @@ import 'package:shuaqi/ui/reader/reader_top_actions.dart';
 import 'package:shuaqi/ui/reader/region_overlay.dart';
 import 'package:shuaqi/ui/reader/scroll_view.dart';
 import 'package:shuaqi/ui/reader/thumb_drawer.dart';
+import 'package:shuaqi/ui/region/add_question_action.dart';
 import 'package:shuaqi/ui/region/region_action.dart';
 import 'package:shuaqi/ui/settings/ai_settings_sheet.dart';
 import 'package:shuaqi/ui/theme/tokens.dart';
@@ -1683,7 +1684,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           AddQuestionCorrection(
             id: Ulid.next(),
             key: '',
-            label: _nextQuestionLabel(set),
+            label: nextQuestionLabel(set),
             rect: entry.rect,
             page: entry.pageIndex,
           ),
@@ -1691,20 +1692,6 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     if (mounted) {
       _showReaderTip('已把这一块加为题目，可在列表里改题号');
     }
-  }
-
-  /// 下一个默认题号：现有最大数字 +1（扫描件认不出题号时也给一个能用的值）。
-  String _nextQuestionLabel(RegionSet set) {
-    int max = 0;
-    for (final QuestionBundle bundle in set.questions) {
-      final Match? match = RegExp(r'\d+')
-          .firstMatch(bundle.question.label ?? '');
-      final int? number = match == null ? null : int.tryParse(match.group(0)!);
-      if (number != null && number > max) {
-        max = number;
-      }
-    }
-    return '${max + 1}.';
   }
 
   /// 保存题目图片。返回一句给用户看的结果（由长按浮窗就地显示）。
@@ -2299,26 +2286,24 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     final String key = bundle.anchorKey;
     switch (action) {
       case RegionAction.addQuestion:
-        // 在本题下方插入一道新题（区域取本题的最后一段，用户随后拖框即可）。
-        final QuestionSlice base = bundle.slices.last;
-        await edit.run(
-          AddQuestionCorrection(
-            id: Ulid.next(),
-            key: '',
-            label: _nextQuestionLabel(set),
-            rect: base.rect,
-            page: base.pageIndex,
-          ),
+        // 2026-10-27 用户：虚线框上的「加题」= **就地确认**，不是"再加一道"。
+        //
+        // 具体走哪条 correction 由 [addQuestionFor] 决定（纯函数，已单测）：
+        // - 虚线框（level ≤ 1）→ ConfirmQuestionCorrection：题号 / 面板位置 /
+        //   题目 id 全都不变，只把虚线变实线；
+        // - 实线题（level ≥ 2）→ 在本题下方新增一道（题号接现有最大号 +1）。
+        //
+        // 旧实现把第一种也做成了 AddQuestion + Delete：题号被改成最大号 +1，
+        // 在面板里也跳到了末尾 —— 已被用户指出并修正。
+        final RegionCorrection op = addQuestionFor(
+          bundle: bundle,
+          set: set,
+          id: Ulid.next(),
+          key: key,
         );
-        // 灰色虚线框 = 切题把它当成"大题容器"（level 1）。用户在它上面点「加题」，
-        // 意思就是"这一块其实是一道题"——所以把原来那个容器框一起收掉，
-        // 否则新题与虚线框叠在原处（用户 2026-10-25 第 4 条）。
-        // 只删这个容器本身；它下面的小题不受影响（DeleteCorrection 只标记自己）。
-        if (bundle.question.level == 1) {
-          await edit.run(DeleteCorrection(id: Ulid.next(), key: key));
-          if (mounted) {
-            _showReaderTip('已把这一块加为题目，原来的虚线框已去掉');
-          }
+        await edit.run(op);
+        if (op is ConfirmQuestionCorrection && mounted) {
+          _showReaderTip('已确认这一块是题目（题号不变，虚线框已变实线）');
         }
       case RegionAction.split:
         final QuestionSlice slice = bundle.slices.firstWhere(
