@@ -29,6 +29,7 @@ import 'package:shuaqi/domain/model/wb_page.dart';
 import 'package:shuaqi/domain/reader/panel_metrics.dart';
 import 'package:shuaqi/domain/reader/reader_prefs.dart';
 import 'package:shuaqi/domain/region/answer.dart';
+import 'package:shuaqi/domain/region/answer_freshness.dart';
 import 'package:shuaqi/domain/region/correction.dart';
 import 'package:shuaqi/domain/region/edited_question.dart';
 import 'package:shuaqi/domain/region/grading_policy.dart';
@@ -198,9 +199,24 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   /// 答题卡画布上的内容（按题缓存），用于「答题情况」同步预览与 OCR。
   final Map<String, InkDoc> _answerInkDocs = <String, InkDoc>{};
 
-  /// 面板里「答题情况」的 OCR 引擎与进行态。
+  /// 每道题答题卡所有张的笔数合计（预览统计用）。
+  final Map<String, int> _answerInkTotals = <String, int>{};
+
+  /// 面板里「答题情况」的 OCR 引擎。
   MlKitInkEngine? _panelOcr;
-  bool _recognizingAnswer = false;
+
+  /// 正在识别的题（按 questionId，允许多题排队；卡片只给自己的题转圈）。
+  final Set<String> _recognizingIds = <String>{};
+
+  /// 每道题在途的 OCR Future：同一题不并跑，不同题排队但不丢。
+  final Map<String, Future<void>> _ocrInFlight = <String, Future<void>>{};
+
+  /// 改框后的 OCR 防抖（拖动会连续触发 updateRect）。
+  Timer? _answerBoxOcrTimer;
+
+  /// 一键改卷进度。
+  int _gradeDone = 0;
+  int _gradeTotal = 0;
 
   /// 正在保存作答原图（防连点）。
   bool _savingAnswerCrop = false;
@@ -369,6 +385,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _answerBoxOcrTimer?.cancel();
     unawaited(_panelOcr?.dispose());
     // 退出阅读器前把 500ms 防抖窗口里的内容也写掉。
     // **不能在这时 ref.read**：widget 已 deactivated，Riverpod 3 会直接报错。
@@ -535,6 +552,8 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     final QuestionBundle? selected = _bundleById(set, _answerQuestionId ?? '');
     if (selected != null) {
       unawaited(_refreshAnswerInkCount(selected));
+      // 用户刚在答题卡里写过：卡片还开着就按新指纹自动重识别。
+      unawaited(_autoRecognizeIfNeeded(selected));
     }
     setState(() {});
   }
@@ -688,57 +707,164 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _jumpTo(page);
     }
     // 展开即自动识别（用户第 4 条：不要「识别」按钮，展开就是后台行为）。
-    // 先等答题卡笔迹统计回来，否则"有没有笔迹"判断不到。
-    unawaited(
-      _refreshAnswerInkCount(bundle)
-          .then((_) => _autoRecognizeIfNeeded(bundle)),
-    );
+    // 0.1.3：不再用 `_autoOcrTried` 一次性闸门，而是按「作答指纹」判断——
+    // 改框 / 增删笔迹 / 换纸之后再展开都会重新识别。
+    unawaited(_autoRecognizeIfNeeded(bundle));
   }
 
-  /// 一次展开只自动试一次（避免模型不可用时反复触发）。
-  final Set<String> _autoOcrTried = <String>{};
-
-  void _autoRecognizeIfNeeded(QuestionBundle bundle) {
+  Future<void> _autoRecognizeIfNeeded(QuestionBundle bundle) async {
     if (!mounted) {
       return;
     }
-    final AnswerSheetEntry entry = _answerEntryOf(bundle);
-    final InkDoc? ink = _answerInkDocs[bundle.question.id];
-    final bool hasInk =
-        (ink?.strokes.isNotEmpty ?? false) || _answerStrokeCountOf(entry) > 0;
-    if (!hasInk) {
-      return;
+    await _ensureFreshAnswerOcr(bundle);
+  }
+
+  /// 确保这道题的 OCR 对应当前笔迹/作答框；返回最新的作答快照。
+  ///
+  /// 同一题在途的 OCR 会被等待；等完再算一次指纹，防止"识别过程中又写了一笔"
+  /// 导致结果仍然过期。最多再补一次，避免极端情况下死循环。
+  Future<_AnswerInkSnapshot> _ensureFreshAnswerOcr(
+    QuestionBundle bundle, {
+    bool force = false,
+  }) async {
+    for (int attempt = 0; attempt < 2; attempt += 1) {
+      final Future<void>? running = _ocrInFlight[bundle.question.id];
+      if (running != null) {
+        await running;
+      }
+      if (!mounted) {
+        break;
+      }
+      final _AnswerInkSnapshot snapshot = await _answerInkSnapshotOf(bundle);
+      final AnswerSheetEntry entry = snapshot.entry;
+      final bool needs =
+          force ||
+          entry.inkSig != snapshot.signature ||
+          !entry.hasText ||
+          entry.ocrStale;
+      if (!needs || !snapshot.hasAnyInk) {
+        return snapshot;
+      }
+      await _enqueueAnswerOcr(bundle, snapshot: snapshot, silent: true);
     }
-    // 有文字且未过期 → 不用重跑。
-    if (entry.hasText && !entry.ocrStale) {
-      return;
+    return _answerInkSnapshotOf(bundle);
+  }
+
+  /// 读这一题的全部作答笔迹，算指纹，并顺手刷新卡片预览用的缓存。
+  Future<_AnswerInkSnapshot> _answerInkSnapshotOf(QuestionBundle bundle) async {
+    final ReaderHandle? handle = _handle;
+    final AnswerSheetController? controller = _answerSheet;
+    if (handle == null || controller == null || handle.pages.isEmpty) {
+      return _AnswerInkSnapshot(
+        entry: controller?.entryFor(bundle) ?? _answerEntryOf(bundle),
+        sheetDocs: const <InkDoc>[],
+        pageRevision: 0,
+        pageStrokes: const <InkStroke>[],
+        paperPages: 1,
+        signature: '',
+      );
     }
-    if (!_autoOcrTried.add(bundle.question.id)) {
-      return;
+    final AnswerSheetEntry entry = controller.entryFor(bundle);
+    final AnswerPaperData papers = await _papersOf();
+    final int paperPages = papers.forQuestion(bundle.question.id).pages;
+    final List<InkDoc> sheetDocs = await _loadAnswerInkPages(bundle);
+    final bool hasSheetInk = sheetDocs.any(
+      (InkDoc doc) => doc.strokes.isNotEmpty,
+    );
+
+    int pageRevision = 0;
+    List<InkStroke> pageStrokes = const <InkStroke>[];
+    if (!hasSheetInk) {
+      final int pageIndex = entry.pageIndex.clamp(0, handle.pages.length - 1);
+      await ref
+          .read(inkWriterProvider(widget.workbookId))
+          .flush(handle.session.id, pageIndex);
+      final InkDoc pageDoc = await ref
+          .read(inkStoreProvider(widget.workbookId))
+          .load(handle.session.id, pageIndex);
+      pageRevision = pageDoc.revision;
+      pageStrokes = _strokesInRect(pageDoc, entry.rect);
     }
-    unawaited(_recognizePanelAnswer(bundle, silent: true));
+
+    final String signature = answerSignatureOf(
+      entry: entry,
+      sheetDocs: sheetDocs,
+      pageRevision: pageRevision,
+      pageStrokes: pageStrokes,
+      paperPages: paperPages,
+    );
+    final int total =
+        sheetDocs.fold<int>(0, (int sum, InkDoc doc) => sum + doc.strokeCount) +
+        pageStrokes.length;
+    if (mounted) {
+      setState(() {
+        _answerInkDocs[bundle.question.id] = sheetDocs.isEmpty
+            ? InkDoc.empty
+            : sheetDocs.first;
+        _answerInkTotals[bundle.question.id] = total;
+      });
+    }
+    return _AnswerInkSnapshot(
+      entry: entry,
+      sheetDocs: sheetDocs,
+      pageRevision: pageRevision,
+      pageStrokes: pageStrokes,
+      paperPages: paperPages,
+      signature: signature,
+    );
+  }
+
+  /// 同一题只跑一个 OCR；不同题排队但不会被丢掉。
+  Future<void> _enqueueAnswerOcr(
+    QuestionBundle bundle, {
+    _AnswerInkSnapshot? snapshot,
+    bool silent = true,
+  }) {
+    final String id = bundle.question.id;
+    final Future<void>? running = _ocrInFlight[id];
+    if (running != null) {
+      return running;
+    }
+    final Future<void> future =
+        _recognizePanelAnswer(
+          bundle,
+          snapshot: snapshot,
+          silent: silent,
+        ).whenComplete(() {
+          unawaited(_ocrInFlight.remove(id));
+          if (mounted) {
+            setState(() => _recognizingIds.remove(id));
+          }
+        });
+    _ocrInFlight[id] = future;
+    if (mounted) {
+      setState(() => _recognizingIds.add(id));
+    }
+    return future;
+  }
+
+  /// 改框后 300ms 再识别：拖动会连续触发 updateRect，不能每帧跑模型。
+  void _scheduleAnswerOcr(QuestionBundle bundle) {
+    _answerBoxOcrTimer?.cancel();
+    final String id = bundle.question.id;
+    _answerBoxOcrTimer = Timer(const Duration(milliseconds: 300), () {
+      if (!mounted || _answerQuestionId != id) {
+        return;
+      }
+      final RegionSet set = _regionSetOf();
+      final QuestionBundle? latest = _bundleById(set, id);
+      if (latest == null) {
+        return;
+      }
+      unawaited(_autoRecognizeIfNeeded(latest));
+    });
   }
 
   Future<void> _refreshAnswerInkCount(QuestionBundle bundle) async {
-    final ReaderHandle? handle = _handle;
-    if (handle == null) {
+    if (!mounted) {
       return;
     }
-    final InkPageKey key = InkPageKey(
-      answerInkSessionId(handle.session.id, bundle.question.id),
-      0,
-      workbookId: widget.workbookId,
-    );
-    try {
-      final InkDoc doc = await ref
-          .read(inkStoreForKeyProvider(key))
-          .load(key.sessionId, 0);
-      if (mounted) {
-        setState(() => _answerInkDocs[bundle.question.id] = doc);
-      }
-    } on Object {
-      // 统计失败不影响主流程。
-    }
+    await _answerInkSnapshotOf(bundle);
   }
 
   /// 卷面上点中作答框。
@@ -768,9 +894,10 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       entry.rect.right + dx,
       entry.rect.bottom + dy,
     );
-    // 框变了：旧文字属于旧框，允许下次展开时重新自动识别。
-    _autoOcrTried.remove(id);
+    // 框变了：旧文字属于旧框，展开/改卷时会按新指纹自动重识别；
+    // 如果这张卡正开着，防抖后立刻重识别一次。
     unawaited(controller.updateRect(bundle, pageIndex: page, rect: rect));
+    _scheduleAnswerOcr(bundle);
   }
 
   void _resizeAnswer(String key, int page, RegionRect rect) {
@@ -784,9 +911,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     if (bundle == null || controller == null) {
       return;
     }
-    // 同上：框变了就允许重新识别。
-    _autoOcrTried.remove(id);
+    // 同上：框变了就按新指纹重新识别。
     unawaited(controller.updateRect(bundle, pageIndex: page, rect: rect));
+    _scheduleAnswerOcr(bundle);
   }
 
   /// 长按作答框：只给一个恢复整题的入口，避免和题目动作条混在一起。
@@ -865,12 +992,13 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       strokeCount: _answerStrokeCountOf(entry),
       answerNote: answerNote,
       onJump: () => _jumpTo(entry.pageIndex),
-      answerInkCount: ink?.strokeCount ?? -1,
+      answerInkCount:
+          _answerInkTotals[bundle.question.id] ?? ink?.strokeCount ?? -1,
       answerInk: ink,
       pageInk: pageInk,
       pageWidth: page?.width ?? 0,
       pageHeight: page?.height ?? 0,
-      recognizing: _recognizingAnswer,
+      recognizing: _recognizingIds.contains(bundle.question.id),
       onRegenerate: () => unawaited(_regenerateAnswer(bundle)),
       onPreview: () => unawaited(_showAnswerPreview(bundle)),
       onLongPress: () => _openAnswerImageActions(bundle),
@@ -1031,12 +1159,20 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     );
   }
 
-  /// 双击「答题情况」= 重新生成：现在重跑本地识别，接了模型后在这里加 AI 补答案。
+  /// 双击「答题情况」= 重新生成：重跑本地识别。
   Future<void> _regenerateAnswer(QuestionBundle bundle) async {
-    if (_recognizingAnswer) {
+    final Future<void>? running = _ocrInFlight[bundle.question.id];
+    if (running != null) {
+      await running;
+    }
+    if (!mounted) {
       return;
     }
-    await _recognizePanelAnswer(bundle, silent: false);
+    await _enqueueAnswerOcr(
+      bundle,
+      snapshot: await _answerInkSnapshotOf(bundle),
+      silent: false,
+    );
   }
 
   // ── 判题 / 改卷 / 多选（2026-10-24 用户第 9、10 条）──────────────
@@ -1054,13 +1190,14 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     return subs.isEmpty ? all : subs;
   }
 
-  /// 一键改卷（2026-10-26 收尾口径）：
+  /// 一键改卷（2026-10-28 v0.1.3 口径）：
   ///
-  /// 1. **只对已有参考答案的题**跑本地规则；没有答案的题跳过，不硬判。
-  /// 2. 本地可信 → 立即落 auto，指示灯变绿/红。
-  /// 3. 本地判不了或不可信 → 先标黄（pending），汇总后弹窗问用户
-  ///    "要不要交给 AI 后台判这 N 道"；不自动扣 token。
-  /// 4. AI 判逐题串行，手改结论永远不被覆盖。
+  /// 1. 逐题**先按作答指纹确认 OCR 是新的**（改过框/加过笔迹就自动重识别）；
+  /// 2. 只对已有参考答案的题跑本地规则；没有答案/没有作答的题分别计数；
+  /// 3. 本地可信 → 落绿/红；低置信度的客观题按用户口径**强制落判**并注明；
+  /// 4. AI 判过的题：答案无明显改动 → 保留原判；明显改动 → 用当前 OCR 重判；
+  /// 5. 手改结论永远保留；
+  /// 6. 主观/公式/无识别文字 → 先标黄，汇总后询问是否交给 AI，不自动扣 token。
   Future<void> _gradeAll() async {
     if (_grading || _aiGrading || _fillingAi || _batchAiRunning) {
       return;
@@ -1070,64 +1207,169 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     if (controller == null || set.isEmpty) {
       return;
     }
-    setState(() => _grading = true);
+    final List<QuestionBundle> questions = _gradableQuestions(set);
+    setState(() {
+      _grading = true;
+      _gradeDone = 0;
+      _gradeTotal = questions.length;
+    });
     int correct = 0;
     int wrong = 0;
     int pending = 0;
-    int skipped = 0;
+    int unanswered = 0;
+    int noAnswer = 0;
+    int reOcr = 0;
+    int aiKept = 0;
+    int manualKept = 0;
+    int lowConfidence = 0;
     final List<QuestionBundle> untrusted = <QuestionBundle>[];
     try {
-      for (final QuestionBundle bundle in _gradableQuestions(set)) {
+      for (final QuestionBundle bundle in questions) {
         if (!mounted) {
           return;
         }
-        final String? reference = _referenceAnswerOf(
-          bundle,
-          answers: set.answers,
-        );
-        if (reference == null) {
-          skipped++;
-          continue;
-        }
-        final AnswerSheetEntry entry = _answerEntryOf(bundle);
-        final bool work = await _hasStudentWorkAsync(bundle);
-        final LocalGrade local = judgeLocally(
-          reference: reference,
-          studentText: entry.ocrText,
-          ocrConfidence: entry.ocrConfidence,
-          hasWork: work,
-        );
-        switch (local.readiness) {
-          case GradeReadiness.ready:
-            await controller.applyAuto(<String, AnswerVerdict>{
-              bundle.question.id: local.verdict,
-            });
-            if (local.verdict == AnswerVerdict.correct) {
-              correct++;
-            } else if (local.verdict == AnswerVerdict.wrong) {
-              wrong++;
-            }
-          case GradeReadiness.untrusted:
-            // 先标黄：让用户看到"这题还没判完"，而不是没有指示灯。
-            await controller.applyAuto(<String, AnswerVerdict>{
-              bundle.question.id: AnswerVerdict.pending,
-            });
-            untrusted.add(bundle);
-            pending++;
-          case GradeReadiness.noAnswer:
-          case GradeReadiness.noWork:
-            skipped++;
+        final String id = bundle.question.id;
+        try {
+          final QuestionGrade? existing = controller.data.value.gradeOf(id);
+          final String beforeSig = _answerEntryOf(bundle).inkSig;
+          // 先确保 OCR 对应当前笔迹/作答框（改过就自动重识别）。
+          final _AnswerInkSnapshot snapshot = await _ensureFreshAnswerOcr(
+            bundle,
+          );
+          if (!mounted) {
+            return;
+          }
+          final AnswerSheetEntry entry = snapshot.entry;
+          if (entry.inkSig != beforeSig) {
+            reOcr++;
+          }
+
+          // 手改永远保留；但仍然先把 OCR 刷新，卡片/后续查看看到的是新文字。
+          if (existing?.manual == true) {
+            manualKept++;
+            continue;
+          }
+
+          final String? reference = _referenceAnswerOf(
+            bundle,
+            answers: set.answers,
+          );
+          if (reference == null) {
+            noAnswer++;
+            continue;
+          }
+          if (!snapshot.hasWork) {
+            unanswered++;
+            continue;
+          }
+
+          final GradeEvidence evidence = GradeEvidence(
+            text: entry.ocrText,
+            sig: snapshot.signature,
+            refHash: referenceHashOf(reference),
+          );
+          final bool fromAi = existing?.fromAi == true;
+          final bool significantChange = fromAi
+              ? isSignificantAnswerChange(
+                  grade: existing!,
+                  currentText: entry.ocrText,
+                  currentReference: reference,
+                  currentSignature: snapshot.signature,
+                )
+              : false;
+          if (fromAi && !significantChange) {
+            aiKept++;
+            continue;
+          }
+
+          final LocalGrade local = judgeLocally(
+            reference: reference,
+            studentText: entry.ocrText,
+            ocrConfidence: entry.ocrConfidence,
+            hasWork: true,
+          );
+          final Map<String, GradeEvidence> evidenceById =
+              <String, GradeEvidence>{id: evidence};
+          final Map<String, String> notes = <String, String>{};
+
+          switch (local.readiness) {
+            case GradeReadiness.ready:
+              if (fromAi) {
+                notes[id] = '答案有明显改动，已按当前识别重判';
+              }
+              await controller.applyAuto(
+                <String, AnswerVerdict>{id: local.verdict},
+                evidence: evidenceById,
+                notes: notes,
+                replaceAi: fromAi,
+              );
+              if (local.verdict == AnswerVerdict.correct) {
+                correct++;
+              } else if (local.verdict == AnswerVerdict.wrong) {
+                wrong++;
+              }
+            case GradeReadiness.untrusted:
+              if (local.forceable && local.tentative != null) {
+                // 用户口径：低置信度的客观题也按本地结论落判，结果里注明。
+                lowConfidence++;
+                notes[id] = fromAi
+                    ? '答案有明显改动；低置信度本地判题（${local.reason}）'
+                    : '低置信度本地判题（${local.reason}）';
+                await controller.applyAuto(
+                  <String, AnswerVerdict>{id: local.tentative!},
+                  evidence: evidenceById,
+                  notes: notes,
+                  replaceAi: fromAi,
+                );
+                if (local.tentative == AnswerVerdict.correct) {
+                  correct++;
+                } else if (local.tentative == AnswerVerdict.wrong) {
+                  wrong++;
+                }
+              } else {
+                // 主观/公式/没有识别文字：标黄，汇总后问 AI。
+                notes[id] = fromAi ? '答案有明显改动，本地仍判不了' : '';
+                await controller.applyAuto(
+                  <String, AnswerVerdict>{id: AnswerVerdict.pending},
+                  evidence: evidenceById,
+                  notes: notes,
+                  replaceAi: fromAi,
+                );
+                untrusted.add(bundle);
+                pending++;
+              }
+            case GradeReadiness.noAnswer:
+              noAnswer++;
+            case GradeReadiness.noWork:
+              unanswered++;
+          }
+        } finally {
+          if (mounted) {
+            setState(() => _gradeDone++);
+          }
         }
       }
     } finally {
       if (mounted) {
-        setState(() => _grading = false);
+        setState(() {
+          _grading = false;
+          _gradeTotal = 0;
+          _gradeDone = 0;
+        });
       }
     }
     if (!mounted) {
       return;
     }
-    _showReaderTip('改卷：本地对 $correct · 错 $wrong · 待判 $pending · 跳过 $skipped');
+    _showReaderTip(
+      '改卷：对 $correct · 错 $wrong · 待判 $pending · 未作答 $unanswered'
+      ' · 无答案 $noAnswer · 重识别 $reOcr · 保留AI $aiKept · 保留手改 $manualKept'
+      '${lowConfidence > 0 ? ' · 低置信 $lowConfidence' : ''}',
+    );
+    if (correct + wrong + pending + aiKept + manualKept + lowConfidence == 0 &&
+        unanswered > 0) {
+      await _showUnansweredSummary(unanswered);
+    }
     if (untrusted.isEmpty) {
       return;
     }
@@ -1143,10 +1385,45 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     }
     final bool useAi = await _askAiGrade(
       count: untrusted.length,
-      reason: '本地在客观题比对时判不了，或识别置信度偏低',
+      reason:
+          '主观题/公式题/没有识别文字，本地规则判不了；'
+          '低置信度的客观题已按本地结论落判',
     );
     if (useAi) {
       await _runAiGrading(untrusted, asked: '改卷：帮我判一下这道作答。');
+    }
+  }
+
+  /// 一道都没判出来、且有一批未作答时给一次明确反馈。
+  Future<void> _showUnansweredSummary(int count) async {
+    final bool? go = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('这轮没有可判的作答'),
+        content: Text(
+          '有 $count 道题还没有作答（卷面作答框和答题卡都没有笔迹），已跳过。\n\n'
+          '去答题卡写一遍，回来再改卷就会判了。',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.6),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('知道了'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('去答题卡'),
+          ),
+        ],
+      ),
+    );
+    if (go == true && mounted) {
+      final RegionSet set = _regionSetOf();
+      final List<QuestionBundle> questions = _gradableQuestions(set);
+      final QuestionBundle? target = questions.isEmpty ? null : questions.first;
+      if (target != null) {
+        _openAnswerSheetAt(target.question.id);
+      }
     }
   }
 
@@ -1158,18 +1435,19 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         title: Text('$count 道题需要 AI'),
         content: Text(
           '$reason。\n\n'
-          '要交给 AI 在后台逐题判吗？会产生 $count 次模型请求，'
-          '费用由你的服务商按调用量结算；判题结论仍可被你的手改覆盖。',
+          '「改卷」= 只保留本地结果，这 $count 道保持黄点待判；\n'
+          '「交给 AI 改」= 在后台逐题请求模型，会产生 $count 次请求，'
+          '费用由你的服务商按调用量结算。',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.65),
         ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('先这样'),
+            child: const Text('改卷'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('交给 AI 判'),
+            child: const Text('交给 AI 改'),
           ),
         ],
       ),
@@ -1252,10 +1530,12 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     String asked = 'AI 判：帮我判一下这道作答。',
     AnswerSet? answers,
   }) async {
-    final AnswerSheetEntry entry = _answerEntryOf(bundle);
+    // AI 判也要用当前笔迹对应的 OCR；否则「我刚改完答案，AI 还在看旧文字」。
+    final _AnswerInkSnapshot snapshot = await _ensureFreshAnswerOcr(bundle);
+    final AnswerSheetEntry entry = snapshot.entry;
     final List<AiImageAttachment> attachments = await _aiAttachmentsOf(bundle);
     final bool hasWork =
-        entry.ocrText.trim().isNotEmpty ||
+        snapshot.hasWork ||
         attachments.any(
           (AiImageAttachment item) => item.kind == AiImageKind.answer,
         );
@@ -1275,6 +1555,11 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           bundle.question.id,
           grade.verdict,
           note: grade.reason,
+          evidence: GradeEvidence(
+            text: entry.ocrText,
+            sig: snapshot.signature,
+            refHash: referenceHashOf(reference),
+          ),
         ) ??
         false;
     await _appendBatchAiTurns(
@@ -2113,43 +2398,32 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   ///
   /// [silent] = 自动触发（展开卡片时）：不弹任何提示，结果只落在卡片文字上；
   /// 用户主动双击重生成时走非 silent，过程与结果都给一句。
+  ///
+  /// 识别结果为空也要写回 `ocr_at` + `ink_sig`：否则「本来就没识别出字」的题
+  /// 每次展开都会重跑模型（用户会觉得一直转圈）。识别抛异常则不写，
+  /// 保留旧指纹以便下次重试。
   Future<void> _recognizePanelAnswer(
     QuestionBundle bundle, {
     bool silent = false,
+    _AnswerInkSnapshot? snapshot,
   }) async {
-    if (_recognizingAnswer) {
-      return;
-    }
     final ReaderHandle? handle = _handle;
     final AnswerSheetController? controller = _answerSheet;
     if (handle == null || controller == null) {
       return;
     }
-    final AnswerSheetEntry entry = controller.entryFor(bundle);
-    setState(() => _recognizingAnswer = true);
     if (!silent) {
       _showReaderTip('正在识别…首次使用会下载本地模型');
     }
     try {
-      // 多张纸：逐张识别，按顺序拼接成这一题的作答文本。
-      final List<InkDoc> sheetDocs = await _loadAnswerInkPages(bundle);
+      final _AnswerInkSnapshot data =
+          snapshot ?? await _answerInkSnapshotOf(bundle);
       final List<InkDoc> targets = <InkDoc>[
-        for (final InkDoc doc in sheetDocs)
+        for (final InkDoc doc in data.sheetDocs)
           if (doc.strokes.isNotEmpty) doc,
       ];
-      if (targets.isEmpty) {
-        // 没有答题卡笔迹：看 PDF 页内作答框里的笔画。
-        final int page = entry.pageIndex.clamp(0, handle.pages.length - 1);
-        await ref
-            .read(inkWriterProvider(widget.workbookId))
-            .flush(handle.session.id, page);
-        final InkDoc pageDoc = await ref
-            .read(inkStoreProvider(widget.workbookId))
-            .load(handle.session.id, page);
-        final List<InkStroke> pageStrokes = _strokesInRect(pageDoc, entry.rect);
-        if (pageStrokes.isNotEmpty) {
-          targets.add(InkDoc(revision: 0, strokes: pageStrokes));
-        }
+      if (targets.isEmpty && data.pageStrokes.isNotEmpty) {
+        targets.add(InkDoc(revision: 0, strokes: data.pageStrokes));
       }
       if (targets.isEmpty) {
         if (!silent) {
@@ -2180,12 +2454,6 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         return;
       }
       final String text = buffer.toString();
-      if (text.trim().isEmpty) {
-        if (!silent) {
-          _showReaderTip('未识别出文字；公式/符号可先保留原图');
-        }
-        return;
-      }
       final double confidence = confidenceCount == 0
           ? 0
           : confidenceSum / confidenceCount;
@@ -2194,20 +2462,24 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         text: text,
         confidence: confidence,
         engine: engine.name,
+        inkSig: data.signature,
       );
-      if (mounted && !silent) {
-        final String preview = text.replaceAll('\n', ' ');
-        _showReaderTip(
-          '识别完成：${preview.length > 28 ? preview.substring(0, 28) : preview}',
-        );
+      if (!mounted) {
+        return;
+      }
+      if (!silent) {
+        if (text.trim().isEmpty) {
+          _showReaderTip('未识别出文字；公式/符号可先保留原图');
+        } else {
+          final String preview = text.replaceAll('\n', ' ');
+          _showReaderTip(
+            '识别完成：${preview.length > 28 ? preview.substring(0, 28) : preview}',
+          );
+        }
       }
     } on Object {
       if (mounted && !silent) {
         _showReaderTip('本地 OCR 不可用');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _recognizingAnswer = false);
       }
     }
   }
@@ -3049,12 +3321,15 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     );
   }
 
-  /// 「对答案」入口（2026-10-26 收尾口径）：
+  /// 「对答案」入口（2026-10-28 v0.1.3 口径）：
   ///
+  /// - 先确保 OCR 对应当前笔迹/作答框（改过就自动重识别）；
   /// - 没有参考答案 → 不可用（按钮已在面板置灰）；
-  /// - 有答案没作答 → 只展示参考答案，不改指示灯；
-  /// - 本地可信 → 直接落结论 + 指示灯；
-  /// - 本地判不了/不可信 → 先黄点，再问是否交给 AI 判这一道。
+  /// - 有答案没作答 → 只展示参考答案，不改指示灯，明确写"卷面与答题卡都没有笔迹"；
+  /// - 手改 → 永远保留，只展示当前依据；
+  /// - AI 判过且无明显改动 → 保留 AI 原判；明显改动 → 用当前 OCR 重判；
+  /// - 本地可信 → 直接落结论；低置信客观题点「判题」按本地结论落判；
+  ///   主观/公式 → 黄点 + 询问是否 AI。
   Future<void> _checkAnswer(QuestionBundle bundle) async {
     final String label = bundle.question.label ?? '${bundle.question.ordinal}';
     final RegionSet set = _regionSetOf();
@@ -3063,44 +3338,104 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
       _showReaderTip('第 $label 题还没有参考答案：先「补答案」或多选用「AI 判」');
       return;
     }
-    final AnswerSheetEntry entry = _answerEntryOf(bundle);
-    final bool work = await _hasStudentWorkAsync(bundle);
+    final _AnswerInkSnapshot snapshot = await _ensureFreshAnswerOcr(bundle);
+    if (!mounted) {
+      return;
+    }
+    final AnswerSheetEntry entry = snapshot.entry;
+    final GradeEvidence evidence = GradeEvidence(
+      text: entry.ocrText,
+      sig: snapshot.signature,
+      refHash: referenceHashOf(reference),
+    );
+    final QuestionGrade? existing = _grades?.data.value.gradeOf(
+      bundle.question.id,
+    );
+
+    // 手改：永远保留。
+    if (existing != null && existing.manual) {
+      await _showGradeResult(
+        bundle: bundle,
+        reference: reference,
+        verdict: existing.verdict,
+        reason: existing.note.isEmpty
+            ? '这道题是你手动改的结论，本次不会覆盖；如需改判，点题号旁的三色点。'
+            : '手改结论优先：${existing.note}',
+        judgedText: entry.ocrText,
+        manual: true,
+      );
+      return;
+    }
+
+    final bool fromAi = existing != null && existing.fromAi;
+    final bool significantChange = fromAi
+        ? isSignificantAnswerChange(
+            grade: existing,
+            currentText: entry.ocrText,
+            currentReference: reference,
+            currentSignature: snapshot.signature,
+          )
+        : false;
+
+    // AI 判过、答案没有明显改动：保留原判，不重复扣 token。
+    if (fromAi && !significantChange) {
+      await _showGradeResult(
+        bundle: bundle,
+        reference: reference,
+        verdict: existing.verdict,
+        reason: existing.note.isEmpty
+            ? '答案没有明显改动，保留 AI 原判。'
+            : '答案没有明显改动，保留 AI 原判。\n${existing.note}',
+        judgedText: entry.ocrText,
+        fromAi: true,
+      );
+      return;
+    }
+
     final LocalGrade local = judgeLocally(
       reference: reference,
       studentText: entry.ocrText,
       ocrConfidence: entry.ocrConfidence,
-      hasWork: work,
+      hasWork: snapshot.hasWork,
     );
-    if (!mounted) {
-      return;
-    }
     if (local.readiness == GradeReadiness.noWork) {
       await _showReferenceOnly(
         bundle: bundle,
         reference: reference,
-        reason: '这道题还没有作答。先看看参考答案，或去答题卡写一遍。',
+        reason: '这道题还没有作答：卷面作答框和答题卡都没有笔迹。先看看参考答案，或去答题卡写一遍。',
       );
       return;
     }
     if (local.canApply) {
-      await _grades?.applyAuto(<String, AnswerVerdict>{
-        bundle.question.id: local.verdict,
-      });
+      await _grades?.applyAuto(
+        <String, AnswerVerdict>{bundle.question.id: local.verdict},
+        evidence: <String, GradeEvidence>{bundle.question.id: evidence},
+        notes: fromAi
+            ? <String, String>{bundle.question.id: '答案有明显改动，已按当前识别重判'}
+            : const <String, String>{},
+        replaceAi: fromAi,
+      );
       if (mounted) {
         await _showGradeResult(
           bundle: bundle,
           reference: reference,
           verdict: local.verdict,
           reason: local.reason,
+          judgedText: entry.ocrText,
         );
       }
       return;
     }
 
-    // 本地不可信：先黄点，让状态明确，再问 AI。
-    await _grades?.applyAuto(<String, AnswerVerdict>{
-      bundle.question.id: AnswerVerdict.pending,
-    });
+    // 本地不可信：先黄点（明显改动的 AI 旧结论不再保留），再问用户。
+    await _grades?.applyAuto(
+      <String, AnswerVerdict>{bundle.question.id: AnswerVerdict.pending},
+      evidence: <String, GradeEvidence>{bundle.question.id: evidence},
+      notes: fromAi
+          ? <String, String>{bundle.question.id: '答案有明显改动，本地仍判不了'}
+          : const <String, String>{},
+      replaceAi: fromAi,
+    );
     final LlmConfig config = await ref.read(llmConfigStoreProvider).load();
     if (!mounted) {
       return;
@@ -3111,11 +3446,49 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
         reference: reference,
         verdict: AnswerVerdict.pending,
         reason: '${local.reason}\n\n要 AI 判，先在「设置 → AI 分析」配置端点与 Key。',
+        judgedText: entry.ocrText,
       );
       return;
     }
-    final bool useAi = await _askSingleAi(label: label, reason: local.reason);
-    if (!useAi || !mounted) {
+    final bool useAi = await _askSingleAi(
+      label: label,
+      reason: local.reason,
+      forceable: local.forceable,
+      tentative: local.tentative,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (!useAi) {
+      // 用户选「判题」：有可强制的本地结论就落判，否则保持黄点。
+      if (local.forceable && local.tentative != null) {
+        final String note = '低置信度本地判题（${local.reason}），请自行核对';
+        await _grades?.applyAuto(
+          <String, AnswerVerdict>{bundle.question.id: local.tentative!},
+          evidence: <String, GradeEvidence>{bundle.question.id: evidence},
+          notes: <String, String>{bundle.question.id: note},
+          replaceAi: fromAi,
+        );
+        if (mounted) {
+          await _showGradeResult(
+            bundle: bundle,
+            reference: reference,
+            verdict: local.tentative!,
+            reason: note,
+            judgedText: entry.ocrText,
+          );
+        }
+      } else {
+        await _showGradeResult(
+          bundle: bundle,
+          reference: reference,
+          verdict: AnswerVerdict.pending,
+          reason:
+              '${local.reason}\n\n这道题没有可强制的本地结论，已保留黄点；'
+              '可以点三色手改，或配置 AI 后交给模型。',
+          judgedText: entry.ocrText,
+        );
+      }
       return;
     }
     try {
@@ -3131,6 +3504,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
           reference: reference,
           verdict: grade.verdict,
           reason: grade.reason,
+          judgedText: entry.ocrText,
           fromAi: true,
         );
       }
@@ -3144,19 +3518,24 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
   Future<bool> _askSingleAi({
     required String label,
     required String reason,
+    required bool forceable,
+    AnswerVerdict? tentative,
   }) async {
     final bool? ok = await showDialog<bool>(
       context: context,
       builder: (BuildContext context) => AlertDialog(
         title: Text('第 $label 题 · 本地判不了'),
         content: Text(
-          '$reason。\n\n交给 AI 判这一道？会产生 1 次模型请求。',
+          '$reason。\n\n'
+          '${forceable && tentative != null ? '本地倾向：${gradeLabel(tentative)}（低置信度）。\n'
+                    '「判题」= 按本地结论落判；' : '「判题」= 保持黄点待判；'}'
+          '「交给 AI 判」= 让模型看当前识别文字与作答图，会产生 1 次模型请求。',
           style: Theme.of(context).textTheme.bodyMedium?.copyWith(height: 1.65),
         ),
         actions: <Widget>[
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('先这样'),
+            child: const Text('判题'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
@@ -3173,11 +3552,18 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
     required String reference,
     required AnswerVerdict verdict,
     required String reason,
+    String? judgedText,
     bool fromAi = false,
+    bool manual = false,
   }) async {
     final String label = bundle.question.label ?? '${bundle.question.ordinal}';
     final ThemeData theme = Theme.of(context);
     final Color color = gradeColor(context, verdict);
+    final String source = manual
+        ? '（手改）'
+        : fromAi
+        ? '（AI）'
+        : '（本地）';
     await showDialog<void>(
       context: context,
       builder: (BuildContext context) => AlertDialog(
@@ -3189,11 +3575,7 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
             ),
             const SizedBox(width: ShqSpace.sm),
-            Expanded(
-              child: Text(
-                '第 $label 题 · ${gradeLabel(verdict)}${fromAi ? '（AI）' : '（本地）'}',
-              ),
-            ),
+            Expanded(child: Text('第 $label 题 · ${gradeLabel(verdict)}$source')),
           ],
         ),
         content: ConstrainedBox(
@@ -3207,6 +3589,26 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                   reason.isEmpty ? '没有更多依据。' : reason,
                   style: theme.textTheme.bodyMedium?.copyWith(height: 1.6),
                 ),
+                if (judgedText != null) ...<Widget>[
+                  const SizedBox(height: ShqSpace.md),
+                  Text(
+                    '本次识别',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: ShqSpace.xs),
+                  SelectableText(
+                    judgedText.trim().isEmpty ? '没有识别到文字' : judgedText,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      height: 1.65,
+                      color: judgedText.trim().isEmpty
+                          ? theme.colorScheme.outline
+                          : null,
+                    ),
+                  ),
+                ],
                 if (reference.trim().isNotEmpty) ...<Widget>[
                   const SizedBox(height: ShqSpace.md),
                   Text(
@@ -4107,6 +4509,9 @@ class _ReaderPageState extends ConsumerState<ReaderPage>
                                       AnswerVerdict.none,
                                   counts: _gradeCounts(regionSet),
                                   grading: _grading || _aiGrading,
+                                  gradeBusyLabel: _grading && _gradeTotal > 0
+                                      ? '改卷 $_gradeDone/$_gradeTotal'
+                                      : null,
                                   onGradeAll: () => unawaited(_gradeAll()),
                                   onFillAnswers: () =>
                                       unawaited(_fillAnswersWithAi()),
@@ -4428,4 +4833,40 @@ class _AiGradeBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 一次作答快照：OCR 真正要用的笔迹 + 指纹 + 是否算「有作答」。
+///
+/// 放在文件末尾而不是某个 State 里：它是纯数据，方法只做派生判断，
+/// 不持有 context / ref，便于以后抽到 domain 做单测。
+class _AnswerInkSnapshot {
+  const _AnswerInkSnapshot({
+    required this.entry,
+    required this.sheetDocs,
+    required this.pageRevision,
+    required this.pageStrokes,
+    required this.paperPages,
+    required this.signature,
+  });
+
+  final AnswerSheetEntry entry;
+  final List<InkDoc> sheetDocs;
+  final int pageRevision;
+  final List<InkStroke> pageStrokes;
+  final int paperPages;
+  final String signature;
+
+  bool get hasSheetInk => sheetDocs.any((InkDoc doc) => doc.strokes.isNotEmpty);
+
+  bool get hasPageInk => pageStrokes.isNotEmpty;
+
+  bool get hasAnyInk => hasSheetInk || hasPageInk;
+
+  /// 与判题/记录的口径一致：识别文字、作答原图、答题卡笔迹、卷面框内笔迹
+  /// 任一存在都算「有作答」。
+  bool get hasWork => entry.hasText || entry.hasCrop || hasAnyInk;
+
+  int get strokeCount =>
+      sheetDocs.fold<int>(0, (int sum, InkDoc doc) => sum + doc.strokeCount) +
+      pageStrokes.length;
 }

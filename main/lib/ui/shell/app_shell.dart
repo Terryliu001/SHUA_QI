@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shuaqi/state/shell_providers.dart';
+import 'package:shuaqi/state/update_providers.dart';
 import 'package:shuaqi/ui/bookshelf/bookshelf_page.dart';
 import 'package:shuaqi/ui/favorites/favorites_page.dart';
 import 'package:shuaqi/ui/records/records_page.dart';
@@ -47,6 +48,8 @@ class _AppShellState extends ConsumerState<AppShell> {
     final ThemeData theme = Theme.of(context);
     final bool wide = MediaQuery.sizeOf(context).width >= 600;
     final int index = ref.watch(shellTabProvider);
+    // 0.1.3：发现新版本时在「设置」导航上冒一个小红点；打开版本说明后清除。
+    final bool hasUpdate = ref.watch(updateBadgeProvider);
 
     final List<_ShellDestination> destinations = <_ShellDestination>[
       const _ShellDestination(
@@ -111,11 +114,17 @@ class _AppShellState extends ConsumerState<AppShell> {
                 ),
               ),
               destinations: <NavigationRailDestination>[
-                for (final _ShellDestination d in destinations)
+                for (int i = 0; i < destinations.length; i += 1)
                   NavigationRailDestination(
-                    icon: Icon(d.icon),
-                    selectedIcon: Icon(d.selectedIcon),
-                    label: Text(d.label),
+                    icon: _withUpdateBadge(
+                      Icon(destinations[i].icon),
+                      hasUpdate && i == 3,
+                    ),
+                    selectedIcon: _withUpdateBadge(
+                      Icon(destinations[i].selectedIcon),
+                      hasUpdate && i == 3,
+                    ),
+                    label: Text(destinations[i].label),
                   ),
               ],
             ),
@@ -145,11 +154,17 @@ class _AppShellState extends ConsumerState<AppShell> {
           selectedIndex: index,
           onDestinationSelected: _select,
           destinations: <Widget>[
-            for (final _ShellDestination d in destinations)
+            for (int i = 0; i < destinations.length; i += 1)
               NavigationDestination(
-                icon: Icon(d.icon),
-                selectedIcon: Icon(d.selectedIcon),
-                label: d.label,
+                icon: _withUpdateBadge(
+                  Icon(destinations[i].icon),
+                  hasUpdate && i == 3,
+                ),
+                selectedIcon: _withUpdateBadge(
+                  Icon(destinations[i].selectedIcon),
+                  hasUpdate && i == 3,
+                ),
+                label: destinations[i].label,
               ),
           ],
         ),
@@ -168,4 +183,11 @@ class _ShellDestination {
   final IconData icon;
   final IconData selectedIcon;
   final String label;
+}
+
+Widget _withUpdateBadge(Widget icon, bool show) {
+  if (!show) {
+    return icon;
+  }
+  return Badge(smallSize: 8, child: icon);
 }

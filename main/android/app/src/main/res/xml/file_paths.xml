@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- UpdateService 下载到 getApplicationSupportDirectory()/update/，
+         在 Android 上就是 files/update/。 -->
+    <files-path name="update" path="update/" />
+</paths>

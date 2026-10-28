@@ -54,6 +54,30 @@ enum GradeSource {
   }
 }
 
+/// 一次判题所用的「依据快照」。
+///
+/// 为什么要存下来：改卷需要判断「AI 判过之后答案有没有大改」。
+/// 只存 verdict 时，下一次改卷只能靠当前 OCR 猜；存了这几项才能做到：
+/// - 参考答案换了 → 重判；
+/// - OCR 文本大改 → 重判；
+/// - 只多写了一个标点 / 重写同一答案 → 保留 AI 原判，不重复扣 token。
+class GradeEvidence {
+  const GradeEvidence({this.text = '', this.sig = '', this.refHash = ''});
+
+  static const GradeEvidence empty = GradeEvidence();
+
+  /// 判题时使用的 OCR 文本。
+  final String text;
+
+  /// 判题时的作答指纹（见 `answer_freshness.dart`）。
+  final String sig;
+
+  /// 判题时使用的参考答案哈希。
+  final String refHash;
+
+  bool get isEmpty => text.isEmpty && sig.isEmpty && refHash.isEmpty;
+}
+
 /// 一道题的判题记录。
 class QuestionGrade {
   const QuestionGrade({
@@ -62,6 +86,9 @@ class QuestionGrade {
     this.source = GradeSource.auto,
     this.at = 0,
     this.note = '',
+    this.judgedText = '',
+    this.judgedSig = '',
+    this.judgedRefHash = '',
   });
 
   factory QuestionGrade.fromJson(Map<String, Object?> json) => QuestionGrade(
@@ -70,6 +97,9 @@ class QuestionGrade {
     source: GradeSource.decode(json['source'] as String?),
     at: (json['at'] as num?)?.toInt() ?? 0,
     note: (json['note'] as String?) ?? '',
+    judgedText: (json['judged_text'] as String?) ?? '',
+    judgedSig: (json['judged_sig'] as String?) ?? '',
+    judgedRefHash: (json['judged_ref_hash'] as String?) ?? '',
   );
 
   final String questionId;
@@ -80,6 +110,17 @@ class QuestionGrade {
   /// 人工备注（例如"识别不准，实际答对"）。
   final String note;
 
+  /// 判题快照（0.1.3 起）。旧记录为空，按「没有快照」保守处理。
+  final String judgedText;
+  final String judgedSig;
+  final String judgedRefHash;
+
+  GradeEvidence get evidence =>
+      GradeEvidence(text: judgedText, sig: judgedSig, refHash: judgedRefHash);
+
+  bool get hasEvidence =>
+      judgedText.isNotEmpty || judgedSig.isNotEmpty || judgedRefHash.isNotEmpty;
+
   bool get manual => source == GradeSource.manual;
 
   bool get fromAi => source == GradeSource.ai;
@@ -89,12 +130,18 @@ class QuestionGrade {
     GradeSource? source,
     int? at,
     String? note,
+    String? judgedText,
+    String? judgedSig,
+    String? judgedRefHash,
   }) => QuestionGrade(
     questionId: questionId,
     verdict: verdict ?? this.verdict,
     source: source ?? this.source,
     at: at ?? this.at,
     note: note ?? this.note,
+    judgedText: judgedText ?? this.judgedText,
+    judgedSig: judgedSig ?? this.judgedSig,
+    judgedRefHash: judgedRefHash ?? this.judgedRefHash,
   );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -103,6 +150,9 @@ class QuestionGrade {
     'source': source.name,
     'at': at,
     'note': note,
+    'judged_text': judgedText,
+    'judged_sig': judgedSig,
+    'judged_ref_hash': judgedRefHash,
   };
 }
 

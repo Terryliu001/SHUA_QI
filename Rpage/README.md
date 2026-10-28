@@ -1,4 +1,4 @@
-# 刷起 SHUAQI · 展示与下载页
+﻿# 刷起 SHUAQI · 展示与下载页
 
 一个**没有任何构建步骤**的静态单页：`index.html` + 一份 CSS + 一份 JS + 几张截图。
 直接丢到任意静态服务器（Nginx / GitHub Pages / 对象存储）就能跑。
@@ -15,7 +15,7 @@ Rpage/
 │  ├─ js/site.js           滚动动效、三个功能演示、试写画布、热力图、色系
 │  └─ img/                 真机截图（1800px 宽，已裁状态栏）+ app-icon.png
 └─ download/
-   └─ shuaqi-0.1.2.apk     当前内测包（36.7 MB，release 签名，仅 arm64）
+   └─ shuaqi-0.1.3.apk     当前内测包（36.9 MB，release 签名，仅 arm64）
 ```
 
 ---
@@ -39,7 +39,7 @@ python -m http.server 8788
 
 ```js
 window.SHUAQI = {
-  apkUrl: "https://github.com/Terryliu001/SHUA_QI/releases/download/v0.1.2/shuaqi-0.1.2.apk",
+  apkUrl: "https://github.com/Terryliu001/SHUA_QI/releases/download/v0.1.3/shuaqi-0.1.3.apk",
   github: "https://github.com/Terryliu001/SHUA_QI"
 };
 ```
@@ -48,17 +48,17 @@ window.SHUAQI = {
 
 | 放法 | 怎么配 | 适合 |
 |---|---|---|
-| GitHub Releases（**当前默认**） | 建 Release `v0.1.2`，资产名必须是 `shuaqi-0.1.2.apk`，`apkUrl` 已填好 | 推 GitHub，仓库里不放二进制 |
-| 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.2.apk` | 自己的服务器，最省事 |
+| GitHub Releases（**当前默认**） | 建 Release `v0.1.3`，资产名必须是 `shuaqi-0.1.3.apk`，`apkUrl` 已填好 | 推 GitHub，仓库里不放二进制 |
+| 跟站点一起 | APK 丢进 `download/`，`apkUrl` 改成 `download/shuaqi-0.1.3.apk` | 自己的服务器，最省事 |
 | CDN / 对象存储 | 填完整 URL | 想扛流量、想换包不换网页 |
 
 > 仓库里的 `Rpage/download/` 是 **.gitignore 掉的**，所以走 Pages 时**不能**让 HTML 依赖
 > `download/...` 的相对路径。现在 `index.html` 里两个下载入口的 `href` 直接写的是
 > Release 直链（**没有 JS 也能下**），`site.config.js` 的 `apkUrl` 只是方便换地址时再覆盖一次。
-> 放自己服务器时把包丢进 `download/`，再把 `apkUrl` 改成 `download/shuaqi-0.1.2.apk` 即可。
+> 放自己服务器时把包丢进 `download/`，再把 `apkUrl` 改成 `download/shuaqi-0.1.3.apk` 即可。
 >
-> `download/shuaqi-0.1.2.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
-> **36.7 MB / 38,509,535 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
+> `download/shuaqi-0.1.3.apk` 现在是 `app-arm64-v8a-release.apk` 的拷贝：
+> **36.9 MB / 38,641,451 字节，release 密钥签名（`D:/keys/shuaqi-release.jks`），只含 arm64**。
 > 换包后务必同步页面上的体积、字节数与 SHA-256。
 
 ### ② 版本信息（`index.html` → `#download` 区块）
@@ -67,15 +67,15 @@ window.SHUAQI = {
 
 | 位置 | 现在写的 |
 |---|---|
-| 首屏按钮 | `v0.1.2 · 36.7 MB` |
-| 下载区标题旁 | `v0.1.2 · 36.7 MB` |
-| 参数表 | `0.1.2 (3)` / `Android 8.0 以上 · arm64` / `36.7 MB · 38,509,535 字节` / `2026-10-27` |
-| `SHA-256` | `A30425EB…30BFB6B6` |
+| 首屏按钮 | `v0.1.3 · 36.9 MB` |
+| 下载区标题旁 | `v0.1.3 · 36.9 MB` |
+| 参数表 | `0.1.3 (4)` / `Android 8.0 以上 · arm64` / `36.9 MB · 38,641,451 字节` / `2026-10-28` |
+| `SHA-256` | `38561263…247905A0` |
 
 重新算 SHA-256：
 
 ```powershell
-(Get-FileHash .\download\shuaqi-0.1.2.apk -Algorithm SHA256).Hash
+(Get-FileHash .\download\shuaqi-0.1.3.apk -Algorithm SHA256).Hash
 ```
 
 ### ③ 截图（`assets/img/`）
@@ -204,7 +204,7 @@ Google Fonts 被墙导致中文字体回退**的问题，全部走系统字体�
 - 反馈通道**已接通**（0.1.1 起：内置私有反馈仓库，文字 + 截图；失败的先存本机并可重试）。
 - 不写"提分""押题""AI 一键解题"；不出现任何出版社/学校完整卷面。
 
-页面里出现的数字（36.7 MB / 38,509,535 字节 / SHA-256 / v0.1.2 / DB v9）都来自
+页面里出现的数字（36.9 MB / 38,641,451 字节 / SHA-256 / v0.1.3 / DB v9）都来自
 `main/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk` 的实测值。
 
 ---
@@ -255,3 +255,7 @@ node ..\_verify\shot.mjs http://127.0.0.1:8788/ ..\_verify\out 1440 900
 - 图标是本项目原创路径（`_verify/demo/icon/*.svg`），不含任何第三方图形或字体。
 - 字体全部走系统栈，不打包任何字体文件。
 - 若把页面公开，请保留页脚"数据只在你的设备上"的表述，不要改成"云端同步"之类。
+
+
+
+

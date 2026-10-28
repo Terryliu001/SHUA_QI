@@ -67,6 +67,8 @@ class AnswerSheetController {
       rect: rect,
       regionSource: source,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
+      // 框变了：旧 OCR 文字不再对应新框。清掉指纹，展开/改卷时会自动重识别。
+      inkSig: '',
     );
     data.value = data.value.withEntry(next);
     _dirty = true;
@@ -91,6 +93,8 @@ class AnswerSheetController {
       ocrEngine: current.ocrEngine,
       cropPath: current.cropPath,
       updatedAt: DateTime.now().millisecondsSinceEpoch,
+      // 框回到整题：旧文字/指纹都属于旧框，下次展开会自动重识别。
+      inkSig: '',
     );
     data.value = data.value.withEntry(next);
     _dirty = true;
@@ -98,12 +102,17 @@ class AnswerSheetController {
   }
 
   /// 本地 OCR 完成/手工修正后回写。
+  ///
+  /// [inkSig] 是这次识别对应的作答指纹。**识别结果为空也要写**：
+  /// 否则「本来就没识别出字」的题每次展开都会重新跑识别（用户会觉得卡）。
+  /// 识别失败（抛异常）不要调用本方法，留下旧指纹以便下次重试。
   Future<void> updateOcr(
     QuestionBundle bundle, {
     required String text,
     required double confidence,
     required String engine,
     String? cropPath,
+    String? inkSig,
   }) async {
     final AnswerSheetEntry current = entryFor(bundle);
     final int now = DateTime.now().millisecondsSinceEpoch;
@@ -115,6 +124,7 @@ class AnswerSheetController {
       updatedAt: now,
       // 识别时间单独记：改作答框不会刷新它，`ocrStale` 才判得准。
       ocrAt: now,
+      inkSig: inkSig,
     );
     data.value = data.value.withEntry(next);
     _dirty = true;

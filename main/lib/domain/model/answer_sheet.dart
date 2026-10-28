@@ -32,6 +32,7 @@ class AnswerSheetEntry {
     this.cropPath,
     this.updatedAt = 0,
     this.ocrAt = 0,
+    this.inkSig = '',
   });
 
   /// 默认：**整道题干区域**都算作答区。
@@ -68,6 +69,7 @@ class AnswerSheetEntry {
       cropPath: json['crop_path'] as String?,
       updatedAt: (json['updated_at'] as num?)?.toInt() ?? 0,
       ocrAt: (json['ocr_at'] as num?)?.toInt() ?? 0,
+      inkSig: (json['ink_sig'] as String?) ?? '',
     );
   }
 
@@ -102,6 +104,12 @@ class AnswerSheetEntry {
   /// "框改过了、文字还是旧框里识别的"这件具体的事（2026-10-24 用户第 5 条）。
   final int ocrAt;
 
+  /// 这份 [ocrText] 对应的作答指纹（见 `domain/region/answer_freshness.dart`）。
+  ///
+  /// 空串 = 还没有按当前笔迹/作答框识别过。改作答框、增删笔迹都会让指纹变化；
+  /// 展开「答题情况」时据此自动重识别，不需要用户手动点。
+  final String inkSig;
+
   bool get hasText => ocrText.trim().isNotEmpty;
 
   bool get hasCrop => cropPath != null && cropPath!.isNotEmpty;
@@ -121,6 +129,7 @@ class AnswerSheetEntry {
     String? cropPath,
     int? updatedAt,
     int? ocrAt,
+    String? inkSig,
     bool clearCrop = false,
   }) {
     return AnswerSheetEntry(
@@ -134,6 +143,7 @@ class AnswerSheetEntry {
       cropPath: clearCrop ? null : (cropPath ?? this.cropPath),
       updatedAt: updatedAt ?? this.updatedAt,
       ocrAt: ocrAt ?? this.ocrAt,
+      inkSig: inkSig ?? this.inkSig,
     );
   }
 
@@ -148,6 +158,7 @@ class AnswerSheetEntry {
     'crop_path': cropPath,
     'updated_at': updatedAt,
     'ocr_at': ocrAt,
+    'ink_sig': inkSig,
   };
 }
 

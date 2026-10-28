@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:archive/archive_io.dart';
 import 'package:path/path.dart' as p;
 import 'package:shuaqi/domain/app/backup_manifest.dart';
+import 'package:shuaqi/domain/app/backup_naming.dart';
 import 'package:shuaqi/infra/db/app_database.dart';
 import 'package:shuaqi/infra/db/migrations.dart';
 import 'package:shuaqi/infra/vault/vault.dart';
@@ -51,7 +52,9 @@ class BackupService {
   Directory get _stashRoot => Directory(p.join(supportPath, 'restore_stash'));
 
   /// 生成备份 zip，返回文件路径（调用方负责把它交给系统保存并删除）。
-  Future<BackupFile> createBackup() async {
+  ///
+  /// [name] 是**不含 `.zip`** 的基名（用户可改）；不传时用默认时间名。
+  Future<BackupFile> createBackup({String? name}) async {
     final Directory work = _workDir;
     if (work.existsSync()) {
       await work.delete(recursive: true);
@@ -66,13 +69,15 @@ class BackupService {
     }
 
     // 2) 统计（manifest 里的数字，用来在恢复前让用户确认"是不是这份"）。
-    final int workbooks = await _count('workbook');
-    final int favorites = await _count('favorite');
-    final int records = await _count('answer_log');
+    final BackupCounts counts = await readCounts();
 
     final DateTime now = DateTime.now();
-    final String stamp = _stamp(now);
-    final String zipPath = p.join(work.path, 'SHUAQI_backup_$stamp.zip');
+    final String base = name == null
+        ? defaultBackupBaseName(now)
+        : sanitizeBackupBaseName(name);
+    final String safeBase = base.isEmpty ? defaultBackupBaseName(now) : base;
+    final String zipName = ensureZipName(safeBase);
+    final String zipPath = p.join(work.path, zipName);
 
     final ZipFileEncoder encoder = ZipFileEncoder();
     encoder.create(zipPath);
@@ -82,9 +87,9 @@ class BackupService {
       'db_version': kDatabaseVersion,
       'created_at': now.millisecondsSinceEpoch,
       'created_at_text': _readable(now),
-      'workbooks': workbooks,
-      'favorites': favorites,
-      'records': records,
+      'workbooks': counts.workbooks,
+      'favorites': counts.favorites,
+      'records': counts.records,
     };
     encoder.addArchiveFile(
       ArchiveFile.string('manifest.json', jsonEncode(manifest)),
@@ -107,9 +112,18 @@ class BackupService {
 
     return BackupFile(
       path: zipPath,
-      name: 'SHUAQI_backup_$stamp.zip',
+      name: zipName,
       sizeBytes: File(zipPath).lengthSync(),
       manifest: BackupManifest.fromJson(manifest),
+    );
+  }
+
+  /// 导出对话框用的统计（不生成 zip）。
+  Future<BackupCounts> readCounts() async {
+    return BackupCounts(
+      workbooks: await _count('workbook'),
+      favorites: await _count('favorite'),
+      records: await _count('answer_log'),
     );
   }
 
@@ -174,7 +188,9 @@ class BackupService {
     }
 
     // 2) 留底：当前库与 Vault 整体挪走（不删，出问题还能手工找回）。
-    final Directory stash = Directory(p.join(_stashRoot.path, _stamp(DateTime.now())));
+    final Directory stash = Directory(
+      p.join(_stashRoot.path, _stamp(DateTime.now())),
+    );
     await stash.create(recursive: true);
 
     await db.close();
@@ -263,7 +279,10 @@ class BackupService {
     }
   }
 
-  static Future<void> _moveInto(FileSystemEntity source, FileSystemEntity target) async {
+  static Future<void> _moveInto(
+    FileSystemEntity source,
+    FileSystemEntity target,
+  ) async {
     if (source is File) {
       await (target as File).parent.create(recursive: true);
     } else if (source is Directory) {
@@ -311,6 +330,23 @@ class BackupFile {
   final String name;
   final int sizeBytes;
   final BackupManifest manifest;
+}
+
+/// 导出前展示的备份内容统计。
+class BackupCounts {
+  const BackupCounts({
+    required this.workbooks,
+    required this.favorites,
+    required this.records,
+  });
+
+  final int workbooks;
+  final int favorites;
+  final int records;
+
+  bool get isEmpty => workbooks == 0 && favorites == 0 && records == 0;
+
+  String get summary => '$workbooks 份试卷 · $favorites 道收藏 · $records 条作答记录';
 }
 
 /// 恢复结果。

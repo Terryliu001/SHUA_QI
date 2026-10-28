@@ -26,11 +26,12 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 
 | 项 | 值 |
 |---|---|
-| 版本 | v0.1.2（内测） |
+| 版本 | v0.1.3（内测） |
 | 平台 | Android 8.0+ · **仅 arm64** · 平板 + 手写笔最佳 |
-| 体积 | 36.7 MB（已用 release 密钥签名） |
-| 位置 | [Releases](https://github.com/Terryliu001/SHUA_QI/releases) → `shuaqi-0.1.2.apk` |
+| 体积 | 36.85 MB（38,641,451 字节，release 密钥签名） |
+| 位置 | [Releases](https://github.com/Terryliu001/SHUA_QI/releases) → `shuaqi-0.1.3.apk` |
 
+> 覆盖安装不会删除本机数据；应用内更新前会自动备份到「下载/SHUAQI」。
 > 装过更早的 debug 签名版本时，两个包签名不同、需要先卸载（卸载会删本机数据，先导出备份）。
 
 ## 它和别的刷题工具不一样的地方
@@ -50,7 +51,7 @@ Android 平板上的刷题工具：**导入你自己的 PDF 试卷**，用手写
 |---|---|
 | `main/` | Flutter 应用（`lib/` 分层：ui → state → domain → infra） |
 | `Rpage/` | 展示与下载页（零构建静态站，GitHub Pages 从这里发） |
-| `项目日志/` | 41 篇开发日志（现象 → 根因 → 修法 → 证据） |
+| `项目日志/` | 开发日志（现象 → 根因 → 修法 → 证据；最新 `079` = v0.1.3） |
 | `宣传/` | 对外材料：功能清单、Release 正文稿 |
 | `server/feedback-worker/` | 应用内反馈的 Cloudflare Worker（可选部署） |
 
@@ -75,6 +76,8 @@ powershell -File tool/build_release.ps1
 - 用户反馈已接通（写入开发者的私有反馈仓库），但**没有回复通知**：开发者回复后不会在 App 内推送
 - 只有 Android / arm64；没有 iOS、桌面版、多设备同步
 - 界面按平板横屏设计，手机竖屏能用但很挤
+- 应用内更新需要允许「安装未知应用」；更新包签名必须与本机一致
+- 备份列表只管理当前安装创建的「下载/SHUAQI」备份；卸载重装后旧备份用「从文件选择」恢复
 
 ## 数据与隐私
 

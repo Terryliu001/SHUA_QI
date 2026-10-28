@@ -79,4 +79,29 @@ abstract final class AppSettingKeys {
   /// 与 [themeMode] 分开存：深浅与色系是两件事，用户可能想"深色 + 青瓷"。
   /// 只影响可点元素的颜色，不碰界面灰阶、纸感与判题三态色。
   static const String uiAccent = 'ui.accent';
+
+  // ── 首次启动用户须知（2026-10-28 v0.1.3）──────────────────────────────
+  //
+  /// 用户是否已确认首次启动的「用户须知」。`'1'` = 已确认，之后不再弹。
+  /// 只对**全新安装**弹（`AppDependencies.isFreshInstall`）；老用户升级不打扰。
+  static const String noticeAccepted = 'notice.accepted';
+
+  // ── 版本检测与更新（2026-10-28 v0.1.3）────────────────────────────────
+  //
+  /// 上次检查更新完成的时间（UTC 毫秒字符串）。
+  static const String updateLastCheckAt = 'update.last_check_at';
+
+  /// 用户已经看过、不再亮红点的版本号（例如 `0.1.4`）。
+  static const String updateSeenVersion = 'update.seen_version';
+
+  /// 最近一次检查到的最新 Release JSON（GitHub Releases 原样裁剪后的字段）。
+  static const String updateLatestJson = 'update.latest_json';
+
+  /// 更新前自动备份的文件名/URI/时间（用于更新后展示恢复入口）。
+  static const String updateLastBackupName = 'update.last_backup_name';
+  static const String updateLastBackupUri = 'update.last_backup_uri';
+  static const String updateLastBackupAt = 'update.last_backup_at';
+
+  /// 已经下载好的 APK 版本（用于"下载完成，去安装"）。
+  static const String updateDownloadedVersion = 'update.downloaded_version';
 }

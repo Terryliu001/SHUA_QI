@@ -21,6 +21,7 @@ class AppDependencies {
     required this.db,
     required this.vault,
     required this.supportPath,
+    required this.isFreshInstall,
   });
 
   final AppDatabase db;
@@ -31,6 +32,11 @@ class AppDependencies {
   /// 2026-10-26 起需要它：备份 zip 的临时文件、恢复时的解包目录与留底目录
   /// 都放在这儿（不能放 vault 里——那会被"缓存清理"扫到）。
   final String supportPath;
+
+  /// 本次启动前数据库文件是否还不存在（= 全新安装）。
+  ///
+  /// 只给「首次启动用户须知」用：老用户升级不重复打扰。
+  final bool isFreshInstall;
 }
 
 /// 打开数据库与 Vault，返回依赖。
@@ -41,9 +47,10 @@ class AppDependencies {
 Future<AppDependencies> bootstrap() async {
   final Directory support = await getApplicationSupportDirectory();
   final Vault vault = await Vault.open(p.join(support.path, 'vault'));
-  final AppDatabase db = await AppDatabase.open(
-    p.join(support.path, 'shuaqi.db'),
-  );
+  final String dbPath = p.join(support.path, 'shuaqi.db');
+  // 先看库文件在不在，再 open（open 会创建它）。用于判断"全新安装"。
+  final bool isFreshInstall = !File(dbPath).existsSync();
+  final AppDatabase db = await AppDatabase.open(dbPath);
 
   // 启动时清一次孤儿：上次导入在"写完文件、落库前"被杀会留下空目录
   await sweepOrphans(db: db, vault: vault);
@@ -62,9 +69,8 @@ Future<AppDependencies> bootstrap() async {
 
   // 旧收藏迁移（幂等，失败不阻断启动）：把各卷 `favorites.v1.json` 迁进 favorite 表。
   try {
-    final List<Workbook> workbooks = await WorkbookDao(
-      db.raw,
-    ).listByRecent(limit: 100000);
+    final List<Workbook> workbooks = await WorkbookDao(db.raw)
+        .listByRecent(limit: 100000);
     await FavoriteStore(
       db: db,
       vault: vault,
@@ -91,5 +97,6 @@ Future<AppDependencies> bootstrap() async {
     db: db,
     vault: vault,
     supportPath: support.path,
+    isFreshInstall: isFreshInstall,
   );
 }

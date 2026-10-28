@@ -10,18 +10,15 @@ import 'package:shuaqi/domain/region/grading_rules.dart';
 ///   先标黄，弹窗问用户是否 AI 判；
 /// - [GradeReadiness.noAnswer]：没有参考答案，入口直接不可用；
 /// - [GradeReadiness.noWork]：有答案但没作答，只展示参考答案。
-enum GradeReadiness {
-  ready,
-  untrusted,
-  noAnswer,
-  noWork,
-}
+enum GradeReadiness { ready, untrusted, noAnswer, noWork }
 
 /// 一次本地判题的结果。
 class LocalGrade {
   const LocalGrade({
     required this.readiness,
     required this.verdict,
+    this.tentative,
+    this.forceable = false,
     this.reason = '',
   });
 
@@ -29,6 +26,16 @@ class LocalGrade {
 
   /// 可信时是最终结论；不可信时一律 [AnswerVerdict.pending]（黄点）。
   final AnswerVerdict verdict;
+
+  /// 本地规则实际算出来的倾向（即使不可信也可能有）。
+  ///
+  /// 2026-10-28 用户口径：对答案弹窗里的「判题」= 按本地结论落判。
+  /// 低置信度的客观题可以强制落绿/红（结果里注明低置信）；主观/公式
+  /// 没有可强制的结论，[forceable] 为 false。
+  final AnswerVerdict? tentative;
+
+  /// [tentative] 是否可以拿去落库（低置信客观题 = true；主观/公式 = false）。
+  final bool forceable;
 
   /// 给用户看的一句原因（弹窗里用）。
   final String reason;
@@ -75,24 +82,31 @@ LocalGrade judgeLocally({
     );
   }
   if (looksSubjective(ref)) {
-    return const LocalGrade(
+    return LocalGrade(
       readiness: GradeReadiness.untrusted,
       verdict: AnswerVerdict.pending,
+      tentative: verdict,
       reason: '参考答案更像主观题，本地只做客观题比对',
     );
   }
   if (text.isNotEmpty &&
       ocrConfidence > 0 &&
       ocrConfidence < trustedOcrConfidence) {
-    return const LocalGrade(
+    return LocalGrade(
       readiness: GradeReadiness.untrusted,
       verdict: AnswerVerdict.pending,
-      reason: '手写识别置信度偏低，本地结论可能不准',
+      tentative: verdict,
+      // 低置信度仍允许用户点「判题」强制按本地结论落判，
+      // 但结果里必须注明，不能假装可信。
+      forceable: true,
+      reason: '手写识别置信度偏低（${(ocrConfidence * 100).round()}%），本地结论可能不准',
     );
   }
   return LocalGrade(
     readiness: GradeReadiness.ready,
     verdict: verdict,
+    tentative: verdict,
+    forceable: true,
     reason: verdict == AnswerVerdict.correct ? '与参考答案一致' : '与参考答案不一致',
   );
 }

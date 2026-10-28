@@ -86,6 +86,7 @@ class GradingController {
     String questionId,
     AnswerVerdict verdict, {
     String note = '',
+    GradeEvidence evidence = GradeEvidence.empty,
   }) async {
     final QuestionGrade? existing = data.value.gradeOf(questionId);
     if (existing != null && existing.manual) {
@@ -98,6 +99,9 @@ class GradingController {
         source: GradeSource.ai,
         at: DateTime.now().millisecondsSinceEpoch,
         note: note,
+        judgedText: evidence.text,
+        judgedSig: evidence.sig,
+        judgedRefHash: evidence.refHash,
       ),
     );
     _dirty = true;
@@ -106,8 +110,20 @@ class GradingController {
     return true;
   }
 
-  /// 一键改卷的结果：**只覆盖本地自动结论**，手改与 AI 结论都保留。
-  Future<void> applyAuto(Map<String, AnswerVerdict> verdicts) async {
+  /// 一键改卷的结果：默认**只覆盖本地自动结论**，手改与 AI 结论都保留。
+  ///
+  /// [replaceAi] 只给「AI 判过、但本次发现答案有明显改动」的题用：
+  /// 此时旧 AI 结论已不可信，允许本轮按当前 OCR 重判后覆盖。
+  /// 手改（manual）仍然永远不覆盖。
+  ///
+  /// [evidence] / [notes] 按 questionId 带上本次判题依据（OCR 文本、作答指纹、
+  /// 参考答案哈希），下次改卷才能判断「有没有大改」。
+  Future<void> applyAuto(
+    Map<String, AnswerVerdict> verdicts, {
+    Map<String, GradeEvidence> evidence = const <String, GradeEvidence>{},
+    Map<String, String> notes = const <String, String>{},
+    bool replaceAi = false,
+  }) async {
     GradingData next = data.value;
     final int now = DateTime.now().millisecondsSinceEpoch;
     final List<MapEntry<String, AnswerVerdict>> written =
@@ -115,14 +131,23 @@ class GradingController {
     for (final MapEntry<String, AnswerVerdict> entry in verdicts.entries) {
       final QuestionGrade? existing = next.gradeOf(entry.key);
       if (existing != null && existing.source != GradeSource.auto) {
-        continue;
+        final bool mayReplaceAi =
+            replaceAi && existing.source == GradeSource.ai;
+        if (!mayReplaceAi) {
+          continue;
+        }
       }
+      final GradeEvidence snapshot = evidence[entry.key] ?? GradeEvidence.empty;
       next = next.withGrade(
         QuestionGrade(
           questionId: entry.key,
           verdict: entry.value,
           source: GradeSource.auto,
           at: now,
+          note: notes[entry.key] ?? '',
+          judgedText: snapshot.text,
+          judgedSig: snapshot.sig,
+          judgedRefHash: snapshot.refHash,
         ),
       );
       written.add(entry);

@@ -65,6 +65,9 @@ void main() {
     );
     expect(grade.readiness, GradeReadiness.untrusted);
     expect(grade.verdict, AnswerVerdict.pending);
+    // 0.1.3：低置信客观题有可强制的本地倾向。
+    expect(grade.tentative, AnswerVerdict.wrong);
+    expect(grade.forceable, isTrue);
   });
 
   test('主观题参考答案：本地不硬判', () {
@@ -75,6 +78,7 @@ void main() {
       hasWork: true,
     );
     expect(grade.readiness, GradeReadiness.untrusted);
+    expect(grade.forceable, isFalse);
     expect(grade.verdict, AnswerVerdict.pending);
   });
 

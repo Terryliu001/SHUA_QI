@@ -75,6 +75,7 @@ class RegionPanel extends StatefulWidget {
     this.verdictOf,
     this.counts,
     this.grading = false,
+    this.gradeBusyLabel,
     this.onGradeAll,
     this.onFillAnswers,
     this.fillingAi = false,
@@ -190,6 +191,9 @@ class RegionPanel extends StatefulWidget {
 
   /// 「一键改卷」进行中。
   final bool grading;
+
+  /// 改卷进行中的按钮文字（例如 `改卷 12/48`）；null = 用默认「改卷中」。
+  final String? gradeBusyLabel;
 
   final VoidCallback? onGradeAll;
 
@@ -482,6 +486,7 @@ class _RegionPanelState extends State<RegionPanel> {
                 child: _ToolsBar(
                   multiSelecting: widget.multiSelecting,
                   grading: widget.grading,
+                  busyLabel: widget.gradeBusyLabel,
                   fillingAi: widget.fillingAi,
                   fillDone: widget.fillDone,
                   fillTotal: widget.fillTotal,
@@ -843,6 +848,7 @@ class _ToolsBar extends StatelessWidget {
   const _ToolsBar({
     required this.multiSelecting,
     required this.grading,
+    this.busyLabel,
     required this.fillingAi,
     required this.fillDone,
     required this.fillTotal,
@@ -853,6 +859,7 @@ class _ToolsBar extends StatelessWidget {
 
   final bool multiSelecting;
   final bool grading;
+  final String? busyLabel;
 
   /// 「AI 补答案」进行中。
   final bool fillingAi;
@@ -885,7 +892,7 @@ class _ToolsBar extends StatelessWidget {
           Expanded(
             child: _BarButton(
               icon: Icons.fact_check_outlined,
-              label: grading ? '改卷中' : '改卷',
+              label: grading ? (busyLabel ?? '改卷中') : '改卷',
               busy: grading,
               onTap: (grading || fillingAi) ? null : onGradeAll,
             ),

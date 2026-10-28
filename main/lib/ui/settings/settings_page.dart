@@ -15,6 +15,7 @@ import 'package:shuaqi/state/ink_tool_provider.dart';
 import 'package:shuaqi/state/reader_prefs_providers.dart';
 import 'package:shuaqi/state/theme_mode_provider.dart';
 import 'package:shuaqi/state/ui_prefs_provider.dart';
+import 'package:shuaqi/state/update_providers.dart';
 import 'package:shuaqi/ui/reader/debug_hud.dart';
 import 'package:shuaqi/ui/settings/about_pages.dart';
 import 'package:shuaqi/ui/settings/ai_settings_sheet.dart';
@@ -117,23 +118,38 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final SettingsSubPage? sub = _sub;
-    if (sub != null) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (bool didPop, Object? result) {
-          if (!didPop) {
-            setState(() => _sub = null);
-          }
-        },
-        child: Scaffold(
-          appBar: AppBar(title: Text(sub.title)),
-          body: SafeArea(child: _subBody(sub)),
-        ),
-      );
-    }
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: SafeArea(child: _settingsBody()),
+    // 0.1.3：二级页不再替换整个设置页，而是盖在它上面。
+    //
+    // 旧实现 `if (sub != null) return Scaffold(...)` 会让下面的设置 ListView
+    // 被销毁，返回时重新创建一个从顶部开始的新列表——用户滑到「关于」点进
+    // 版本说明再返回，就回到了页面顶端（反馈里的"割裂"）。
+    // 现在设置主体一直挂着（Offstage 只是不画），返回时滚动位置和页面状态都在。
+    return PopScope(
+      canPop: sub == null,
+      onPopInvokedWithResult: (bool didPop, Object? result) {
+        if (!didPop && _sub != null) {
+          setState(() => _sub = null);
+        }
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          Offstage(
+            offstage: sub != null,
+            child: Scaffold(
+              appBar: AppBar(title: const Text('设置')),
+              body: SafeArea(child: _settingsBody()),
+            ),
+          ),
+          if (sub != null)
+            Positioned.fill(
+              child: Scaffold(
+                appBar: AppBar(title: Text(sub.title)),
+                body: SafeArea(child: _subBody(sub)),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -156,6 +172,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final ShqAccent accent = ref.watch(accentProvider);
     final bool iconLabels = ref.watch(iconLabelsProvider);
     final bool devUnlocked = ref.watch(devOptionsUnlockedProvider);
+    final bool hasUpdate = ref.watch(updateBadgeProvider);
     final ReaderPrefs defaults =
         _draft ??
         ref
@@ -222,9 +239,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   subtitle: '${accent.label} · ${accent.hint}',
                   child: _AccentPicker(
                     selected: accent,
-                    onSelected: (ShqAccent value) => unawaited(
-                      ref.read(accentProvider.notifier).set(value),
-                    ),
+                    onSelected: (ShqAccent value) =>
+                        unawaited(ref.read(accentProvider.notifier).set(value)),
                   ),
                 ),
                 const _Hairline(),
@@ -307,9 +323,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   child: _IntensitySlider(
                     style: defaults.style,
                     value: defaults.intensity,
-                    onChanged: (int intensity) => _writeDefaults(
-                      defaults.copyWith(intensity: intensity),
-                    ),
+                    onChanged: (int intensity) =>
+                        _writeDefaults(defaults.copyWith(intensity: intensity)),
                   ),
                 ),
                 const _Note('只影响之后新打开的卷；正在读的卷以阅读器内「显示」浮层为准。'),
@@ -381,8 +396,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: <Widget>[
                 _SettingsRow(
                   icon: Icons.cleaning_services_outlined,
-                  title: '缓存统计与清除',
-                  subtitle: '看各类占用，清掉缩略图与作答原图这类可再生的缓存',
+                  title: '存储占用',
+                  subtitle: '缓存统计与清理，以及备份文件的查看、重命名、删除与恢复',
                   onTap: () => unawaited(showCacheSheet(context, ref)),
                   trailing: Icon(
                     Icons.chevron_right,
@@ -394,8 +409,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _SettingsRow(
                   icon: Icons.archive_outlined,
                   title: '导出备份',
-                  subtitle: '把卷子、笔迹、收藏、记录打成一个 zip，放到「下载/SHUAQI」',
-                  onTap: () => unawaited(exportBackup(context, ref)),
+                  subtitle: '可命名；把卷子、笔迹、收藏、记录打成 zip 放到「下载/SHUAQI」',
+                  onTap: () {
+                    unawaited(
+                      exportBackup(context, ref).then<void>((bool _) {}),
+                    );
+                  },
                   trailing: Icon(
                     Icons.chevron_right,
                     size: 18,
@@ -406,7 +425,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 _SettingsRow(
                   icon: Icons.settings_backup_restore,
                   title: '从备份恢复',
-                  subtitle: '用一份备份覆盖本机数据（替换前会先留底）',
+                  subtitle: '从备份列表选一份覆盖本机数据（替换前会先留底）',
                   onTap: () => unawaited(restoreBackup(context, ref)),
                   trailing: Icon(
                     Icons.chevron_right,
@@ -415,15 +434,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 const _Hairline(),
-                const _Note(
-                  '数据只在本机。卸载应用会一起删掉，重要资料记得先导出备份。',
-                ),
+                const _Note('数据只在本机。卸载应用会一起删掉，重要资料记得先导出备份。'),
               ],
             ),
             _Section(
               title: '关于',
               children: <Widget>[
-                _AboutEntries(onOpen: _openSub, onVersionTap: _onVersionTap),
+                _AboutEntries(
+                  onOpen: _openSub,
+                  onVersionTap: _onVersionTap,
+                  hasUpdate: hasUpdate,
+                ),
               ],
             ),
             // 开发者选项：连点版本号 8 次才出现（2026-10-26 用户第 17 条）。
@@ -1202,16 +1223,23 @@ String _formatTokenCount(int value) {
 ///
 /// 三栏等分并排（平板上一眼看全），窄屏时自动竖排——分栏在手机上会挤成三根条。
 class _AboutEntries extends StatelessWidget {
-  const _AboutEntries({required this.onOpen, required this.onVersionTap});
+  const _AboutEntries({
+    required this.onOpen,
+    required this.onVersionTap,
+    required this.hasUpdate,
+  });
 
   final ValueChanged<SettingsSubPage> onOpen;
   final VoidCallback onVersionTap;
+  final bool hasUpdate;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
     final ColorScheme scheme = theme.colorScheme;
-    const List<({SettingsSubPage page, IconData icon, String title, String hint})>
+    const List<
+      ({SettingsSubPage page, IconData icon, String title, String hint})
+    >
     entries =
         <({SettingsSubPage page, IconData icon, String title, String hint})>[
           (
@@ -1299,6 +1327,9 @@ class _AboutEntries extends StatelessWidget {
                   icon: entries[i].icon,
                   title: entries[i].title,
                   hint: entries[i].hint,
+                  showUpdateDot:
+                      hasUpdate &&
+                      entries[i].page == SettingsSubPage.releaseNotes,
                   onTap: () => onOpen(entries[i].page),
                 ),
               ],
@@ -1351,12 +1382,14 @@ class _AboutRow extends StatelessWidget {
     required this.title,
     required this.hint,
     required this.onTap,
+    this.showUpdateDot = false,
   });
 
   final IconData icon;
   final String title;
   final String hint;
   final VoidCallback onTap;
+  final bool showUpdateDot;
 
   @override
   Widget build(BuildContext context) {
@@ -1376,11 +1409,27 @@ class _AboutRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: <Widget>[
-                  Text(
-                    title,
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                  Row(
+                    children: <Widget>[
+                      Text(
+                        title,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (showUpdateDot)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: scheme.error,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(
@@ -1394,11 +1443,7 @@ class _AboutRow extends StatelessWidget {
                 ],
               ),
             ),
-            Icon(
-              Icons.chevron_right,
-              size: 18,
-              color: scheme.outline,
-            ),
+            Icon(Icons.chevron_right, size: 18, color: scheme.outline),
           ],
         ),
       ),
